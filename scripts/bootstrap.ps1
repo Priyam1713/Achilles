@@ -16,6 +16,10 @@ function Assert-Native([string]$Step) {
   if ($LASTEXITCODE -ne 0) { throw "$Step failed with exit code $LASTEXITCODE" }
 }
 
+function Invoke-SoaiBash([string]$Command) {
+  & wsl -d $Distro -- bash -lc $Command
+}
+
 function Find-Python312 {
   $candidates = @(
     (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
@@ -78,39 +82,39 @@ if (-not $SkipWSLProvision) {
 } else { Write-Host "[4/10] WSL base provisioning skipped." }
 
 Write-Host "[5/10] Creating a WSL-native control-tools environment..."
-& wsl -d $Distro bash -lc "cd '$linuxPath' && source scripts/runtime_env.sh && export PATH=\"`$HOME/.local/bin:`$PATH\" && (command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh); export PATH=\"`$HOME/.local/bin:`$PATH\"; export UV_PROJECT_ENVIRONMENT=\"`$SOAI_ENV_DIR/kernel\"; uv sync --extra dev --extra tools --link-mode copy"
+Invoke-SoaiBash "cd '$linuxPath' && source scripts/runtime_env.sh && export PATH=`$HOME/.local/bin:`$PATH && (command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh); export PATH=`$HOME/.local/bin:`$PATH; export UV_PROJECT_ENVIRONMENT=`$SOAI_ENV_DIR/kernel; uv sync --extra dev --extra tools --link-mode copy"
 Assert-Native "WSL control-tools environment"
 if ($InstallModels) {
-  & wsl -d $Distro bash -lc "cd '$linuxPath' && ./scripts/verify_storage.sh '$linuxPath' '$Profile'"
+  Invoke-SoaiBash "cd '$linuxPath' && ./scripts/verify_storage.sh '$linuxPath' '$Profile'"
   Assert-Native "WSL-native model storage preflight"
-  & wsl -d $Distro bash -lc "cd '$linuxPath' && source scripts/runtime_env.sh && \"`$SOAI_ENV_DIR/kernel/bin/python\" scripts/check_release_radar.py --state-dir \"`$SOAI_STATE_DIR\""
+  Invoke-SoaiBash "cd '$linuxPath' && source scripts/runtime_env.sh && `$SOAI_ENV_DIR/kernel/bin/python scripts/check_release_radar.py --state-dir `$SOAI_STATE_DIR"
   Assert-Native "official release radar"
-  & wsl -d $Distro bash -lc "cd '$linuxPath' && source scripts/runtime_env.sh && \"`$SOAI_ENV_DIR/kernel/bin/python\" scripts/verify_sources.py --profile '$Profile' --state-dir \"`$SOAI_STATE_DIR\""
+  Invoke-SoaiBash "cd '$linuxPath' && source scripts/runtime_env.sh && `$SOAI_ENV_DIR/kernel/bin/python scripts/verify_sources.py --profile '$Profile' --state-dir `$SOAI_STATE_DIR"
   Assert-Native "upstream model source audit"
 }
 
 Write-Host "[6/10] Installing replaceable WSL runtimes and building llama.cpp for CUDA..."
-& wsl -d $Distro bash -lc "cd '$linuxPath' && ./scripts/install_wsl_runtimes.sh '$linuxPath'"
+Invoke-SoaiBash "cd '$linuxPath' && ./scripts/install_wsl_runtimes.sh '$linuxPath'"
 Assert-Native "runtime installation"
 
 if (-not $SkipSpecialists) {
   Write-Host "[7/10] Installing isolated specialist dependency islands..."
-  & wsl -d $Distro bash -lc "cd '$linuxPath' && ./scripts/install_specialists.sh '$linuxPath' --profile '$Profile'"
+  Invoke-SoaiBash "cd '$linuxPath' && ./scripts/install_specialists.sh '$linuxPath' --profile '$Profile'"
   Assert-Native "specialist installation"
 } else { Write-Host "[7/10] Specialist installation skipped." }
 
 if ($InstallModels) {
   Write-Host "[8/10] Syncing the '$Profile' model profile to WSL-native storage..."
   $gated = if ($IncludeGated) { "--include-gated" } else { "" }
-  & wsl -d $Distro bash -lc "cd '$linuxPath' && source scripts/runtime_env.sh && \"`$SOAI_ENV_DIR/kernel/bin/python\" scripts/sync_models.py --profile '$Profile' --model-dir \"`$SOAI_MODEL_DIR\" --state-dir \"`$SOAI_STATE_DIR\" $gated"
+  Invoke-SoaiBash "cd '$linuxPath' && source scripts/runtime_env.sh && `$SOAI_ENV_DIR/kernel/bin/python scripts/sync_models.py --profile '$Profile' --model-dir `$SOAI_MODEL_DIR --state-dir `$SOAI_STATE_DIR $gated"
   Assert-Native "model synchronization"
 
   Write-Host "[9/10] Converting/quantizing cognition models and smoke-testing inference..."
   $skipSmoke = if ($SkipModelSmoke) { "SOAI_SKIP_LLAMA_SMOKE=1" } else { "SOAI_SKIP_LLAMA_SMOKE=0" }
-  & wsl -d $Distro bash -lc "cd '$linuxPath' && source scripts/runtime_env.sh && $skipSmoke ./scripts/prepare_llama_models.sh '$linuxPath'"
+  Invoke-SoaiBash "cd '$linuxPath' && source scripts/runtime_env.sh && $skipSmoke ./scripts/prepare_llama_models.sh '$linuxPath'"
   Assert-Native "Qwen GGUF preparation"
   if (-not $SkipSpecialists) {
-    & wsl -d $Distro bash -lc "cd '$linuxPath' && source scripts/runtime_env.sh && \"`$SOAI_ENV_DIR/kernel/bin/python\" scripts/prewarm_specialists.py --strict --profile '$Profile'"
+    Invoke-SoaiBash "cd '$linuxPath' && source scripts/runtime_env.sh && `$SOAI_ENV_DIR/kernel/bin/python scripts/prewarm_specialists.py --strict --profile '$Profile'"
     Assert-Native "specialist prewarm"
   }
 } else {
@@ -124,6 +128,6 @@ Assert-Native "kernel preflight"
 & $SoaiKernelPython -m pytest -q
 Assert-Native "kernel tests"
 $strict = if ($InstallModels) { "--strict" } else { "" }
-& wsl -d $Distro bash -lc "cd '$linuxPath' && source scripts/runtime_env.sh && \"`$SOAI_ENV_DIR/kernel/bin/python\" scripts/doctor.py $strict"
+Invoke-SoaiBash "cd '$linuxPath' && source scripts/runtime_env.sh && `$SOAI_ENV_DIR/kernel/bin/python scripts/doctor.py $strict"
 Assert-Native "installation doctor"
 Write-Host "Bootstrap complete. Run .\Run.ps1 -Distro $Distro to start the local stack."
