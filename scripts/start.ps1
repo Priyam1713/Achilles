@@ -16,9 +16,26 @@ function Port-Up([int]$Port) {
   try { return (Test-NetConnection -ComputerName 127.0.0.1 -Port $Port -WarningAction SilentlyContinue).TcpTestSucceeded } catch { return $false }
 }
 
-if (-not (Port-Up 8080)) {
+function Expected-Router {
+  try {
+    $response = Invoke-RestMethod -Uri "http://127.0.0.1:18080/v1/models" -TimeoutSec 3
+    $ids = @($response.data | ForEach-Object { $_.id })
+    return ($ids -contains "qwen35-9b") -and ($ids -contains "qwen38-27b")
+  } catch { return $false }
+}
+
+if ((Port-Up 18080) -and -not (Expected-Router)) {
+  throw "Port 18080 is occupied by a service that is not this installation's llama.cpp router."
+}
+if (-not (Port-Up 18080)) {
   & wsl -d $Distro bash -lc "cd '$linuxPath' && source scripts/runtime_env.sh && nohup ./scripts/start_llama_router.sh '$linuxPath' > \"`$SOAI_STATE_DIR/llama-router.log\" 2>&1 &"
   if ($LASTEXITCODE -ne 0) { throw "Failed to launch llama.cpp router." }
+  $ready = $false
+  for ($attempt = 0; $attempt -lt 60; $attempt++) {
+    Start-Sleep -Seconds 1
+    if (Expected-Router) { $ready = $true; break }
+  }
+  if (-not $ready) { throw "The sovereign llama.cpp router did not become ready on port 18080." }
 }
 
 if (-not (Port-Up 7867)) {

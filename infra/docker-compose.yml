@@ -1,6 +1,6 @@
 services:
   searxng:
-    image: searxng/searxng:latest
+    image: searxng/searxng@sha256:2344ab06b942db1dd6f73ba7f443c8672c6f0c543dac77415c6fd4696cbfe045
     restart: unless-stopped
     ports: ["127.0.0.1:8888:8080"]
     volumes:

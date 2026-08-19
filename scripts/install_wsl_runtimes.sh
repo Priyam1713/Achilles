@@ -3,6 +3,7 @@ set -euo pipefail
 ROOT="${1:-$(pwd)}"
 cd "$ROOT"
 source "$ROOT/scripts/runtime_env.sh"
+source "$ROOT/configs/runtime-sources.env"
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing $1" >&2; exit 1; }; }
@@ -17,7 +18,13 @@ uv python install 3.12
 # OpenShell is a replaceable execution backend. The installer verifies the gateway AND an actual
 # sandbox; a broken experimental WSL path is recorded but does not weaken kernel policy.
 if ! command -v openshell >/dev/null 2>&1; then
-  curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
+  installer="$(mktemp)"
+  trap 'rm -f "$installer"' EXIT
+  curl -LsSf "https://raw.githubusercontent.com/NVIDIA/OpenShell/$OPENSHELL_COMMIT/install.sh" -o "$installer"
+  printf '%s  %s\n' "$OPENSHELL_INSTALL_SHA256" "$installer" | sha256sum -c -
+  sh "$installer"
+  rm -f "$installer"
+  trap - EXIT
 fi
 
 # Build the deterministic Docker fallback image before testing OpenShell.
@@ -36,15 +43,21 @@ else
 fi
 printf '%s\n' "$OPENSHELL_HEALTH" > "$SOAI_STATE_DIR/openshell-health.txt"
 
-clone_or_update() {
-  local url="$1" dir="$2"
-  if [[ -d "$dir/.git" ]]; then git -C "$dir" pull --ff-only || true; else git clone --depth 1 "$url" "$dir"; fi
+checkout_pinned() {
+  local url="$1" dir="$2" commit="$3"
+  if [[ ! -d "$dir/.git" ]]; then git clone --filter=blob:none --no-checkout "$url" "$dir"; fi
+  git -C "$dir" diff --quiet && git -C "$dir" diff --cached --quiet || {
+    echo "Refusing dirty runtime checkout: $dir" >&2; exit 2;
+  }
+  git -C "$dir" fetch --depth 1 origin "$commit"
+  git -C "$dir" checkout --detach --force "$commit"
+  [[ "$(git -C "$dir" rev-parse HEAD)" == "$commit" ]] || { echo "Revision mismatch: $dir" >&2; exit 2; }
 }
 
-clone_or_update https://github.com/ggml-org/llama.cpp.git "$SOAI_RUNTIME_DIR/llama.cpp"
-clone_or_update https://github.com/giannisanni/pulsar.git "$SOAI_RUNTIME_DIR/pulsar"
-clone_or_update https://github.com/deepbeepmeep/Wan2GP.git "$SOAI_RUNTIME_DIR/Wan2GP"
-clone_or_update https://github.com/deepseek-ai/deepseek-harness.git "$SOAI_RUNTIME_DIR/deepseek-harness"
+checkout_pinned "$LLAMA_CPP_URL" "$SOAI_RUNTIME_DIR/llama.cpp" "$LLAMA_CPP_COMMIT"
+checkout_pinned "$PULSAR_URL" "$SOAI_RUNTIME_DIR/pulsar" "$PULSAR_COMMIT"
+checkout_pinned "$WANGP_URL" "$SOAI_RUNTIME_DIR/Wan2GP" "$WANGP_COMMIT"
+checkout_pinned "$DEEPSEEK_HARNESS_URL" "$SOAI_RUNTIME_DIR/deepseek-harness" "$DEEPSEEK_HARNESS_COMMIT"
 
 # Harness is a developer preview, so build the exact checked-out commit and record it below.
 # No plugin is granted kernel authority merely because it is discoverable by the harness.

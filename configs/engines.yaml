@@ -2,8 +2,8 @@ engines:
   llama_cpp:
     kind: openai_compatible
     enabled: true
-    base_url: http://127.0.0.1:8080/v1
-    health_url: http://127.0.0.1:8080/health
+    base_url: http://127.0.0.1:18080/v1
+    health_url: http://127.0.0.1:18080/health
     manages_residency: true
     model_aliases:
       qwen35-9b:

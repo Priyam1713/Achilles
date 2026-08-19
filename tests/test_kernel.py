@@ -266,7 +266,7 @@ def test_staging_rejects_escaping_symlink(tmp_path):
 
 def test_residency_coordinator_is_part_of_kernel(tmp_path, monkeypatch):
     k = kernel(tmp_path, monkeypatch)
-    assert k.residency.llama_router_url.endswith(":8080")
+    assert k.residency.llama_router_url.endswith(":18080")
 
 
 def test_job_store_lifecycle_and_recovery(tmp_path):

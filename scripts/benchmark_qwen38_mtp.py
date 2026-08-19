@@ -61,7 +61,7 @@ def benchmark_profile(client: httpx.Client, profile: str) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="A/B Qwen3.8 plain vs MTP on the local router")
-    parser.add_argument("--base-url", default="http://127.0.0.1:8080")
+    parser.add_argument("--base-url", default="http://127.0.0.1:18080")
     parser.add_argument("--state-dir", default="state")
     args = parser.parse_args()
 

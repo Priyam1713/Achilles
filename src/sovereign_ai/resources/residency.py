@@ -6,7 +6,7 @@ import httpx
 class ResidencyCoordinator:
     """Coordinates VRAM ownership across otherwise independent inference runtimes."""
 
-    def __init__(self, llama_router_url: str = "http://127.0.0.1:8080", timeout: float = 30.0):
+    def __init__(self, llama_router_url: str = "http://127.0.0.1:18080", timeout: float = 30.0):
         self.llama_router_url = llama_router_url.rstrip("/")
         self.timeout = timeout
 

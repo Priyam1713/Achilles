@@ -12,6 +12,7 @@ done
 case "$PROFILE" in core|workstation|full) ;; *) echo "Unknown profile: $PROFILE" >&2; exit 2 ;; esac
 cd "$ROOT"
 source "$ROOT/scripts/runtime_env.sh"
+source "$ROOT/configs/runtime-sources.env"
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 STATE="$SOAI_STATE_DIR"
 ENVROOT="$SOAI_ENV_DIR"
@@ -26,9 +27,15 @@ uv python install 3.12
 uv python install 3.11.14
 TORCH_INDEX="${SOAI_TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"
 
-clone_or_update() {
-  local url="$1" name="$2" dir="$SRCROOT/$2"
-  if [[ -d "$dir/.git" ]]; then git -C "$dir" pull --ff-only || true; else git clone --depth 1 "$url" "$dir"; fi
+checkout_pinned() {
+  local url="$1" name="$2" commit="$3" dir="$SRCROOT/$2"
+  if [[ ! -d "$dir/.git" ]]; then git clone --filter=blob:none --no-checkout "$url" "$dir" >&2; fi
+  git -C "$dir" diff --quiet && git -C "$dir" diff --cached --quiet || {
+    echo "Refusing dirty specialist checkout: $dir" >&2; return 2;
+  }
+  git -C "$dir" fetch --depth 1 origin "$commit" >&2
+  git -C "$dir" checkout --detach --force "$commit" >&2
+  [[ "$(git -C "$dir" rev-parse HEAD)" == "$commit" ]] || return 2
   printf '%s' "$dir"
 }
 make_env() { local name="$1" py="${2:-3.12}" env="$ENVROOT/$name"; [[ -x "$env/bin/python" ]] || uv venv --python "$py" "$env"; printf '%s' "$env"; }
@@ -54,17 +61,17 @@ PY
 
 pip_retrieval(){ local e="$1"; uv pip install --python "$e/bin/python" 'sentence-transformers>=5' 'transformers>=4.57' 'accelerate>=1.10' einops pillow qwen-vl-utils 'gliner2[local]' bitsandbytes fastapi uvicorn soundfile; }
 pip_asr(){ local e="$1"; uv pip install --python "$e/bin/python" qwen-asr 'transformers>=5.13.0' accelerate soundfile librosa openai-whisper; }
-pip_voxcpm(){ local e="$1" s; s="$(clone_or_update https://github.com/OpenBMB/VoxCPM.git VoxCPM)"; uv pip install --python "$e/bin/python" -e "$s"; }
-pip_moss(){ local e="$1" a d; a="$(clone_or_update https://github.com/OpenMOSS/MOSS-Audio.git MOSS-Audio)"; d="$(clone_or_update https://github.com/OpenMOSS/MOSS-Transcribe-Diarize.git MOSS-Transcribe-Diarize)"; uv pip install --python "$e/bin/python" -e "$a"; uv pip install --python "$e/bin/python" -e "$d"; }
+pip_voxcpm(){ local e="$1" s; s="$(checkout_pinned "$VOXCPM_URL" VoxCPM "$VOXCPM_COMMIT")"; uv pip install --python "$e/bin/python" -e "$s"; }
+pip_moss(){ local e="$1" a d; a="$(checkout_pinned "$MOSS_AUDIO_URL" MOSS-Audio "$MOSS_AUDIO_COMMIT")"; d="$(checkout_pinned "$MOSS_TRANSCRIBE_URL" MOSS-Transcribe-Diarize "$MOSS_TRANSCRIBE_COMMIT")"; uv pip install --python "$e/bin/python" -e "$a"; uv pip install --python "$e/bin/python" -e "$d"; }
 pip_paddle(){ local e="$1"; uv pip install --python "$e/bin/python" --index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ paddlepaddle-gpu==3.2.1; uv pip install --python "$e/bin/python" 'paddleocr[doc-parser]'; uv pip install --python "$e/bin/python" https://paddle-whl.bj.bcebos.com/nightly/cu126/safetensors/safetensors-0.6.2.dev0-cp38-abi3-linux_x86_64.whl; }
-pip_vision(){ local e="$1" d; d="$(clone_or_update https://github.com/ByteDance-Seed/Depth-Anything-3.git Depth-Anything-3)"; uv pip install --python "$e/bin/python" rfdetr; uv pip install --python "$e/bin/python" -e "$d"; }
-pip_sam(){ local e="$1" s; s="$(clone_or_update https://github.com/facebookresearch/sam3.git sam3)"; uv pip install --python "$e/bin/python" -e "$s"; }
+pip_vision(){ local e="$1" d; d="$(checkout_pinned "$DEPTH_ANYTHING_3_URL" Depth-Anything-3 "$DEPTH_ANYTHING_3_COMMIT")"; uv pip install --python "$e/bin/python" rfdetr; uv pip install --python "$e/bin/python" -e "$d"; }
+pip_sam(){ local e="$1" s; s="$(checkout_pinned "$SAM3_URL" sam3 "$SAM3_COMMIT")"; uv pip install --python "$e/bin/python" -e "$s"; }
 pip_uitars(){ local e="$1"; uv pip install --python "$e/bin/python" 'transformers>=4.57' accelerate pillow qwen-vl-utils bitsandbytes; }
 pip_science(){ local e="$1"; uv pip install --python "$e/bin/python" chronos-forecasting esm scikit-learn xgboost catboost pandas polars duckdb; }
 pip_tabpfn(){ local e="$1"; uv pip install --python "$e/bin/python" tabpfn; }
 pip_fairchem(){ local e="$1"; uv pip install --python "$e/bin/python" fairchem-core; }
 pip_med(){ local e="$1"; uv pip install --python "$e/bin/python" 'transformers>=4.57' accelerate pillow; }
-pip_ace(){ local e="$1" s; s="$(clone_or_update https://github.com/ace-step/ACE-Step-1.5.git ACE-Step-1.5)"; [[ -f "$s/pyproject.toml" ]] && uv pip install --python "$e/bin/python" -e "$s" || true; }
+pip_ace(){ local e="$1" s; s="$(checkout_pinned "$ACE_STEP_URL" ACE-Step-1.5 "$ACE_STEP_COMMIT")"; [[ -f "$s/pyproject.toml" ]] && uv pip install --python "$e/bin/python" -e "$s" || true; }
 
 install_wangp() {
   local name="wangp"

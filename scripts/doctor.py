@@ -65,7 +65,7 @@ def main() -> int:
             issues.append(f"missing quantized brain {key}")
 
     info["services"] = {
-        "llama_router": tcp("127.0.0.1", 8080),
+        "llama_router": tcp("127.0.0.1", 18080),
         "kernel": tcp("127.0.0.1", 7788),
         "search": tcp("127.0.0.1", 8888),
         "media": tcp("127.0.0.1", 7867),
