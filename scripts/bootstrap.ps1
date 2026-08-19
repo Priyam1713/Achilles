@@ -18,6 +18,7 @@ function Assert-Native([string]$Step) {
 
 function Invoke-SoaiBash([string]$Command) {
   & wsl -d $Distro -- bash -lc $Command
+  if ($LASTEXITCODE -ne 0) { throw "WSL command failed with exit code $LASTEXITCODE" }
 }
 
 function Find-Python312 {
@@ -83,7 +84,7 @@ if (-not $SkipWSLProvision) {
 
 Write-Host "[5/10] Creating a WSL-native control-tools environment..."
 $controlToolsCommand = @'
-cd '__ROOT__' && source scripts/runtime_env.sh && export PATH="$HOME/.local/bin:$PATH" && (command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh); export PATH="$HOME/.local/bin:$PATH"; export UV_PROJECT_ENVIRONMENT="$SOAI_ENV_DIR/kernel"; uv sync --extra dev --extra tools --link-mode copy
+cd '__ROOT__' && source scripts/runtime_env.sh && export PATH="\$HOME/.local/bin:\$PATH" && (command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh); export PATH="\$HOME/.local/bin:\$PATH"; export UV_PROJECT_ENVIRONMENT="\$SOAI_ENV_DIR/kernel"; uv sync --extra dev --extra tools --link-mode copy
 '@.Replace('__ROOT__', $linuxPath)
 Invoke-SoaiBash $controlToolsCommand
 Assert-Native "WSL control-tools environment"
@@ -91,12 +92,12 @@ if ($InstallModels) {
   Invoke-SoaiBash "cd '$linuxPath' && ./scripts/verify_storage.sh '$linuxPath' '$Profile'"
   Assert-Native "WSL-native model storage preflight"
   $radarCommand = @'
-cd '__ROOT__' && source scripts/runtime_env.sh && "$SOAI_ENV_DIR/kernel/bin/python" scripts/check_release_radar.py --state-dir "$SOAI_STATE_DIR"
+cd '__ROOT__' && source scripts/runtime_env.sh && "\$SOAI_ENV_DIR/kernel/bin/python" scripts/check_release_radar.py --state-dir "\$SOAI_STATE_DIR"
 '@.Replace('__ROOT__', $linuxPath)
   Invoke-SoaiBash $radarCommand
   Assert-Native "official release radar"
   $sourceAuditCommand = @'
-cd '__ROOT__' && source scripts/runtime_env.sh && "$SOAI_ENV_DIR/kernel/bin/python" scripts/verify_sources.py --profile '__PROFILE__' --state-dir "$SOAI_STATE_DIR"
+cd '__ROOT__' && source scripts/runtime_env.sh && "\$SOAI_ENV_DIR/kernel/bin/python" scripts/verify_sources.py --profile '__PROFILE__' --state-dir "\$SOAI_STATE_DIR"
 '@.Replace('__ROOT__', $linuxPath).Replace('__PROFILE__', $Profile)
   Invoke-SoaiBash $sourceAuditCommand
   Assert-Native "upstream model source audit"
@@ -116,7 +117,7 @@ if ($InstallModels) {
   Write-Host "[8/10] Syncing the '$Profile' model profile to WSL-native storage..."
   $gated = if ($IncludeGated) { "--include-gated" } else { "" }
   $modelSyncCommand = @'
-cd '__ROOT__' && source scripts/runtime_env.sh && "$SOAI_ENV_DIR/kernel/bin/python" scripts/sync_models.py --profile '__PROFILE__' --model-dir "$SOAI_MODEL_DIR" --state-dir "$SOAI_STATE_DIR" __GATED__
+cd '__ROOT__' && source scripts/runtime_env.sh && "\$SOAI_ENV_DIR/kernel/bin/python" scripts/sync_models.py --profile '__PROFILE__' --model-dir "\$SOAI_MODEL_DIR" --state-dir "\$SOAI_STATE_DIR" __GATED__
 '@.Replace('__ROOT__', $linuxPath).Replace('__PROFILE__', $Profile).Replace('__GATED__', $gated)
   Invoke-SoaiBash $modelSyncCommand
   Assert-Native "model synchronization"
@@ -130,7 +131,7 @@ cd '__ROOT__' && source scripts/runtime_env.sh && __SKIP__ ./scripts/prepare_lla
   Assert-Native "Qwen GGUF preparation"
   if (-not $SkipSpecialists) {
     $prewarmCommand = @'
-cd '__ROOT__' && source scripts/runtime_env.sh && "$SOAI_ENV_DIR/kernel/bin/python" scripts/prewarm_specialists.py --strict --profile '__PROFILE__'
+cd '__ROOT__' && source scripts/runtime_env.sh && "\$SOAI_ENV_DIR/kernel/bin/python" scripts/prewarm_specialists.py --strict --profile '__PROFILE__'
 '@.Replace('__ROOT__', $linuxPath).Replace('__PROFILE__', $Profile)
     Invoke-SoaiBash $prewarmCommand
     Assert-Native "specialist prewarm"
@@ -147,7 +148,7 @@ Assert-Native "kernel preflight"
 Assert-Native "kernel tests"
 $strict = if ($InstallModels) { "--strict" } else { "" }
 $doctorCommand = @'
-cd '__ROOT__' && source scripts/runtime_env.sh && "$SOAI_ENV_DIR/kernel/bin/python" scripts/doctor.py __STRICT__
+cd '__ROOT__' && source scripts/runtime_env.sh && "\$SOAI_ENV_DIR/kernel/bin/python" scripts/doctor.py __STRICT__
 '@.Replace('__ROOT__', $linuxPath).Replace('__STRICT__', $strict)
 Invoke-SoaiBash $doctorCommand
 Assert-Native "installation doctor"
