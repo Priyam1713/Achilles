@@ -1,0 +1,60 @@
+version: 1
+policy:
+  auto_promote: false
+  require_official_source: true
+  require_immutable_revision_before_install: true
+
+sources:
+  - id: qwen38-27b-upstream
+    kind: huggingface_model
+    repository: Qwen/Qwen3.8-27B
+    lifecycle: installed
+    expected: present
+    official_url: https://huggingface.co/Qwen/Qwen3.8-27B
+
+  - id: qwen38-27b-gguf
+    kind: huggingface_model
+    repository: unsloth/Qwen3.8-27B-GGUF
+    lifecycle: installed_artifact
+    expected: present
+    official_url: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF
+
+  - id: deepseek-harness
+    kind: github_repository
+    repository: deepseek-ai/deepseek-harness
+    branch: master
+    lifecycle: developer_preview
+    expected: present
+    official_url: https://github.com/deepseek-ai/deepseek-harness
+    note: Compatibility-breaking changes are expected; install commits are locked locally.
+
+  - id: deepseek-harness-npm
+    kind: npm_package
+    package: "@deepseek-ai/dsh"
+    lifecycle: developer_preview
+    expected: present
+    official_url: https://www.npmjs.com/package/@deepseek-ai/dsh
+
+  - id: glm53-api-docs
+    kind: web_page
+    url: https://docs.z.ai/guides/llm/glm-5.3
+    contains: GLM-5.3
+    lifecycle: api_available
+    expected: present
+    official_url: https://docs.z.ai/guides/llm/glm-5.3
+
+  - id: glm53-open-weights
+    kind: huggingface_model
+    repository: zai-org/GLM-5.3
+    lifecycle: announced
+    expected: pending
+    official_url: https://huggingface.co/zai-org
+    note: Report availability only; never auto-add a frontier-scale model to this 12GB workstation.
+
+  - id: glm53-fp8-open-weights
+    kind: huggingface_model
+    repository: zai-org/GLM-5.3-FP8
+    lifecycle: announced
+    expected: pending
+    official_url: https://huggingface.co/zai-org
+    note: Report availability only; hardware fit, license and engine support require a fresh review.

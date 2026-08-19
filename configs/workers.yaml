@@ -1,0 +1,140 @@
+workers:
+  retrieval:
+    python: '3.12'
+    packages:
+    - sentence-transformers>=5
+    - transformers>=4.57
+    - accelerate>=1.10
+    - einops
+    - pillow
+    - qwen-vl-utils
+    models:
+    - octen-embedding-8b-int8
+    - qwen3-reranker-8b
+    - qwen3-vl-embedding-8b
+    - qwen3-vl-reranker-8b
+    - gliner2-multi-v1
+    port: 8211
+  qwen_asr:
+    python: '3.12'
+    packages:
+    - qwen-asr
+    - soundfile
+    - librosa
+    models:
+    - qwen3-asr-1.7b
+    - qwen3-forced-aligner-0.6b
+    - whisper-large-v3-turbo
+    notes: Dedicated because Qwen ASR pins fast-moving transformer/audio dependencies.
+    port: 8212
+  moss_audio:
+    python: '3.12'
+    repos:
+    - https://github.com/OpenMOSS/MOSS-Audio.git
+    - https://github.com/OpenMOSS/MOSS-Transcribe-Diarize.git
+    models:
+    - moss-audio-4b-thinking
+    - moss-transcribe-diarize-0.9b
+    port: 8213
+  voxcpm:
+    python: '3.12'
+    repo: https://github.com/OpenBMB/VoxCPM.git
+    models:
+    - voxcpm2
+    port: 8214
+  paddleocr:
+    python: '3.12'
+    packages:
+    - paddleocr
+    models:
+    - paddleocr-vl-1.6
+    notes: Paddle GPU runtime is verified separately because CUDA/Paddle wheels change
+      independently.
+    port: 8215
+  vision:
+    python: 3.11.14
+    packages:
+    - rfdetr
+    repos:
+    - https://github.com/ByteDance-Seed/Depth-Anything-3.git
+    models:
+    - rf-detr-large
+    - rf-detr-keypoint
+    - depth-anything-3
+    port: 8216
+  sam:
+    python: '3.12'
+    repo: https://github.com/facebookresearch/sam3.git
+    models:
+    - sam3.1
+    notes: Separate environment; SAM 3.1 remains smoke-test gated because upstream
+      is still evolving.
+    port: 8217
+  ui_tars:
+    python: '3.12'
+    packages:
+    - transformers>=4.57
+    - accelerate
+    - pillow
+    - qwen-vl-utils
+    models:
+    - ui-tars-1.5-7b
+    port: 8218
+  science_general:
+    python: '3.12'
+    packages:
+    - chronos-forecasting
+    - esm
+    - scikit-learn
+    - xgboost
+    - catboost
+    - pandas
+    - polars
+    - duckdb
+    models:
+    - chronos-2
+    - esm3-sm-open-v1
+    - prithvi-eo-2-600m
+    - pythagoras-prover-4b
+    port: 8219
+  tabpfn:
+    python: '3.12'
+    packages:
+    - tabpfn
+    models:
+    - tabpfn-3
+    port: 8220
+  fairchem:
+    python: '3.12'
+    packages:
+    - fairchem-core
+    models:
+    - uma-m-1.1
+    port: 8221
+  medgemma:
+    python: '3.12'
+    packages:
+    - transformers>=4.57
+    - accelerate
+    - pillow
+    models:
+    - medgemma-1.5-4b-it
+    port: 8222
+  ace_step:
+    python: '3.12'
+    repo: https://github.com/ace-step/ACE-Step-1.5.git
+    models:
+    - ace-step-1.5-xl-sft
+    port: 8223
+  media:
+    python: 3.11.14
+    repo: https://github.com/deepbeepmeep/Wan2GP.git
+    models:
+    - flux2-klein-9b-fp8
+    - ltx-2.5-nvfp4
+    - minimax-h3-wangp
+    - minimax-music3
+    - ace-step-1.5-xl-sft
+    notes: WanGP upstream currently recommends Python 3.11.14 + PyTorch 2.10/cu130
+      for RTX 20xx-50xx. Kept isolated from every other worker.
+    port: 7867

@@ -1,0 +1,739 @@
+models:
+- id: qwen38-27b
+  name: Qwen3.8-27B
+  source: Qwen/Qwen3.8-27B
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: artifact
+  artifact:
+    source: unsloth/Qwen3.8-27B-GGUF
+    source_type: huggingface
+    verified_source: true
+    format: gguf
+    allow_patterns:
+    - Qwen3.8-27B-UD-Q4_K_M.gguf
+    - MTP/mtp-Qwen3.8-27B-Q4_0.gguf
+    - mmproj-F16.gguf
+    - README.md
+  capabilities:
+  - reasoning
+  - coding
+  - planning
+  - vision_language
+  - synthesis
+  - verification
+  preferred_engines:
+  - llama_cpp
+  profiles:
+    interactive:
+      format: gguf
+      quant: UD-Q4_K_M
+      context_tokens: 16384
+      kv_cache: q8_0
+      flash_attention: true
+      local_build: false
+    mtp_candidate:
+      format: gguf
+      quant: UD-Q4_K_M
+      context_tokens: 16384
+      draft_quant: Q4_0
+      speculative_type: draft-mtp
+      enabled_after_benchmark: true
+  quality_prior: 0.99
+  resident_priority: 35
+  notes: >-
+    Heavy System-2 brain. The 16.46 GB UD-Q4_K_M artifact is the workstation default;
+    partial GPU offload is expected. MTP is downloaded but remains opt-in until its speed,
+    acceptance rate and stability pass a local benchmark on this exact CUDA build.
+  estimated_vram_mb: 11500
+  can_cpu_offload: true
+  commercial_allowed: true
+  license_note: Apache-2.0 upstream and quantized artifact.
+- id: qwen35-9b
+  name: Qwen3.5-9B
+  source: Qwen/Qwen3.5-9B
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - orchestration_fast
+  - tool_routing
+  - vision_language
+  - gui_reasoning
+  - synthesis
+  preferred_engines:
+  - llama_cpp
+  profiles:
+    resident:
+      format: gguf
+      quant: Q6_K
+      local_build: true
+  quality_prior: 0.88
+  resident_priority: 100
+  notes: System-1 resident loop brain; benchmark against smaller/faster future models.
+  estimated_vram_mb: 9000
+  can_cpu_offload: true
+  commercial_allowed: true
+  license_note: Apache-2.0 upstream.
+- id: octen-embedding-8b-int8
+  name: Octen-Embedding-8B-INT8
+  source: Octen/Octen-Embedding-8B-INT8
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - text_embedding
+  - semantic_search
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.96
+  resident_priority: 10
+  estimated_vram_mb: 9500
+  can_cpu_offload: false
+  commercial_allowed: true
+  license_note: Apache-2.0 upstream.
+- id: qwen3-reranker-8b
+  name: Qwen3-Reranker-8B
+  source: Qwen/Qwen3-Reranker-8B
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - text_reranking
+  preferred_engines:
+  - hf_worker
+  - sglang
+  quality_prior: 0.95
+  resident_priority: 10
+  estimated_vram_mb: 9500
+  can_cpu_offload: false
+  profiles:
+    runtime:
+      precision: int8
+      reason: preserve retrieval quality while fitting 12GB
+  commercial_allowed: true
+  license_note: Apache-2.0 upstream.
+- id: qwen3-vl-embedding-8b
+  name: Qwen3-VL-Embedding-8B
+  source: Qwen/Qwen3-VL-Embedding-8B
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - multimodal_embedding
+  - visual_search
+  - video_retrieval
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.95
+  resident_priority: 8
+  estimated_vram_mb: 10500
+  can_cpu_offload: false
+  profiles:
+    runtime:
+      precision: int8
+      reason: preserve retrieval quality while fitting 12GB
+  commercial_allowed: true
+  license_note: Apache-2.0 upstream.
+- id: qwen3-vl-reranker-8b
+  name: Qwen3-VL-Reranker-8B
+  source: Qwen/Qwen3-VL-Reranker-8B
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - multimodal_reranking
+  - visual_search
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.95
+  resident_priority: 8
+  estimated_vram_mb: 10500
+  can_cpu_offload: false
+  profiles:
+    runtime:
+      precision: int8
+      reason: preserve retrieval quality while fitting 12GB
+  commercial_allowed: true
+  license_note: Apache-2.0 upstream.
+- id: paddleocr-vl-1.6
+  name: PaddleOCR-VL-1.6
+  source: PaddlePaddle/PaddleOCR-VL-1.6
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - ocr
+  - document_parsing
+  - table_extraction
+  - formula_extraction
+  - layout_understanding
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.97
+  resident_priority: 15
+  estimated_vram_mb: 4500
+  can_cpu_offload: false
+  commercial_allowed: true
+  license_note: Apache-2.0 upstream.
+- id: gliner2-multi-v1
+  name: GLiNER2 Multi v1
+  source: fastino/gliner2-multi-v1
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - ner
+  - structured_extraction
+  - relation_extraction
+  - classification
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.9
+  resident_priority: 20
+  estimated_vram_mb: 1200
+  can_cpu_offload: false
+  commercial_allowed: true
+  license_note: Apache-2.0 upstream.
+- id: qwen3-asr-1.7b
+  name: Qwen3-ASR-1.7B
+  source: Qwen/Qwen3-ASR-1.7B-hf
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - asr_multilingual
+  - speech_transcription
+  - language_identification
+  - streaming_asr
+  preferred_engines:
+  - hf_worker
+  - vllm
+  quality_prior: 0.97
+  resident_priority: 14
+  notes: Primary ASR. Official Qwen family supports 52 languages/dialects and streaming/offline inference.
+  estimated_vram_mb: 5000
+  can_cpu_offload: false
+  commercial_allowed: true
+- id: qwen3-forced-aligner-0.6b
+  name: Qwen3 Forced Aligner 0.6B
+  source: Qwen/Qwen3-ForcedAligner-0.6B
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - speech_alignment
+  - word_timestamps
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.91
+  resident_priority: 5
+  notes: Timestamp/alignment specialist; validate outputs because upstream has active timestamp bug reports on some audio.
+  estimated_vram_mb: 2200
+  can_cpu_offload: false
+  commercial_allowed: true
+- id: whisper-large-v3-turbo
+  name: Whisper Large v3 Turbo
+  source: openai/whisper-large-v3-turbo
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - asr_multilingual
+  - speech_transcription
+  - speech_translation
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.91
+  resident_priority: 10
+  estimated_vram_mb: 4000
+  can_cpu_offload: false
+  commercial_allowed: true
+  license_note: MIT upstream.
+- id: moss-transcribe-diarize-0.9b
+  name: MOSS-Transcribe-Diarize 0.9B
+  source: OpenMOSS-Team/MOSS-Transcribe-Diarize
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - speaker_diarization
+  - speaker_attributed_transcription
+  - long_audio_transcription
+  - audio_timestamps
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.94
+  resident_priority: 8
+  notes: Long-form multi-speaker transcription/diarization/timestamps; 50+ languages according to upstream.
+  estimated_vram_mb: 3000
+  can_cpu_offload: false
+  commercial_allowed: true
+  license_note: Apache-2.0 upstream.
+- id: moss-audio-4b-thinking
+  name: MOSS-Audio-4B-Thinking
+  source: OpenMOSS-Team/MOSS-Audio-4B-Thinking
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - audio_understanding
+  - audio_reasoning
+  - sound_captioning
+  - music_understanding
+  preferred_engines:
+  - sglang
+  - hf_worker
+  quality_prior: 0.93
+  resident_priority: 8
+  estimated_vram_mb: 9500
+  can_cpu_offload: false
+  commercial_allowed: true
+  license_note: Apache-2.0 upstream.
+- id: voxcpm2
+  name: VoxCPM2
+  source: openbmb/VoxCPM2
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - tts
+  - voice_design
+  - voice_cloning
+  - multilingual_speech_generation
+  - streaming_tts
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.96
+  resident_priority: 9
+  license_note: Apache-2.0 upstream; commercial-ready per upstream.
+  notes: 'Primary TTS: 2B, 30 languages including Hindi, 48kHz output, controllable cloning and voice design.'
+  estimated_vram_mb: 8000
+  can_cpu_offload: false
+  commercial_allowed: true
+- id: rf-detr-large
+  name: RF-DETR Large
+  source: Roboflow/rf-detr-large
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - object_detection
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.95
+  resident_priority: 12
+  estimated_vram_mb: 4000
+  can_cpu_offload: false
+  commercial_allowed: true
+  notes: Official RF-DETR Large checkpoint. Python implementation is installed separately in the vision worker.
+  license_note: Apache-2.0 model/package.
+- id: rf-detr-keypoint
+  name: RF-DETR Keypoint Preview
+  source: roboflow/rf-detr
+  source_type: github_package
+  verified_source: true
+  status: candidate
+  install_policy: package
+  capabilities:
+  - pose_estimation
+  - keypoint_detection
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.84
+  resident_priority: 4
+  notes: Preview; benchmark before automatic promotion.
+  estimated_vram_mb: 4500
+  can_cpu_offload: false
+  commercial_allowed: true
+  license_note: Apache-2.0 preview model/package.
+- id: sam3.1
+  name: SAM 3.1
+  source: facebook/sam3.1
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: gated
+  capabilities:
+  - segmentation
+  - video_segmentation
+  - object_tracking
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.96
+  resident_priority: 8
+  estimated_vram_mb: 9000
+  can_cpu_offload: false
+  commercial_allowed: null
+  license_note: Gated Meta SAM 3.1 repository; access must be accepted upstream before sync.
+  notes: Official gated checkpoint; code is installed from facebookresearch/sam3 in an isolated worker.
+- id: depth-anything-3
+  name: Depth Anything 3 Base
+  source: depth-anything/DA3-BASE
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - depth_estimation
+  - camera_pose
+  - multiview_geometry
+  - geometry_3d
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.95
+  resident_priority: 7
+  estimated_vram_mb: 3000
+  can_cpu_offload: false
+  commercial_allowed: true
+  license_note: Apache-2.0 for DA3-BASE.
+  notes: 120M any-view geometry model; code is installed from the official Depth-Anything-3 repo.
+- id: ui-tars-1.5-7b
+  name: UI-TARS-1.5-7B
+  source: ByteDance-Seed/UI-TARS-1.5-7B
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - computer_use
+  - gui_grounding
+  - screenshot_action
+  preferred_engines:
+  - vllm
+  - sglang
+  - hf_worker
+  quality_prior: 0.9
+  resident_priority: 18
+  estimated_vram_mb: 10500
+  can_cpu_offload: true
+  profiles:
+    runtime:
+      precision: 4bit
+      method: bitsandbytes-nf4
+  commercial_allowed: null
+- id: flux2-klein-9b-fp8
+  name: FLUX.2 Klein 9B FP8
+  source: black-forest-labs/FLUX.2-klein-9b-fp8
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: gated
+  capabilities:
+  - image_generation
+  - image_editing
+  - multi_reference_editing
+  preferred_engines:
+  - wangp
+  - hf_worker
+  quality_prior: 0.95
+  resident_priority: 5
+  estimated_vram_mb: 11500
+  can_cpu_offload: true
+  profiles:
+    runtime:
+      precision: fp8
+      cpu_offload: true
+  commercial_allowed: null
+- id: ace-step-1.5-xl-sft
+  name: ACE-Step 1.5 XL SFT
+  source: ACE-Step/acestep-v15-xl-sft-diffusers
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - music_generation
+  - song_generation
+  - music_editing
+  - audio_generation
+  preferred_engines:
+  - wangp
+  - hf_worker
+  quality_prior: 0.97
+  resident_priority: 4
+  estimated_vram_mb: 11500
+  can_cpu_offload: true
+  commercial_allowed: true
+  license_note: MIT upstream.
+  notes: Quality-first 4B/5B-class XL SFT path; slower than Turbo but preferred when quality matters.
+- id: ltx-2.5-nvfp4
+  name: LTX-2.5 Distilled NVFP4
+  source: Lightricks/LTX-2.5
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - video_generation
+  - image_to_video
+  - audio_video_generation
+  - video_editing
+  - multishot_video
+  preferred_engines:
+  - wangp
+  quality_prior: 0.95
+  resident_priority: 4
+  notes: Blackwell-targeted practical video path. Uses distilled NVFP4 transformer plus reduced-precision/shared components
+    via WanGP.
+  commercial_allowed: null
+  estimated_vram_mb: 11500
+  can_cpu_offload: true
+  license_note: 'LTX-2.x Community License: free commercial/production use for entities under $10M annual revenue; different
+    terms above that threshold.'
+  allow_patterns:
+  - diffusion_models/ltx-2.5-22b-distilled-transformer-nvfp4.safetensors
+  - text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors
+  - vae/ltx-2.5-video-vae-conv-bf16.safetensors
+  - vae/ltx-2.5-video-vae-bf16.safetensors
+  - vae/ltx-2.5-audio-vae-bf16.safetensors
+  - model_patches/ltx-2.5-duration-head-bf16.safetensors
+  - latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors
+  - README.md
+  - LICENSE*
+- id: minimax-music3
+  name: MiniMax Music 3
+  source: MiniMaxAI/MiniMax-Music3
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - long_form_music_generation
+  - full_song_generation
+  - music_generation
+  preferred_engines:
+  - wangp
+  - hf_worker
+  quality_prior: 0.97
+  resident_priority: 3
+  estimated_vram_mb: 11500
+  can_cpu_offload: true
+  commercial_allowed: null
+  notes: Long-form complete-song specialist up to five minutes. Distinct from ACE-Step XL, which keeps editing/control duties.
+- id: minimax-h3-wangp
+  name: MiniMax H3 via WanGP
+  source: MiniMaxAI/MiniMax-H3
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: runtime_managed
+  capabilities:
+  - video_generation_quality
+  - audio_video_generation_quality
+  - reference_video_generation
+  - long_video_generation
+  preferred_engines:
+  - wangp
+  quality_prior: 0.98
+  resident_priority: 2
+  estimated_vram_mb: 9000
+  can_cpu_offload: true
+  commercial_allowed: null
+  license_note: MiniMax H3 Community License has territory/use conditions. Kernel must preserve license metadata and fail
+    closed when the use context is incompatible.
+  notes: WanGP can run full/pruned H3 with low-VRAM paths. Asset remains runtime-managed because the optimized pruned/quantized
+    derivative changes rapidly and is not pre-pinned to an unverified community file.
+- id: chronos-2
+  name: Chronos-2
+  source: amazon/chronos-2
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - time_series_forecasting
+  - multivariate_forecasting
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.95
+  resident_priority: 3
+  estimated_vram_mb: 4500
+  can_cpu_offload: false
+  commercial_allowed: true
+  notes: Official 120M Chronos-2 checkpoint; chronos-forecasting package provides the runtime.
+  license_note: Apache-2.0 upstream.
+- id: tabpfn-3
+  name: TabPFN-3
+  source: Prior-Labs/tabpfn_3
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: gated
+  capabilities:
+  - tabular_classification
+  - tabular_regression
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.95
+  resident_priority: 3
+  license_note: TabPFN-3 model weights are non-commercial; kernel commercial routing must exclude it.
+  estimated_vram_mb: 6000
+  can_cpu_offload: false
+  commercial_allowed: false
+- id: esm3-sm-open-v1
+  name: ESM3 Small Open v1
+  source: biohub/esm3-sm-open-v1
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: gated
+  capabilities:
+  - protein_modeling
+  - protein_generation
+  - protein_structure_function
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.92
+  resident_priority: 2
+  license_note: Non-commercial upstream community license; keep license metadata with every result.
+  estimated_vram_mb: 6500
+  can_cpu_offload: false
+  commercial_allowed: false
+- id: uma-m-1.1
+  name: UMA Medium 1.1
+  source: facebook/UMA
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: gated
+  capabilities:
+  - molecular_modeling
+  - atomistic_simulation
+  - materials_modeling
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.95
+  resident_priority: 2
+  estimated_vram_mb: 6500
+  can_cpu_offload: false
+  commercial_allowed: true
+  allow_patterns:
+  - uma-m-1p1.pt
+  - README.md
+  - LICENSE*
+  - '*.md'
+  license_note: FAIR Chemistry license/AUP; gated access. Upstream currently exposes medium as uma-m-1.1; newer 1.2.x releases
+    are small.
+  notes: Accuracy-first medium checkpoint. fairchem-core is installed separately.
+- id: medgemma-1.5-4b-it
+  name: MedGemma 1.5 4B IT
+  source: google/medgemma-1.5-4b-it
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: gated
+  capabilities:
+  - medical_image_understanding
+  - medical_text_understanding
+  preferred_engines:
+  - hf_worker
+  - vllm
+  quality_prior: 0.93
+  resident_priority: 2
+  license_note: Gated Health AI terms; never treat output as clinical authority.
+  estimated_vram_mb: 9000
+  can_cpu_offload: false
+  commercial_allowed: null
+- id: prithvi-eo-2-600m
+  name: Prithvi-EO-2.0-600M
+  source: ibm-nasa-geospatial/Prithvi-EO-2.0-600M
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - geospatial_vision
+  - earth_observation
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.91
+  resident_priority: 2
+  estimated_vram_mb: 2500
+  can_cpu_offload: false
+  commercial_allowed: true
+  license_note: Apache-2.0 upstream.
+- id: pythagoras-prover-4b
+  name: Pythagoras-Prover-4B
+  source: Pythagoras-LM/Pythagoras-Prover-4B
+  source_type: huggingface
+  verified_source: true
+  status: final
+  install_policy: sync
+  capabilities:
+  - lean_theorem_proving
+  - formal_verification
+  preferred_engines:
+  - hf_worker
+  quality_prior: 0.94
+  resident_priority: 3
+  estimated_vram_mb: 9000
+  can_cpu_offload: false
+  commercial_allowed: null
+- id: recommender-checkpoint
+  name: Generic recommender checkpoint
+  source: none
+  source_type: none
+  verified_source: true
+  status: excluded
+  install_policy: runtime_only
+  capabilities:
+  - recommendation
+  preferred_engines: []
+  quality_prior: 0.0
+  notes: Train a task-specific model when interaction data exists.
+  commercial_allowed: null
+- id: generic-graph-checkpoint
+  name: Generic graph checkpoint
+  source: none
+  source_type: none
+  verified_source: true
+  status: excluded
+  install_policy: runtime_only
+  capabilities:
+  - graph_modeling
+  preferred_engines: []
+  quality_prior: 0.0
+  notes: Install PyTorch Geometric tooling; train/select per graph task.
+  commercial_allowed: null
+- id: autonomous-driving-checkpoint
+  name: Autonomous driving VLA
+  source: none
+  source_type: none
+  verified_source: true
+  status: excluded
+  install_policy: runtime_only
+  capabilities:
+  - autonomous_driving
+  preferred_engines: []
+  quality_prior: 0.0
+  notes: No vehicle sensor/control stack on this device.
+  commercial_allowed: null
+- id: robotics-policy-checkpoint
+  name: Generic robotics VLA
+  source: none
+  source_type: none
+  verified_source: true
+  status: excluded
+  install_policy: runtime_only
+  capabilities:
+  - robotics_control
+  preferred_engines: []
+  quality_prior: 0.0
+  notes: Keep ROS/device adapter; install a policy only for actual attached hardware.
+  commercial_allowed: null

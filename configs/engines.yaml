@@ -1,0 +1,56 @@
+engines:
+  llama_cpp:
+    kind: openai_compatible
+    enabled: true
+    base_url: http://127.0.0.1:8080/v1
+    health_url: http://127.0.0.1:8080/health
+    manages_residency: true
+    model_aliases:
+      qwen35-9b:
+        fast: qwen35-9b
+        smart: qwen35-9b
+        deep: qwen35-9b
+      qwen38-27b:
+        fast: qwen38-27b
+        smart: qwen38-27b
+        deep: qwen38-27b
+    notes: Primary GGUF/offload backend; router mode supported by current llama.cpp.
+  vllm:
+    kind: openai_compatible
+    enabled: false
+    base_url: http://127.0.0.1:8000/v1
+    health_url: http://127.0.0.1:8000/health
+    manages_residency: false
+    notes: Candidate backend. Disabled until a target-machine smoke/benchmark provisions
+      a supported model server.
+  sglang:
+    kind: openai_compatible
+    enabled: false
+    base_url: http://127.0.0.1:30000/v1
+    health_url: http://127.0.0.1:30000/health
+    manages_residency: false
+    notes: Candidate backend. Disabled until a target-machine smoke/benchmark proves
+      it for a supported specialist.
+  pulsar:
+    kind: openai_compatible
+    enabled: false
+    base_url: http://127.0.0.1:8091/v1
+    health_url: http://127.0.0.1:8091/health
+    manages_residency: true
+    notes: Experimental giant-MoE SSD streaming. Disabled until a model proves useful
+      on 12GB VRAM.
+  hf_worker:
+    kind: worker
+    enabled: true
+    notes: Isolated Python workers for specialist models that do not expose OpenAI
+      APIs.
+  wangp:
+    kind: media_worker
+    enabled: true
+    notes: WanGP official Python API wrapped as a local worker. Model types are discovered
+      dynamically; only stable aliases are pinned.
+    base_url: http://127.0.0.1:7867
+    health_url: http://127.0.0.1:7867/health
+    manages_residency: true
+    model_aliases:
+      ltx-2.5-nvfp4: ltx2_22B_distilled

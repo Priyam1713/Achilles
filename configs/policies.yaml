@@ -1,0 +1,52 @@
+defaults:
+  fail_closed: true
+  raw_secret_visibility: deny
+  untrusted_content_can_issue_instructions: false
+
+risk_rules:
+  - match: {action: "read", scope: "workspace"}
+    risk: low
+    approval: false
+  - match: {action: "write", scope: "workspace"}
+    risk: medium
+    approval: false
+    verify: diff
+  - match: {action: "execute", scope: "workspace"}
+    risk: medium
+    approval: false
+    verify: exit_code
+  - match: {action: "delete", scope: "workspace"}
+    risk: high
+    approval: true
+    verify: existence
+  - match: {action: "write", scope: "host"}
+    risk: high
+    approval: true
+    verify: diff
+  - match: {action: "execute", scope: "host"}
+    risk: high
+    approval: true
+  - match: {action: "credential", scope: "any"}
+    risk: high
+    approval: true
+    reveal_secret_to_model: false
+  - match: {action: "network_post", scope: "untrusted"}
+    risk: high
+    approval: true
+  - match: {action: "gui", scope: "destructive"}
+    risk: high
+    approval: true
+  - match: {action: "gui", scope: "non_destructive"}
+    risk: medium
+    approval: false
+
+trust_labels:
+  - trusted_user
+  - trusted_local
+  - untrusted_web
+  - untrusted_email
+  - untrusted_document
+  - untrusted_model_output
+  - untrusted_collaboration
+  - execution_result
+  - verified_result

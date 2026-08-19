@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "local-sovereign-ai"
+version = "0.1.0"
+description = "Hardware-aware local AI kernel with replaceable agent, inference, execution, memory and verification planes."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116",
+  "uvicorn[standard]>=0.35",
+  "httpx>=0.28",
+  "pydantic>=2.11",
+  "PyYAML>=6.0",
+  "psutil>=7.0",
+  "platformdirs>=4.3",
+  "keyring>=25.6",
+  "huggingface-hub>=0.34",
+  "typer>=0.16",
+  "rich>=14.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.4", "pytest-asyncio>=1.1", "ruff>=0.12"]
+ml = ["numpy>=2.2", "sentence-transformers>=5.0"]
+tools = ["playwright>=1.54", "beautifulsoup4>=4.13"]
+windows = ["pywinauto>=0.6.9", "uiautomation>=2.0"]
+
+[project.scripts]
+sovereign = "sovereign_ai.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sovereign_ai"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "RUF"]

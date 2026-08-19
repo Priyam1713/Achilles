@@ -1,0 +1,39 @@
+profiles:
+  core:
+    description: Daily local assistant, coding, retrieval, documents, speech and GUI perception.
+    models:
+      - qwen38-27b
+      - qwen35-9b
+      - octen-embedding-8b-int8
+      - qwen3-reranker-8b
+      - paddleocr-vl-1.6
+      - gliner2-multi-v1
+      - qwen3-asr-1.7b
+      - whisper-large-v3-turbo
+      - voxcpm2
+      - rf-detr-large
+      - depth-anything-3
+      - ui-tars-1.5-7b
+      - chronos-2
+
+  workstation:
+    description: Recommended 12GB-VRAM profile with broad creative, audio, vision and data coverage.
+    extends: core
+    models:
+      - qwen3-vl-embedding-8b
+      - qwen3-vl-reranker-8b
+      - qwen3-forced-aligner-0.6b
+      - moss-transcribe-diarize-0.9b
+      - moss-audio-4b-thinking
+      - sam3.1
+      - flux2-klein-9b-fp8
+      - ace-step-1.5-xl-sft
+      - ltx-2.5-nvfp4
+      - minimax-music3
+      - minimax-h3-wangp
+      - tabpfn-3
+      - medgemma-1.5-4b-it
+
+  full:
+    description: Every final manifest model, including niche scientific specialists.
+    all_final: true

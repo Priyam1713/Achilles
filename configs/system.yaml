@@ -1,0 +1,59 @@
+system:
+  name: local-sovereign-ai
+  state_dir: ./state
+  model_dir: ./models
+  cache_dir: ./cache
+  runtime_dir: ./runtimes
+  bind: 127.0.0.1
+  port: 7788
+  default_mode: smart
+  fail_closed: true
+hardware_target:
+  os: windows
+  wsl2: true
+  gpu_vendor: nvidia
+  vram_gb: 12
+  ram_gb: 32
+  storage_gb: 1000
+  quality_over_speed: true
+routing:
+  modes:
+    fast:
+      quality_weight: 0.45
+      latency_weight: 0.35
+      reliability_weight: 0.2
+    smart:
+      quality_weight: 0.62
+      latency_weight: 0.13
+      reliability_weight: 0.25
+    deep:
+      quality_weight: 0.78
+      latency_weight: 0.02
+      reliability_weight: 0.2
+  max_candidates: 8
+  benchmark_override: true
+  require_verified_source: true
+resources:
+  # The laptop display also uses VRAM. 1.6GB avoids router/desktop contention on 12GB.
+  reserve_vram_mb: 1600
+  reserve_ram_mb: 4096
+  allow_cpu_offload: true
+  allow_nvme_streaming: true
+  model_idle_ttl_seconds: 300
+  max_concurrent_gpu_heavy_jobs: 1
+  full_install_min_free_disk_gb: 600
+execution:
+  preferred_backend: openshell
+  fallback_backend: docker
+  host_actions_require_approval: true
+  gui_actions_require_approval_on_risk: true
+memory:
+  sqlite_path: ./state/memory.db
+  event_db_path: ./state/events.db
+  fts_enabled: true
+  multimodal_vectors: true
+  vector_backend: adapter
+verification:
+  enabled: true
+  require_postconditions_for_mutations: true
+  rollback_on_failed_postcondition: true
