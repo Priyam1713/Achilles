@@ -31,8 +31,10 @@ fi
 docker build -t soai-exec:latest -f infra/execution/Dockerfile infra/execution
 
 OPENSHELL_HEALTH=unhealthy
-if openshell status >/dev/null 2>&1; then
-  if openshell sandbox create --no-keep --no-tty --policy "$ROOT/configs/openshell-policy.yaml" -- sh -lc 'printf soai-openshell-ok' >/tmp/soai-openshell-smoke.log 2>&1; then
+if [[ "${SOAI_SKIP_OPENSHELL_SMOKE:-0}" == "1" ]]; then
+  echo "OpenShell smoke skipped for an idempotent runtime resume; Docker remains the hardened fallback."
+elif openshell status >/dev/null 2>&1; then
+  if timeout 90s openshell sandbox create --no-keep --no-tty --policy "$ROOT/configs/openshell-policy.yaml" -- sh -lc 'printf soai-openshell-ok' >/tmp/soai-openshell-smoke.log 2>&1; then
     OPENSHELL_HEALTH=healthy
   else
     echo "WARNING: OpenShell CLI/gateway exists but sandbox smoke failed; Docker remains the hardened fallback." >&2
@@ -45,11 +47,24 @@ printf '%s\n' "$OPENSHELL_HEALTH" > "$SOAI_STATE_DIR/openshell-health.txt"
 
 checkout_pinned() {
   local url="$1" dir="$2" commit="$3"
-  if [[ ! -d "$dir/.git" ]]; then git clone --filter=blob:none --no-checkout "$url" "$dir"; fi
-  git -C "$dir" diff --quiet && git -C "$dir" diff --cached --quiet || {
-    echo "Refusing dirty runtime checkout: $dir" >&2; exit 2;
-  }
-  git -C "$dir" fetch --depth 1 origin "$commit"
+  if [[ ! -d "$dir/.git" ]]; then
+    for attempt in 1 2 3 4 5; do
+      git clone --filter=blob:none --no-checkout "$url" "$dir" && break
+      [[ "$attempt" == 5 ]] && return 1
+      rm -rf -- "$dir"
+      sleep "$((attempt * 2))"
+    done
+  else
+    git -C "$dir" diff --quiet && git -C "$dir" diff --cached --quiet || {
+      echo "Refusing dirty runtime checkout: $dir" >&2; exit 2;
+    }
+  fi
+  for attempt in 1 2 3 4 5; do
+    git -C "$dir" fetch --depth 1 origin "$commit" && break
+    [[ "$attempt" == 5 ]] && return 1
+    echo "Pinned fetch failed (attempt $attempt/5); retrying: $url" >&2
+    sleep "$((attempt * 2))"
+  done
   git -C "$dir" checkout --detach --force "$commit"
   [[ "$(git -C "$dir" rev-parse HEAD)" == "$commit" ]] || { echo "Revision mismatch: $dir" >&2; exit 2; }
 }

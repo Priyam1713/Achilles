@@ -12,6 +12,11 @@ done
 case "$PROFILE" in core|workstation|full) ;; *) echo "Unknown profile: $PROFILE" >&2; exit 2 ;; esac
 cd "$ROOT"
 source "$ROOT/scripts/runtime_env.sh"
+
+# NVIDIA's wheel CDN can be slow for multi-hundred-megabyte CUDA artifacts.
+# Keep resumable one-shot installs from failing on uv's short default timeout.
+export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-600}"
+export UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-10}"
 source "$ROOT/configs/runtime-sources.env"
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 STATE="$SOAI_STATE_DIR"
@@ -30,10 +35,16 @@ TORCH_INDEX="${SOAI_TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"
 checkout_pinned() {
   local url="$1" name="$2" commit="$3" dir="$SRCROOT/$2"
   if [[ ! -d "$dir/.git" ]]; then git clone --filter=blob:none --no-checkout "$url" "$dir" >&2; fi
-  git -C "$dir" diff --quiet && git -C "$dir" diff --cached --quiet || {
-    echo "Refusing dirty specialist checkout: $dir" >&2; return 2;
-  }
-  git -C "$dir" fetch --depth 1 origin "$commit" >&2
+  if git -C "$dir" rev-parse --verify HEAD >/dev/null 2>&1; then
+    git -C "$dir" diff --quiet && git -C "$dir" diff --cached --quiet || {
+      echo "Refusing dirty specialist checkout: $dir" >&2; return 2;
+    }
+  fi
+  for attempt in 1 2 3 4 5; do
+    git -C "$dir" fetch --depth 1 origin "$commit" >&2 && break
+    [[ "$attempt" == 5 ]] && return 1
+    sleep "$((attempt * 2))"
+  done
   git -C "$dir" checkout --detach --force "$commit" >&2
   [[ "$(git -C "$dir" rev-parse HEAD)" == "$commit" ]] || return 2
   printf '%s' "$dir"
@@ -47,11 +58,18 @@ run_env() {
   echo "==> specialist dependency island: $name"
   local py="3.12"; [[ "$name" == "vision" ]] && py="3.11.14"
   env="$(make_env "$name" "$py")"
-  if ! install_torch "$env"; then failures+=("$name:torch"); return 0; fi
+  if [[ "$name" != "paddleocr" ]] && ! install_torch "$env"; then failures+=("$name:torch"); return 0; fi
   if ! "$fn" "$env"; then failures+=("$name:install"); return 0; fi
   if ! uv pip install --python "$env/bin/python" fastapi uvicorn httpx pydantic; then failures+=("$name:worker-api"); return 0; fi
   if ! uv pip check --python "$env/bin/python"; then failures+=("$name:dependency-check"); return 0; fi
-  if ! "$env/bin/python" - <<PY
+  if [[ "$name" == "paddleocr" ]]; then
+    if ! "$env/bin/python" - <<'PY'
+import paddle
+assert paddle.device.is_compiled_with_cuda(), 'Paddle CUDA unavailable'
+print('paddleocr', paddle.__version__, paddle.device.get_device())
+PY
+    then failures+=("$name:cuda-smoke"); fi
+  elif ! "$env/bin/python" - <<PY
 import torch
 assert torch.cuda.is_available(), 'CUDA unavailable'
 print('$name', torch.__version__, torch.cuda.get_device_name(0))
@@ -60,7 +78,7 @@ PY
 }
 
 pip_retrieval(){ local e="$1"; uv pip install --python "$e/bin/python" 'sentence-transformers>=5' 'transformers>=4.57' 'accelerate>=1.10' einops pillow qwen-vl-utils 'gliner2[local]' bitsandbytes fastapi uvicorn soundfile; }
-pip_asr(){ local e="$1"; uv pip install --python "$e/bin/python" qwen-asr 'transformers>=5.13.0' accelerate soundfile librosa openai-whisper; }
+pip_asr(){ local e="$1"; uv pip install --python "$e/bin/python" qwen-asr accelerate soundfile librosa openai-whisper; }
 pip_voxcpm(){ local e="$1" s; s="$(checkout_pinned "$VOXCPM_URL" VoxCPM "$VOXCPM_COMMIT")"; uv pip install --python "$e/bin/python" -e "$s"; }
 pip_moss(){ local e="$1" a d; a="$(checkout_pinned "$MOSS_AUDIO_URL" MOSS-Audio "$MOSS_AUDIO_COMMIT")"; d="$(checkout_pinned "$MOSS_TRANSCRIBE_URL" MOSS-Transcribe-Diarize "$MOSS_TRANSCRIBE_COMMIT")"; uv pip install --python "$e/bin/python" -e "$a"; uv pip install --python "$e/bin/python" -e "$d"; }
 pip_paddle(){ local e="$1"; uv pip install --python "$e/bin/python" --index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ paddlepaddle-gpu==3.2.1; uv pip install --python "$e/bin/python" 'paddleocr[doc-parser]'; uv pip install --python "$e/bin/python" https://paddle-whl.bj.bcebos.com/nightly/cu126/safetensors/safetensors-0.6.2.dev0-cp38-abi3-linux_x86_64.whl; }

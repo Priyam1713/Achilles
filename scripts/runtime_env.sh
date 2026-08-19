@@ -17,5 +17,11 @@ export SOVEREIGN_RUNTIME_DIR="$SOAI_RUNTIME_DIR"
 export HF_HOME="${HF_HOME:-$SOAI_CACHE_DIR/huggingface}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$SOAI_CACHE_DIR/uv}"
 
+# NVIDIA's WSL toolkit is installed outside Ubuntu's default PATH.
+if [[ -x /usr/local/cuda/bin/nvcc ]]; then
+  export PATH="/usr/local/cuda/bin:$PATH"
+  export CUDACXX="${CUDACXX:-/usr/local/cuda/bin/nvcc}"
+fi
+
 mkdir -p "$SOAI_STATE_DIR" "$SOAI_MODEL_DIR" "$SOAI_CACHE_DIR" \
   "$SOAI_RUNTIME_DIR" "$SOAI_OUTPUT_DIR" "$SOAI_ENV_DIR"

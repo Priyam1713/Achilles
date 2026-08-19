@@ -117,7 +117,7 @@ if ($InstallModels) {
   Write-Host "[8/10] Syncing the '$Profile' model profile to WSL-native storage..."
   $gated = if ($IncludeGated) { "--include-gated" } else { "" }
   $modelSyncCommand = @'
-cd '__ROOT__' && source scripts/runtime_env.sh && "\$SOAI_ENV_DIR/kernel/bin/python" scripts/sync_models.py --profile '__PROFILE__' --model-dir "\$SOAI_MODEL_DIR" --state-dir "\$SOAI_STATE_DIR" __GATED__
+cd '__ROOT__' && source scripts/runtime_env.sh && export HF_XET_HIGH_PERFORMANCE=1 HF_HUB_DOWNLOAD_TIMEOUT=600 && "\$SOAI_ENV_DIR/kernel/bin/python" scripts/sync_models.py --profile '__PROFILE__' --model-dir "\$SOAI_MODEL_DIR" --state-dir "\$SOAI_STATE_DIR" __GATED__
 '@.Replace('__ROOT__', $linuxPath).Replace('__PROFILE__', $Profile).Replace('__GATED__', $gated)
   Invoke-SoaiBash $modelSyncCommand
   Assert-Native "model synchronization"
