@@ -163,19 +163,24 @@ currently calls it with an actual `AgentProfile.memory_scopes` value, because no
 yet knows which profile a given call is acting for — the same gap already named below for
 `Run` identity.
 
+`WorkspaceLease` is now an opt-in enforced gate in `ExecutionBroker.run_approved()`
+(FIXES.md F-034): a caller that supplies `subject_id`/`workspace_lease_id` gets four real
+checks (lease exists and is held by that exact subject; its `root_path` covers the target
+`cwd`; a mutating call is refused through a read-only lease) before the existing
+policy/backend logic runs. No existing caller passes these yet, so this is additive, not a
+behavior change — verified by the full suite passing unchanged the moment the parameters
+were wired, before any new test existed.
+
 Still pending, genuinely unbuilt (not started, not just unwired):
 
 - propagating `AgentProfile` identity through `NativeAgentLoop`/`job_executor` so calls
-  into `ContextBuilder.retrieve_text()` (memory scope) and `Run` records (F-031) actually
-  know which profile they are acting for
+  into `ContextBuilder.retrieve_text()` (memory scope, F-033) and `ExecutionBroker
+  .run_approved()` (workspace lease, F-034), and `Run` records (F-031), actually know
+  which profile they are acting for — one propagation gap, named three times because it
+  blocks three different opt-in mechanisms from ever firing automatically
 - versioned workflow DAGs and recurring triggers that create ordinary jobs
 - the skill-candidate evaluation/promotion pipeline (`SkillCandidate`/`SkillVersion`/
   `AgentEvaluation`)
-- wiring `WorkspaceLease` as an *enforced* gate inside `ExecutionBroker`'s existing write
-  path (the store and its own HTTP endpoint are real and tested; nothing in the execution
-  path requires an active lease yet — a deliberate scope boundary, not an oversight, since
-  making every execution call require one would change behavior every existing
-  execution/`NativeAgentLoop` test currently depends on)
 - `collaboration/store.py`'s full retrofit onto `MigrationRunner` (F-026) — the
   `agent_profile_id` column was added via a targeted, idempotent `ALTER TABLE` instead,
   since that store is hash-chain integrity-critical and a full retrofit is real, separate

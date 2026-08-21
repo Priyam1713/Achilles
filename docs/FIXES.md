@@ -1501,6 +1501,55 @@ not fabrication.
   that is real, separate integration work, not bundled into this pass. `sensitivity`
   remains unread by anything, unlike `project`/`memory_scopes` after this fix.
 
+### F-034 — Added: opt-in `WorkspaceLease` enforcement in `ExecutionBroker`
+
+- **Severity:** `minor` (an additive, opt-in gate — no existing caller's behavior changes)
+  · **Status:** `fixed`
+- **Motivating problem:** F-031 built `WorkspaceLeaseStore` as a real, tested primitive
+  but explicitly did not wire it into `ExecutionBroker`'s write path, flagging that as
+  "a compatibility decision that deserves its own review rather than riding in on this
+  domain's first pass" — a lease nothing ever checks is inert, the same "capability slot
+  with nothing reading it" pattern this session has closed elsewhere (F-008, F-030,
+  F-033).
+- **Fix applied:** `ExecutionBroker.run_approved()` gained two optional keyword
+  parameters, `subject_id` and `workspace_lease_id`. Neither existing caller
+  (`NativeAgentLoop`, every existing test) passes them, so omitting both reproduces
+  exactly the pre-existing behavior — this was verified, not assumed: the full suite
+  passed unchanged immediately after wiring, before any new test was added. When a caller
+  *does* supply `workspace_lease_id`, four checks run before the existing
+  `PolicyEngine`/backend-selection logic: the lease must exist and be held by exactly
+  `subject_id` (not just "some active lease on this root" — this closes the same kind of
+  gap F-031's `CapabilityGrant.delegation_id` tagging closed for grants); the lease's
+  `root_path` must actually cover the target `cwd` (a lease for `/a` cannot authorize
+  execution in `/b`, checked via path containment rather than string equality so a
+  subdirectory of a leased root is still covered); a `mutates_state=True` call is refused
+  through a `writable=False` lease. `WorkspaceLeaseStore` gained a `get(lease_id)` lookup
+  (it previously had no way to fetch one record's `root_path`/`writable` for exactly this
+  check). `kernel/app.py` now constructs `WorkspaceLeaseStore` before `ExecutionBroker`
+  (reordered — it was previously built after) and passes it in.
+- **Verification:** 7 new tests, each isolating one gate: no `subject_id` supplied with a
+  `workspace_lease_id` (rejected before any lease lookup); an unknown lease id; a lease
+  held by a different subject; a lease for a different path; a write attempt through a
+  read-only lease; a `WorkspaceLeaseStore` not configured on the broker at all (a
+  misconfiguration, raises `RuntimeError`, not silently ignored); and — the case that
+  actually proves the checks aren't just rejecting everything — a lease that genuinely
+  matches subject, path and write mode passes every gate and reaches backend selection.
+  **Caught a real test-environment hang while writing that last test:** letting real
+  execution reach `OpenShellBackend.available()`/`DockerBackend.available()` shells out to
+  `wsl` with a 5-8s timeout each; invoked from inside this already-WSL-hosted test run,
+  that nested `wsl.exe` call did not return in any reasonable time (confirmed no prior
+  test in this suite had ever exercised that code path before). Not a product bug —
+  a real deployment's kernel process isn't itself running inside a second `wsl.exe`
+  wrapper — but the test needed both backends' `available()` stubbed to return `False`
+  directly rather than exercising the real subprocess probe, since this test is about the
+  lease gate, not backend discovery. Full suite **91 passed**,
+  `ruff check src/ tests/ scripts/` clean.
+- **Honest limits:** still opt-in. Nothing calls `run_approved(..., subject_id=...,
+  workspace_lease_id=...)` automatically from any real code path yet — the same
+  `AgentProfile`/`Run` identity-propagation gap F-031 and F-033 both already named. Making
+  lease enforcement the *default* for every execution call remains a separate, larger
+  decision this fix deliberately did not make.
+
 ---
 
 ## Priority order
@@ -1562,15 +1611,20 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
     caller passes it — proven by tests asserting on filtered output, not just parameter
     acceptance. What remains open is propagation: no code path yet knows which
     `AgentProfile` a given call is acting for, so nothing calls it automatically yet.
+12. ~~**F-034**~~ — **fixed as a mechanism, same shape as F-033.** `ExecutionBroker
+    .run_approved()` now genuinely enforces `WorkspaceLease` (subject match, path
+    coverage, write mode) when a caller opts in via `subject_id`/`workspace_lease_id` —
+    purely additive, verified by the full suite passing unchanged before any new test
+    existed. Same propagation gap remains: nothing calls it automatically yet.
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
 **F-013** (retrieval stack right-sizing, blocked on the same licence review); **F-022**
 (explicitly the user's values decision, not mine — already resolved for personal use via
 the local overlay, F-025). Every cleanup-tier item (F-006 through F-024) is now `fixed`.
-Tier 5's safety-critical core (F-031), mailbox/presence (F-032) and memory scope
-filtering (F-033) are built; remaining Tier 5 pieces (workflow DAGs, skill evaluation,
-`WorkspaceLease` enforcement in `ExecutionBroker`, and `AgentProfile` identity
-propagation into `Run`/memory-scope calls) and all of Tier 6 (harness tournament, desktop
-product, remote providers) remain unstarted — genuine new subsystem builds, not bounded defect
-fixes.
+Tier 5's safety-critical core (F-031), mailbox/presence (F-032), memory scope filtering
+(F-033) and opt-in `WorkspaceLease` enforcement (F-034) are all built; one propagation gap
+now blocks three of them from firing automatically (no code path knows which
+`AgentProfile`/`Run` a given call is acting for). Remaining Tier 5 pieces (workflow DAGs,
+skill evaluation) and all of Tier 6 (harness tournament, desktop product, remote
+providers) remain unstarted — genuine new subsystem builds, not bounded defect fixes.

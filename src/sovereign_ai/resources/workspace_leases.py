@@ -80,6 +80,14 @@ class WorkspaceLeaseStore:
             expires_at=row["expires_at"],
         )
 
+    def get(self, lease_id: str) -> WorkspaceLeaseRecord | None:
+        self.reap_stale()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM workspace_leases WHERE id=?", (lease_id,)
+            ).fetchone()
+        return self._record(row) if row else None
+
     def active(self) -> list[WorkspaceLeaseRecord]:
         self.reap_stale()
         with self._connect() as connection:

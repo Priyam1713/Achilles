@@ -108,7 +108,8 @@ class SovereignKernel:
         specialist_supervisor = SpecialistSupervisor(config.root.parent, state)
         specialists = SpecialistBroker(registry, scheduler, gpu, residency, specialist_supervisor)
         workspaces = WorkspaceRegistry(state / "workspaces.json")
-        execution = ExecutionBroker(policy, workspaces)
+        workspace_leases = WorkspaceLeaseStore(state / "workspace_leases.db")
+        execution = ExecutionBroker(policy, workspaces, workspace_leases)
         memory = MemoryStore(state / "memory.db")
         vector_store = LocalVectorStore(state / "memory-vectors.db")
         memory_indexer = MemoryIndexer(specialists, vector_store)
@@ -131,7 +132,6 @@ class SovereignKernel:
         delegations = DelegationStore(state / "delegations.db")
         capability_grants = CapabilityGrantStore(state / "capability_grants.db")
         approvals = ApprovalRequestStore(state / "approvals.db")
-        workspace_leases = WorkspaceLeaseStore(state / "workspace_leases.db")
         roster = RosterService(agent_profiles, delegations, capability_grants, approvals, jobs, policy)
         presence = PresenceService(capability_grants, workspace_leases, delegations, jobs)
         return cls(

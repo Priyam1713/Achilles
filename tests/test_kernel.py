@@ -1853,3 +1853,134 @@ def test_context_builder_propagates_scope_to_both_lexical_and_vector_search(tmp_
     items = asyncio.run(builder.retrieve_text("project detail", allowed_projects=["alpha"]))
     assert [item.content for item in items] == ["alpha project detail"]
     assert fake_vector.calls == [("project detail", 24, ["alpha"])]
+
+
+# --- Tier 5 continued: opt-in WorkspaceLease enforcement in ExecutionBroker ------------
+
+
+def test_execution_broker_lease_id_without_subject_id_is_rejected(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+
+    async def drive():
+        return await k.execution.run_approved(
+            ["true"], str(workspace), workspace_lease_id="fake-lease-id"
+        )
+
+    with pytest.raises(PermissionError, match="requires a subject_id"):
+        asyncio.run(drive())
+
+
+def test_execution_broker_rejects_unknown_lease(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+
+    async def drive():
+        return await k.execution.run_approved(
+            ["true"], str(workspace), subject_id="run-1", workspace_lease_id="does-not-exist"
+        )
+
+    with pytest.raises(PermissionError, match="not active for subject"):
+        asyncio.run(drive())
+
+
+def test_execution_broker_rejects_lease_held_by_a_different_subject(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    lease = k.workspace_leases.try_acquire(str(workspace), "run-1", writable=True, ttl_seconds=60)
+
+    async def drive():
+        return await k.execution.run_approved(
+            ["true"], str(workspace), subject_id="run-2", workspace_lease_id=lease.id
+        )
+
+    with pytest.raises(PermissionError, match="not active for subject"):
+        asyncio.run(drive())
+
+
+def test_execution_broker_rejects_lease_for_a_different_path(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    leased_dir = tmp_path / "leased"
+    other_dir = tmp_path / "other"
+    leased_dir.mkdir()
+    other_dir.mkdir()
+    k.workspaces.add(leased_dir, writable=True)
+    k.workspaces.add(other_dir, writable=True)
+    lease = k.workspace_leases.try_acquire(str(leased_dir), "run-1", writable=True, ttl_seconds=60)
+
+    async def drive():
+        return await k.execution.run_approved(
+            ["true"], str(other_dir), subject_id="run-1", workspace_lease_id=lease.id
+        )
+
+    with pytest.raises(PermissionError, match="covers"):
+        asyncio.run(drive())
+
+
+def test_execution_broker_rejects_write_through_a_readonly_lease(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    lease = k.workspace_leases.try_acquire(str(workspace), "run-1", writable=False, ttl_seconds=60)
+
+    async def drive():
+        return await k.execution.run_approved(
+            ["true"], str(workspace), subject_id="run-1", workspace_lease_id=lease.id,
+            mutates_state=True,
+        )
+
+    with pytest.raises(PermissionError, match="read-only"):
+        asyncio.run(drive())
+
+
+def test_execution_broker_accepts_a_valid_matching_lease(tmp_path, monkeypatch):
+    """A lease that genuinely matches subject, path and write mode must pass every lease
+    check and reach backend selection -- proof the new checks did not silently reject a
+    legitimate lease, not just that they reject illegitimate ones. `available()` is
+    stubbed to return False immediately: the real implementations shell out to `wsl` to
+    probe OpenShell/Docker, which is not meaningful (and, nested inside this WSL-hosted
+    test run, not fast) to exercise here -- this test is about the lease gate, not about
+    backend discovery."""
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    lease = k.workspace_leases.try_acquire(str(workspace), "run-1", writable=True, ttl_seconds=60)
+    monkeypatch.setattr(k.execution.openshell, "available", lambda: False)
+    monkeypatch.setattr(k.execution.docker, "available", lambda: False)
+
+    async def drive():
+        return await k.execution.run_approved(
+            ["true"], str(workspace), subject_id="run-1", workspace_lease_id=lease.id,
+            mutates_state=True, approved=True,
+        )
+
+    with pytest.raises(RuntimeError, match="No hardened execution backend available"):
+        asyncio.run(drive())
+
+
+def test_execution_broker_raises_if_no_lease_store_configured(tmp_path):
+    from sovereign_ai.execution.broker import ExecutionBroker
+    from sovereign_ai.execution.workspaces import WorkspaceRegistry
+    from sovereign_ai.kernel.policy import PolicyEngine
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = WorkspaceRegistry(tmp_path / "workspaces.json")
+    registry.add(workspace, writable=True)
+    broker = ExecutionBroker(PolicyEngine(_FakeConfig()), registry)
+
+    async def drive():
+        return await broker.run_approved(
+            ["true"], str(workspace), subject_id="run-1", workspace_lease_id="anything"
+        )
+
+    with pytest.raises(RuntimeError, match="no WorkspaceLeaseStore configured"):
+        asyncio.run(drive())
