@@ -148,8 +148,8 @@ Assert-Native "kernel preflight"
 Assert-Native "kernel tests"
 $strict = if ($InstallModels) { "--strict" } else { "" }
 $doctorCommand = @'
-cd '__ROOT__' && source scripts/runtime_env.sh && "\$SOAI_ENV_DIR/kernel/bin/python" scripts/doctor.py __STRICT__
-'@.Replace('__ROOT__', $linuxPath).Replace('__STRICT__', $strict)
+cd '__ROOT__' && source scripts/runtime_env.sh && "\$SOAI_ENV_DIR/kernel/bin/python" scripts/doctor.py --profile '__PROFILE__' __STRICT__
+'@.Replace('__ROOT__', $linuxPath).Replace('__PROFILE__', $Profile).Replace('__STRICT__', $strict)
 Invoke-SoaiBash $doctorCommand
 Assert-Native "installation doctor"
 Write-Host "Bootstrap complete. Run .\Run.ps1 -Distro $Distro to start the local stack."

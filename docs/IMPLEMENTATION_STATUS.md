@@ -35,7 +35,10 @@ with it.
 - WSL-native model/runtime/cache layout with a native Windows control plane
 - core/workstation/full installation profiles and profile-aware dependency installation
 - durable background job journal, cancellation, status API and restart interruption detection;
-  bounded dispatch plus automatic retry/resume are pending
+  bounded dispatch with a durable per-attempt `Run` journal is implemented (FIXES.md F-010).
+  Retrying an interrupted or failed job is a real, durable operation (a new `Run` attempt,
+  never mutating the old one) but is not automatic — a caller (human or API) still has to
+  resubmit; nothing resumes a job on its own after a restart
 - pre-download upstream source/revision/size audit for every installation profile
 - official-source release radar with explicit installed/developer-preview/announced lifecycles
 - native collaboration rooms, logical identities, membership, threads, reactions and canvases
@@ -44,11 +47,15 @@ with it.
 The current control UI is a browser-served single-page bootstrap/control surface, not the
 planned Tauri desktop product.
 
-The final pre-build audit also found that the folder has no Git baseline, mutation endpoints
-have no local session authentication, SQLite stores have no general migration runner, job
-submission creates unbounded in-process tasks, and startup accepts any process listening on a
-configured port. The Git baseline now exists. The remaining items are tracked as F-004, F-010
-and the migration gate in [FIXES.md](FIXES.md).
+The final pre-build audit also found that the folder had no Git baseline, mutation endpoints
+had no local session authentication, SQLite stores had no general migration runner, job
+submission created unbounded in-process tasks, and startup accepted any process listening on a
+configured port. All five are now fixed: the Git baseline exists; session-token plus
+Host/Origin authentication covers every mutation endpoint (F-004); a real
+`MigrationRunner` plus online backup/restore exists (F-026); job submission goes through a
+bounded `JobDispatcher` with a durable per-attempt `Run` journal (F-010); and port ownership
+is verified across both the Windows and WSL2 namespaces (F-018/F-019). See
+[FIXES.md](FIXES.md) for evidence and verification of each.
 
 The audit's port-collision finding was **real and has been fixed**. Another local model
 router (a uvicorn gateway from a separate project) does listen on `127.0.0.1:8080`. Commit
@@ -75,6 +82,16 @@ These cannot be truthfully pre-certified from a different machine:
 
 A failed hardware-bound step is a failed install; it is not silently promoted to `working`.
 
+**This list describes what a fresh install must get through, not this machine's current
+state** — that distinction is exactly what went stale here once (FIXES.md F-020: this file
+kept describing model download, the CUDA build and specialist environments as work still
+to be performed on a workstation where all three were long since done). For the real,
+mechanically-derived state of *this* install — which runtime commits are checked out versus
+locked, which specialist worker environments exist, which manifest models are on disk and
+GGUF-converted, and whether OpenShell reports healthy — run `python3 scripts/doctor.py`
+after `source scripts/runtime_env.sh`. It reads only lock files and the filesystem; nothing
+in its output is hand-maintained prose.
+
 ## Interfaces intentionally present but not falsely marked complete
 
 The kernel has capability boundaries for specialist workers, media workers, agent loops and computer-control providers. Not every third-party model has a production worker service wired to the kernel yet. In particular, installing a checkpoint/environment is not the same as implementing and validating its model-specific request/response adapter.
@@ -84,22 +101,37 @@ on-demand launch, health checks, unload, profile-aware installation and supporte
 prewarming. Remaining work after the first physical build is capability-specific integration:
 
 - concrete adapters/smoke tests for specialist families still marked unsupported by the shared worker
-- end-to-end embedding → rerank → context path using the downloaded retrieval models
 - live Playwright/UIA/UI-TARS computer-control providers behind the existing hierarchy
-- agent-loop adapters (DeepSeek Harness or alternatives) behind the kernel contract
 - capability-specific quality benchmark suites and automatic promotion/demotion reports
+  (a real quality-eval harness exists — `scripts/evaluate_brain_quality.py` — but promotion
+  itself stays a human decision by design, matching D-001)
 - persistent recurring schedules/watch definitions (ordinary background job controls are implemented)
 
-The newly adopted persistent-agency domain is also architectural, not yet implemented.
-Current collaboration `IdentityRecord` objects are lightweight room addresses, not complete
-agent profiles, and a durable job currently contains one execution lifecycle rather than
-separate attempts. Pending kernel objects include:
+Two items formerly listed here are done:
+- the embedding → rerank → context path is wired end to end
+  (`memory/retrieval_adapter.py`'s `SpecialistVectorRetriever`/`MemoryIndexer`, FIXES.md
+  F-030), using the real downloaded retrieval models, not a stub
+- a working reference `AgentLoop` exists (`agents/native_loop.py`, FIXES.md F-027) — a
+  native JSON tool-calling loop built instead of a DeepSeek Harness integration, since that
+  harness requires a Rust/Cargo toolchain this workstation doesn't have. DeepSeek Harness
+  itself (or another external harness) remains unintegrated if one is wanted later; the
+  kernel-side `AgentLoop` contract it would plug into already exists and is exercised by
+  the native implementation.
+
+Most of the persistent-agency domain is still architectural, not yet implemented. Current
+collaboration `IdentityRecord` objects remain lightweight room addresses, not complete agent
+profiles. Two of the objects once listed as pending here are now built: a `Run` record now
+exists beneath every `Job` (`kernel/runs.py`, FIXES.md F-010) as a true durable attempt
+log — the request, result, error and timing of every attempt, retrying without rewriting
+history — and the GPU lease is a durable, cross-process `GPULeaseStore` with TTL-based
+staleness recovery (`resources/gpu_leases.py`, FIXES.md F-011), not process-local. Still
+pending:
 
 - `AgentProfile` plus profile-linked collaboration identities and scoped memberships
 - addressed mailbox/presence projections over the event journal
-- `Run` records beneath `Job`, including exact loop/model/skill/prompt and verification data
 - structured `Delegation`, `CapabilityGrant` and `ApprovalRequest` records
-- durable expiring workspace/resource leases; the current GPU lease is process-local
+- durable expiring *workspace* leases specifically (the GPU lease above is done; workspace
+  leases are a separate, still-unbuilt resource type)
 - versioned workflow DAGs and recurring triggers that create ordinary jobs
 - scoped memory access enforcement and the skill-candidate evaluation/promotion pipeline
 

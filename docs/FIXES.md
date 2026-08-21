@@ -782,7 +782,7 @@ not fabrication.
 
 ### F-020 — Documented install state is well behind actual install state
 
-- **Severity:** `minor` · **Status:** `open`
+- **Severity:** `minor` · **Status:** `fixed`
 - **Evidence:** `docs/IMPLEMENTATION_STATUS.md` lists model download, llama.cpp CUDA build and
   specialist environments as hardware-bound steps still to be performed. On this workstation
   they are substantially **done**: `$SOAI_MODEL_DIR` holds **103 GB** across 13 core models
@@ -794,10 +794,62 @@ not fabrication.
 - **Impact:** The gap cuts both ways. It understates progress — the deep-brain benchmark needed
   no download and no build — and it means `worker-install-failures.txt` and
   `openshell-health.txt` hold real results nobody has read.
-- **Fix:** Have `scripts/doctor.py` derive install state from the lock files and filesystem and
-  render it, so the status document stops being a hand-maintained claim about the machine.
-  Still missing: `qwen35-9b` exists only as an HF snapshot with no `gguf/` directory, so the
-  fast brain needs `prepare_llama_models.sh` before it can be measured.
+- **Fix applied:** `scripts/doctor.py` already existed (from the earliest pre-build-audit
+  commits) and did a real, different job — hard-coded GGUF-file existence checks for the
+  two Qwen brains, a live TCP reachability probe of four services, an `HF_TOKEN`/`nvidia-smi`
+  environment check, and a `--strict` flag that `scripts/bootstrap.ps1` depends on
+  (`Assert-Native "installation doctor"` fails the whole one-shot install if it exits
+  non-zero). **First pass at this fix wrote a new file without reading the old one first
+  and silently replaced all of that** — caught before committing, while staging the diff,
+  by `git status` showing `modified` instead of the expected `new file`. Rebuilt as a
+  genuine merge instead: kept every check the original had (now via
+  `verify_host.declared_ports()` for the TCP list rather than a second hard-coded port
+  set — the original's `"search": 8888` had already drifted; `declared_ports()` resolved
+  it correctly as `8888 container:searxng`, read from config the same way F-001's port fix
+  requires) and added what this finding asked for — `runtime-lock.json` cross-checked
+  against a live `git rev-parse HEAD` (catches lock/working-tree drift, not just presence),
+  `worker-lock.json` cross-checked against real venv directories, `model-lock.json`
+  cross-checked against `configs/models.yaml` (plus the gitignored local overlay) and the
+  real model directory contents, a `gguf_ready` flag for `llama_cpp`-routed models (the
+  exact `qwen35-9b` gap this finding's evidence named), the literal content of
+  `openshell-health.txt`, and a `--json` mode. Also added a `--profile` flag
+  (`core`/`workstation`/`full`, reusing `verify_sources.profile_ids()`) after live-testing
+  caught a second real bug: without it, `--strict` counted every out-of-profile manifest
+  model as a missing-install issue, which would have failed `Assert-Native` on every
+  legitimate `core`-profile bootstrap (the project's own default since F-014) for models
+  that profile never installs. `bootstrap.ps1` was updated to pass `--profile '$Profile'`
+  through to the doctor call, matching the pattern every other script call in that file
+  already follows. Also corrected the specific claims in `docs/IMPLEMENTATION_STATUS.md`
+  that this session's own fixes had made stale: "SQLite stores have no general migration
+  runner" and "job submission creates unbounded in-process tasks" (both fixed by
+  F-026/F-010), "bounded dispatch... pending" (done; automatic retry/resume specifically
+  remains not-automatic, and the doc now says so precisely rather than lumping it in with
+  what's fixed), "end-to-end embedding → rerank → context path" listed as remaining work
+  (done, F-030), "agent-loop adapters... behind the kernel contract" (a native one now
+  exists, F-027), and two persistent-agency items that were listed as still pending but are
+  in fact built: `Run` records beneath `Job` (F-010) and a durable cross-process GPU lease
+  (F-011) — the doc claimed the GPU lease was still process-local, which stopped being true
+  when F-011 landed. Added a pointer from `IMPLEMENTATION_STATUS.md`'s hardware-bound-steps
+  section to `scripts/doctor.py` for real install state, with an explicit note that the
+  numbered list above it describes what a fresh install must get through, not this
+  machine's current state — the exact ambiguity that let this finding's stale claims
+  survive.
+- **Verification:** ran the merged `scripts/doctor.py` live against this workstation's real
+  install, across all three profiles (`core`/`workstation`/`full`, none crashed). Under
+  `--profile core` (the default): all 4 runtimes report `locked_commit == actual_commit`
+  (no drift); all 9 specialist worker venvs present; core-profile models (`qwen38-27b`,
+  `qwen35-9b`, embeddings, reranker, ASR/Whisper, VoxCPM2, RF-DETR, Depth Anything,
+  Chronos-2) report `ready`, including `qwen35-9b`'s `gguf_ready: true` — the exact gap
+  this finding's evidence described has since been closed by this session's own
+  F-023/F-024 work, and the tool correctly reports that rather than a stale claim either
+  way. Out-of-profile manifest models correctly report `not on disk (out of profile)` —
+  listed, not flagged as an issue. `--strict` under `--profile core` now correctly exits 1
+  for exactly one real reason (`openshell_health: unhealthy`, live-confirmed as a genuine
+  finding, not a bug: the recorded value dates from original install and is exactly the
+  kind of "nobody has read it" signal this finding's own Impact note names) instead of the
+  18 false positives the pre-`--profile` version produced. `--json` output validated as
+  parseable JSON under all three profiles. Full suite **54 passed**,
+  `ruff check src/ tests/ scripts/` clean.
 
 ### F-021 — The WSL runtime installer builds a conversion environment that cannot convert
 
@@ -1199,11 +1251,13 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
 2. ~~**F-005 + F-012**~~ — **both measured.** F-005: dense 27B 6.36 tok/s (viability gate
    failed), 9B fast brain 49.57 tok/s (clears it, no licence gate). F-012: Nemotron MoE
    `@ncmoe32` 52.79 tok/s at the *same* VRAM footprint as the dense 27B — 8.3x faster,
-   larger model, still licence-blocked. **Remaining, in order:** (a) NVIDIA Open Model
-   License Article 8 review — a values/legal decision, not a technical one; (b) a real
-   quality evaluation harness (throughput alone proves nothing about coding/planning
-   quality); (c) a mixed-prompt-length benchmark to pick a principled `-ncmoe` default,
-   since prefill and decode trade off sharply within the Nemotron family itself.
+   larger model, still licence-blocked. Item (b), a real quality evaluation harness, is
+   now also done (**F-028**: `scripts/evaluate_brain_quality.py`, which on its first real
+   run caught a genuine content-extraction bug rather than just producing a number).
+   **Remaining, in order:** (a) NVIDIA Open Model License Article 8 review — a
+   values/legal decision, not a technical one; (b) a mixed-prompt-length benchmark to
+   pick a principled `-ncmoe` default, since prefill and decode trade off sharply within
+   the Nemotron family itself.
 3. ~~**F-002, F-003, F-004**~~ — **fixed and verified** (session token, Host/Origin
    middleware, non-upserting identity creation, authorized membership). New HTTP-level
    tests cover all three. Prerequisite work for `D-010` is now in place.
@@ -1225,3 +1279,21 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
    explicit opt-in A/B harness for the two capabilities that are genuinely contested,
    per F-007's live recount), not a bounded bug fix like its neighbours — real but
    larger surgery on code every routing decision runs through.
+8. ~~**F-020**~~ — **fixed.** `scripts/doctor.py` derives install state from lock files and
+   the filesystem instead of hand-maintained prose, and `docs/IMPLEMENTATION_STATUS.md`'s
+   own stale claims (migration runner, bounded dispatch, embedding->rerank->context,
+   agent-loop adapter, `Run` records, GPU lease durability — several made stale by this
+   same session's other fixes) were corrected while fixing the underlying process that let
+   them go stale in the first place.
+
+**Left open, each requiring a decision or resource this session cannot supply alone:**
+**F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
+**F-006** (scoped above); **F-013** (retrieval stack right-sizing, blocked on the same
+licence review); **F-022** (explicitly the user's values decision, not mine — already
+resolved for personal use via the local overlay, F-025). Tier 5 (persistent-agency domain
+objects: `AgentProfile`, `Delegation`, `CapabilityGrant`, `ApprovalRequest`, durable
+workspace leases, workflow DAGs) and Tier 6 (harness tournament, desktop product, remote
+providers) remain unstarted — both are new subsystem builds, not bounded defect fixes, and
+Tier 5 in particular is safety/authority-relevant architecture (what an agent may delegate
+to another agent without a human present) that this project's own values warrant a design
+check-in on before code gets written, not a unilateral build.
