@@ -605,7 +605,7 @@ not fabrication.
 
 ### F-023 — `llama-bench`'s reported `n_gpu_layers` does not reflect `-fitt`/`-ncmoe` resolution
 
-- **Severity:** `minor` · **Status:** `open`
+- **Severity:** `minor` · **Status:** `fixed`
 - **Evidence:** Every row in every `benchmark_brains.py` result — dense Qwen3.8-27B,
   Qwen3.5-9B, and all four Nemotron `-ncmoe` sweep points — reports `n_gpu_layers: -1` in
   its JSON output, identical to the CLI default, regardless of what `--fit-target` or
@@ -617,10 +617,29 @@ not fabrication.
   uninformative for any `-fitt`/`-ncmoe` run. It does not affect the timed throughput
   numbers, which come from real measured token generation, only the diagnostic display a
   reader might reasonably expect to explain *why* a number came out the way it did.
-- **Fix:** Either shell out to `llama-fit-params` alongside `llama-bench` to get the real
-  resolved layer count, or stop printing the misleading field and note in the report that
-  layer placement for fit/MoE-offload runs must be read from `-ncmoe`/`nvidia-smi` peak VRAM
-  instead.
+- **Fix applied:** Took the first option named above. Added `resolve_fit()` in
+  `scripts/benchmark_brains.py`, which shells out to `llama-fit-params` (the sibling binary
+  next to `llama-bench`) with the same `-fitt`/`-fitc`/`-ncmoe` arguments the real run used,
+  and captures its resolved-arguments stdout line. Discovered along the way that a single
+  `n_gpu_layers` number would have been misleading even from the *correct* tool for `-ncmoe`
+  runs: MoE offload placement isn't a layer count at all, it resolves to an `-ot` tensor
+  override regex pinning specific expert-weight tensors to CPU (`-ngl -1 -ot
+  "blk\.0\.ffn_...=CPU,blk\.1\...."`) — reporting a layer count for that case would just be
+  a different flavor of the same lie this finding names. `resolve_fit()` therefore reports
+  the whole resolved argument string as-is rather than trying to force it back into a
+  single int, stored as `resolved_fit_args` in each result and printed as the new `fit:`
+  field in place of the old, always-misleading `ngl` field. Runs in a few seconds (memory
+  estimation only, no model load or generation) and fails soft (`None`, printed as
+  "unavailable") if the binary is missing, so a benchmark run is never blocked by this
+  diagnostic being unavailable.
+- **Verification:** live end-to-end run, `qwen35-9b-q6k`: printed
+  `fit: -c 83456 -ngl -1` (all layers fit after the tool's own context reduction — the same
+  conclusion the old field's `-1` implied, but now because a real resolution decided it,
+  not because it's the untouched CLI default) and the same string was confirmed present in
+  the JSON report's `resolved_fit_args` field. Separately exercised `-ncmoe` resolution
+  directly against a Nemotron checkpoint: produced the `-ot` tensor-override string
+  described above, confirming the non-dense case is handled rather than assumed. Full suite
+  **54 passed**, `ruff check src/ tests/ scripts/` clean.
 
 ### F-013 — The retrieval stack costs ~59 GB to do what ~5 GB now does
 
@@ -1190,4 +1209,4 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
    reachable by lexical or semantic search. Still an exact O(n) scan by design, not ANN —
    documented as the right tradeoff at this project's target scale.
 7. **F-006, F-007 (fixed), F-009 (fixed), F-015 (fixed), F-016 (fixed), F-021 (fixed),
-   F-023, F-024** — cleanup, each independently shippable.
+   F-023 (fixed), F-024** — cleanup, each independently shippable.

@@ -136,6 +136,41 @@ def build_argv(
     return argv
 
 
+def resolve_fit(
+    fit_binary: Path, model: Path, defaults: dict[str, Any], variant: dict[str, Any]
+) -> str | None:
+    """What `-fitt`/`-ncmoe` actually resolved to, via the dedicated llama-fit-params tool.
+
+    FIXES.md F-023: llama-bench's own JSON output always reports `n_gpu_layers: -1` for
+    fit/MoE-offload runs -- identical to the CLI default, regardless of what was actually
+    resolved -- so it cannot be trusted as a diagnostic. llama-fit-params estimates memory
+    and prints the real resolved arguments (`-ngl N`, or for `-ncmoe` runs an `-ot` tensor
+    override string, since MoE offload placement isn't a single layer count) without
+    loading the full model or running any generation, in a few seconds.
+    """
+    if not fit_binary.exists():
+        return None
+    fit_target = defaults.get("fit_target_mb") or reserve_vram_mb()
+    argv = [
+        str(fit_binary),
+        "-m",
+        str(model),
+        "-fitt",
+        str(fit_target),
+        "-fitc",
+        str(defaults["n_ctx_fit"]),
+    ]
+    if variant.get("n_cpu_moe") is not None:
+        argv += ["-ncmoe", str(variant["n_cpu_moe"])]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
+    except subprocess.TimeoutExpired:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
 def run_one(
     binary: Path, model: Path, defaults: dict[str, Any], variant: dict[str, Any], timeout: int
 ) -> dict[str, Any]:
@@ -197,15 +232,20 @@ def run_one(
         measurements[key] = {
             "tokens_per_second": round(float(row.get("avg_ts") or 0), 2),
             "stddev_ts": round(float(row.get("stddev_ts") or 0), 2),
+            # llama-bench's own report of this is unreliable for -fitt/-ncmoe runs
+            # (FIXES.md F-023) -- kept here only as the raw upstream value, not as the
+            # diagnostic. See "resolved_fit_args" below for what actually happened.
             "n_gpu_layers": row.get("n_gpu_layers"),
             "n_cpu_moe": row.get("n_cpu_moe"),
         }
+    resolved_fit_args = resolve_fit(binary.with_name("llama-fit-params"), model, defaults, variant)
     return {
         "status": "ok",
         "argv": argv,
         "elapsed_s": elapsed,
         "vram_peak_mb": peak,
         "measurements": measurements,
+        "resolved_fit_args": resolved_fit_args,
     }
 
 
@@ -316,11 +356,15 @@ def main() -> int:
             if outcome["status"] == "ok":
                 tg = outcome["measurements"].get(f"tg{defaults['n_gen']}", {})
                 pp = outcome["measurements"].get(f"pp{defaults['n_prompt']}", {})
+                # FIXES.md F-023: llama-bench's own n_gpu_layers is always -1 (the CLI
+                # default) for -fitt/-ncmoe runs, so it does not belong in this line.
+                # resolved_fit_args comes from the dedicated llama-fit-params tool instead.
+                fit_note = outcome.get("resolved_fit_args") or "unavailable (llama-fit-params not found)"
                 print(
                     f"    tg {tg.get('tokens_per_second')} tok/s | "
                     f"pp {pp.get('tokens_per_second')} tok/s | "
                     f"peak VRAM {outcome['vram_peak_mb']} MiB | "
-                    f"ngl {tg.get('n_gpu_layers')}",
+                    f"fit: {fit_note}",
                     flush=True,
                 )
             else:
