@@ -126,7 +126,6 @@ models:
   install_policy: sync
   capabilities:
   - multimodal_embedding
-  - visual_search
   - video_retrieval
   preferred_engines:
   - hf_worker
@@ -149,7 +148,6 @@ models:
   install_policy: sync
   capabilities:
   - multimodal_reranking
-  - visual_search
   preferred_engines:
   - hf_worker
   quality_prior: 0.95

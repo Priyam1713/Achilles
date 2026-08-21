@@ -319,28 +319,52 @@ not fabrication.
 
 - **Severity:** `debt` · **Status:** `open`
 - **Evidence:** Measured live against the built registry:
-  `capability -> #models histogram: {1: 86, 2: 6}`. **86 of 92 capabilities have exactly one
-  candidate.** The six contested: `asr_multilingual` and `speech_transcription` (the same
-  Qwen3-ASR vs Whisper pair twice), `synthesis` and `vision_language` (the same 27B vs 9B pair
-  twice), `music_generation`, `visual_search`. Three genuine contests.
+  `capability -> #models histogram: {1: 84, 2: 5}` (re-measured after F-007 removed the
+  bogus `visual_search` capability tag; was `{1: 86, 2: 6}` before that). **84 of 89
+  capabilities have exactly one candidate.** The five contested: `asr_multilingual` and
+  `speech_transcription` (the same Qwen3-ASR vs Whisper pair twice), `synthesis` and
+  `vision_language` (the same 27B vs 9B pair twice), `music_generation`. Two genuine
+  contests.
 - **Impact:** `ResourceScheduler.route()` — quality priors × latency utility × reliability ×
   resource-fit adjustment × resident bonus × benchmark override, ~130 lines — is permanent
-  maintenance cost serving three decisions. The registry's real value is *dispatch*
+  maintenance cost serving two decisions. The registry's real value is *dispatch*
   (capability → worker → port), which is a dictionary lookup.
 - **Fix:** Keep `RouteDecision` as the audit/provenance record; that part earns its keep. Reduce
   selection to dispatch plus an explicit opt-in A/B harness for the contested few.
 
-### F-007 — `visual_search` scores a pipeline against itself, and one manifest source is wrong
+### F-007 — `visual_search` scores a pipeline against itself, and one manifest source went unverified
 
-- **Severity:** `minor` · **Status:** `open`
-- **Evidence:** `visual_search` resolves to `['qwen3-vl-embedding-8b', 'qwen3-vl-reranker-8b']`.
-  Those are **sequential stages of one retrieval pipeline**, not alternatives; scoring them
-  against each other and picking a winner is semantically wrong. Separately,
-  `configs/models.yaml` gives `rf-detr-keypoint` the source `roboflow/rf-detr`, which is a GitHub
-  org path and returns **401** from the HF API.
-- **Fix:** Model retrieval as an ordered pipeline capability, not a contest. Correct the
-  `rf-detr-keypoint` source, and extend `verify_sources.py` to fail on non-resolving sources
-  regardless of `install_policy`.
+- **Severity:** `minor` · **Status:** `fixed`
+- **Evidence:** `visual_search` resolved to `['qwen3-vl-embedding-8b', 'qwen3-vl-reranker-8b']`.
+  Those are **sequential stages of one retrieval pipeline** (embed, then rerank — the same
+  shape as the already-correct `text_embedding`/`text_reranking` pair `SpecialistVectorRetriever`
+  uses), not alternatives; nothing in `src/` ever requested capability `visual_search` at all —
+  it existed only as manifest metadata, causing `ResourceScheduler.route()` to score two
+  pipeline stages against each other for a capability nothing consumed. Separately,
+  `configs/models.yaml` gives `rf-detr-keypoint` (`source_type: github_package`) the source
+  `roboflow/rf-detr` — verified this **is** a real, active, public GitHub repo
+  (`github.com/roboflow/rf-detr`, not archived); the earlier "401 from the HF API" note was
+  from checking a GitHub-package source against the wrong API, not a bug in the source field
+  itself. The real bug: `verify_sources.py` only ever resolved `source_type == "huggingface"`,
+  so any non-HF source was silently and permanently exempt from verification no matter how
+  broken it was, regardless of maturity.
+- **Fix applied:**
+  - Removed the `visual_search` capability tag from `qwen3-vl-embedding-8b` and
+    `qwen3-vl-reranker-8b` in `configs/models.yaml`. Their real capabilities
+    (`multimodal_embedding`/`video_retrieval` and `multimodal_reranking`) are untouched.
+  - `scripts/verify_sources.py` now also resolves `source_type: github_package` sources via
+    the GitHub API (existence + not-archived check), and no longer exempts
+    `install_policy: package` from verification — only `runtime_only`/`runtime_managed`
+    (genuinely sourceless placeholder entries) remain exempt. `rf-detr-keypoint` itself
+    stays unchecked today because it is `status: candidate`, matching the script's existing,
+    intentional "only verify shipped models" scope — but the moment it is promoted to
+    `final` it will now actually be checked instead of being silently exempt forever.
+- **Verification:** live: `github.com/api/repos/roboflow/rf-detr` confirmed 200/not-archived;
+  a deliberately nonexistent repo correctly raises `HTTPStatusError: 404`. Re-ran
+  `verify_sources.py --profile core` end to end: 12 resolved, 0 failed, 77.71 GB — matches
+  the pre-fix run, confirming the HF path is unaffected. Recomputed the F-006 contest
+  histogram live: `{1: 84, 2: 5}`, `visual_search` no longer appears. Full suite
+  **54 passed**, `ruff check src/ tests/ scripts/` clean.
 
 ### F-008 — The vector store is a placeholder presented as implemented
 
@@ -1139,5 +1163,5 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
    vectors), plus `delete()`/supersession cleanup so a superseded memory stops being
    reachable by lexical or semantic search. Still an exact O(n) scan by design, not ANN —
    documented as the right tradeoff at this project's target scale.
-7. **F-006, F-007, F-009 (fixed), F-015 (fixed), F-016, F-021, F-023, F-024** — cleanup,
-   each independently shippable.
+7. **F-006, F-007 (fixed), F-009 (fixed), F-015 (fixed), F-016, F-021, F-023, F-024** —
+   cleanup, each independently shippable.
