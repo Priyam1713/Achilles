@@ -982,6 +982,81 @@ not fabrication.
   against the live router before writing a fix, and the fix was verified with a second live
   run rather than assumed to have worked.
 
+### F-029 — `sentence-transformers>=5` had no upper bound; 6.0.0 breaks the embedding model's own config
+
+- **Severity:** `major` · **Status:** `fixed`
+- **Evidence:** Building the retrieval worker venv fresh (`configs/workers.yaml`'s
+  unpinned `sentence-transformers>=5`) installed `6.0.0`, the newest release. Loading
+  `octen-embedding-8b-int8` then failed **at construction time**, before any inference:
+  `TypeError: Normalize.__init__() got an unexpected keyword argument
+  'normalize_embeddings'`. Traced to the checkpoint's own
+  `2_Normalize/config.json`, which contains `{"normalize_embeddings": true}` — a key that
+  does not belong in a `Normalize` module's config (that setting belongs on the *call* to
+  `.encode(normalize_embeddings=...)`, not on the module itself). This is a real packaging
+  defect in the upstream checkpoint, not our code. `sentence_transformers<6`'s
+  `Normalize.load()` classmethod tolerated the stray key silently; `6.0.0`'s does not.
+- **Impact:** The retrieval worker could not load its embedding model at all on a fresh
+  install with no explicit version pin — exactly the failure mode `F-021` already found
+  once this session for a different dependency (`llama-convert`'s missing `torch`), and the
+  same root cause: an unpinned or loosely-pinned `>=` constraint that "worked when last
+  tested" silently breaks against whatever the newest release happens to be on install day.
+- **Fix applied:** Reproduced directly against the real checkpoint and env before touching
+  anything (`SentenceTransformer(model_path, device="cuda")` — confirmed the failure is at
+  load, not at `.encode()`). Downgraded to `5.7.0`, confirmed both plain `.encode()` and
+  `.encode(normalize_embeddings=True)` succeed with a correct `(1, 4096)` output shape.
+  `configs/workers.yaml` and `scripts/install_specialists.sh` both pinned to
+  `sentence-transformers>=5,<6`.
+- **Verification:** live re-run of the full embedding round trip through the actual worker
+  process after the pin (see F-030) — real embeddings, no load error, no silent fallback.
+
+### F-030 — Closed: the embedding → rerank → context path was designed but never wired
+
+- **Severity:** `major` (`docs/IMPLEMENTATION_STATUS.md` named this directly as a pending
+  gap) · **Status:** `fixed`
+- **Evidence:** `memory/context.py`'s `ContextBuilder` had a `text_vector: VectorRetriever
+  | None` constructor slot from the start — but `kernel/app.py` built
+  `context = ContextBuilder(memory)` with **nothing** passed into it. Every context
+  assembly was lexical-only (SQLite FTS) regardless of which retrieval models were
+  installed; the two-stage "first-stage index, then reranked before context assembly" flow
+  `docs/ARCHITECTURE.md` describes existed as a paragraph, not as running code. Separately,
+  `MemoryStore.put()` never wrote anything into `LocalVectorStore` — there was no path that
+  would have populated a vector index even if one had been wired to search.
+- **Fix applied:** new `memory/retrieval_adapter.py` — `SpecialistVectorRetriever`
+  (implements `VectorRetriever`: embeds the query via the existing `SpecialistBroker`,
+  first-stage search against `LocalVectorStore`, reranks the candidate set via the
+  existing reranker capability, returns reranked results) and `MemoryIndexer` (embeds
+  content and writes it into `LocalVectorStore` — the missing "populate the index" half).
+  Both reuse the *existing* `SpecialistBroker` for GPU leasing, worker launch and
+  capability routing — no new execution path, just a consumer of what already existed.
+  `kernel/app.py` now constructs a real `LocalVectorStore`, wires
+  `context = ContextBuilder(memory, text_vector=SpecialistVectorRetriever(...))`, and
+  exposes `kernel.memory_indexer` so a caller can index a memory after writing it.
+- **Verification, in two layers:**
+  - **Unit**, no GPU needed: a scripted fake specialist broker proves the two-stage flow is
+    real, not decorative — first-stage vector similarity would rank three stored items
+    `[a, b, c]`; the fake reranker returns order `[c, a, b]`; the retriever's final output
+    is `[c, a, b]`, proving reranking actually overrides first-stage order rather than
+    passing it through. A second test proves an empty vector index short-circuits before
+    ever calling the reranker with zero candidates. A third confirms `MemoryIndexer` writes
+    retrievable vectors. A fourth confirms `kernel.context.text_vector` is the real adapter,
+    wired to the real `specialists`/`vector_store`, not left `None`.
+  - **Live, real models, real GPU**, same session: started the actual `retrieval` worker
+    (`octen-embedding-8b-int8` + `qwen3-reranker-8b`, both real 8B checkpoints), stored
+    three memories, indexed them, then queried with **"does this project ever transmit my
+    data off my computer"** against a memory reading "...never sends prompts to a remote
+    API" — deliberately near-zero keyword overlap. **Lexical FTS search found zero hits.**
+    The full context path correctly ranked the privacy memory first
+    (reranker score -3.06, next candidate -7.34) — genuine semantic retrieval, verified
+    against a lexical-search control that proves keyword luck could not explain the result.
+    No VRAM OOM despite both 8B models loading unquantized in this venv (no `bitsandbytes`
+    installed here yet — a possible future optimisation, not required for correctness).
+  - Full suite: **50 passed**, `ruff check src/ tests/ scripts/` clean.
+- **Honest limits:** only the text embed/rerank path is wired (`octen-embedding-8b-int8` /
+  `qwen3-reranker-8b`); the multimodal `qwen3-vl-embedding-8b`/`qwen3-vl-reranker-8b` pair
+  (`ContextBuilder.multimodal_vector`) is not yet connected. `MemoryIndexer.index()` must be
+  called explicitly after `memory.put()` — nothing calls it automatically yet, so existing
+  memories written before this fix are lexical-only until re-indexed.
+
 ---
 
 ## Priority order
@@ -1008,6 +1083,9 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
    `core` (now 77.7 GB after also moving the unwired `ui-tars-1.5-7b` out). **F-013**
    (retrieval stack right-sizing) remains open — same "turn the install from a coin flip
    into something reproducible" goal, different lever.
-6. **F-008** — real vector index, or an honest README.
+6. **F-008** — real vector index, or an honest README. **More urgent now, not less:** F-030
+   just wired `LocalVectorStore` into a live embedding->rerank->context path — the O(n)
+   full-table-scan-in-Python performance problem F-008 named is no longer a theoretical
+   concern about an unused store, it is the actual retrieval path a running agent uses.
 7. **F-006, F-007, F-009, F-015 (fixed), F-016, F-021, F-023, F-024** — cleanup, each
    independently shippable.

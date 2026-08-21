@@ -1017,3 +1017,106 @@ def test_extract_message_content_falls_back_to_reasoning_content():
 
     no_reasoning_field_at_all = {"choices": [{"message": {"content": "plain answer"}}]}
     assert extract_message_content(no_reasoning_field_at_all) == "plain answer"
+
+
+class _FakeSpecialists:
+    """Scripted specialist broker for SpecialistVectorRetriever/MemoryIndexer tests."""
+
+    def __init__(self, embeddings: dict[str, list[float]], rerank_order: list[int] | None = None):
+        self.embeddings = embeddings
+        self.rerank_order = rerank_order
+        self.embed_calls: list[list[str]] = []
+        self.rerank_calls: list[tuple] = []
+
+    async def invoke(self, request, operation, inputs, options=None, timeout_s=300.0):
+        if operation == "embed":
+            texts = inputs["texts"]
+            self.embed_calls.append(texts)
+            return {"result": [self.embeddings[t] for t in texts]}
+        if operation == "rerank":
+            candidates = inputs["candidates"]
+            self.rerank_calls.append((inputs["query"], candidates))
+            order = self.rerank_order if self.rerank_order is not None else list(range(len(candidates)))
+            return {
+                "result": [
+                    {"index": i, "score": 1.0 - position * 0.1, "candidate": candidates[i]}
+                    for position, i in enumerate(order)
+                ]
+            }
+        raise ValueError(f"unexpected operation: {operation}")
+
+
+def test_specialist_vector_retriever_two_stage_embed_then_rerank(tmp_path):
+    """FIXES.md: closes the embedding -> rerank -> context gap named in
+    docs/IMPLEMENTATION_STATUS.md. Proves reranking actually changes result order rather
+    than merely passing first-stage vector similarity through unchanged."""
+    from sovereign_ai.memory.retrieval_adapter import SpecialistVectorRetriever
+    from sovereign_ai.memory.vector import LocalVectorStore
+
+    store = LocalVectorStore(tmp_path / "vec.db")
+    # First-stage vector similarity would rank these a, b, c (closest to [1,0] first).
+    store.put("a", [1.0, 0.0], content="alpha content", source="test")
+    store.put("b", [0.9, 0.1], content="beta content", source="test")
+    store.put("c", [0.8, 0.2], content="gamma content", source="test")
+
+    fake = _FakeSpecialists(embeddings={"find alpha": [1.0, 0.0]}, rerank_order=[2, 0, 1])
+    retriever = SpecialistVectorRetriever(fake, store, first_stage_multiplier=4)
+
+    async def drive():
+        return await retriever.search("find alpha", limit=3)
+
+    results = asyncio.run(drive())
+    assert fake.embed_calls == [["find alpha"]]
+    assert len(fake.rerank_calls) == 1
+    # The reranker's order [2, 0, 1] must win over vector similarity's [a, b, c] order.
+    assert [r["content"] for r in results] == ["gamma content", "alpha content", "beta content"]
+    assert results[0]["score"] == 1.0
+
+
+def test_specialist_vector_retriever_returns_empty_when_index_is_empty(tmp_path):
+    from sovereign_ai.memory.retrieval_adapter import SpecialistVectorRetriever
+    from sovereign_ai.memory.vector import LocalVectorStore
+
+    store = LocalVectorStore(tmp_path / "vec.db")
+    fake = _FakeSpecialists(embeddings={"anything": [1.0, 0.0]})
+    retriever = SpecialistVectorRetriever(fake, store)
+
+    async def drive():
+        return await retriever.search("anything", limit=5)
+
+    results = asyncio.run(drive())
+    assert results == []
+    # No candidates to rerank -- must not call the reranker with an empty list.
+    assert fake.rerank_calls == []
+
+
+def test_memory_indexer_embeds_and_stores_into_vector_store(tmp_path):
+    from sovereign_ai.memory.retrieval_adapter import MemoryIndexer
+    from sovereign_ai.memory.vector import LocalVectorStore
+
+    store = LocalVectorStore(tmp_path / "vec.db")
+    fake = _FakeSpecialists(embeddings={"remember this": [0.0, 1.0]})
+    indexer = MemoryIndexer(fake, store)
+
+    async def drive():
+        await indexer.index("mem-1", "remember this", source="test", trust="trusted_local")
+
+    asyncio.run(drive())
+    hits = store.search_vector([0.0, 1.0], limit=5)
+    assert len(hits) == 1
+    assert hits[0]["id"] == "mem-1"
+    assert hits[0]["content"] == "remember this"
+    assert hits[0]["source"] == "test"
+
+
+def test_context_builder_uses_wired_vector_retriever_from_kernel(tmp_path, monkeypatch):
+    """The actual defect this closes: ContextBuilder's text_vector slot existed but
+    kernel/app.py never passed anything into it, so context assembly was lexical-only
+    regardless of what retrieval models were installed."""
+    k = kernel(tmp_path, monkeypatch)
+    from sovereign_ai.memory.retrieval_adapter import SpecialistVectorRetriever
+
+    assert isinstance(k.context.text_vector, SpecialistVectorRetriever)
+    assert k.context.text_vector.specialists is k.specialists
+    assert k.context.text_vector.vector_store is k.vector_store
+    assert k.memory_indexer.vector_store is k.vector_store

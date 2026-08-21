@@ -12,7 +12,9 @@ from sovereign_ai.inference.broker import InferenceBroker
 from sovereign_ai.inference.media import MediaBroker
 from sovereign_ai.memory.context import ContextBuilder
 from sovereign_ai.memory.graph import MemoryGraph
+from sovereign_ai.memory.retrieval_adapter import MemoryIndexer, SpecialistVectorRetriever
 from sovereign_ai.memory.store import MemoryStore
+from sovereign_ai.memory.vector import LocalVectorStore
 from sovereign_ai.resources.arbiter import GPUArbiter
 from sovereign_ai.resources.residency import ResidencyCoordinator
 from sovereign_ai.resources.scheduler import ResourceScheduler
@@ -52,6 +54,8 @@ class SovereignKernel:
     execution: ExecutionBroker
     workspaces: WorkspaceRegistry
     memory: MemoryStore
+    vector_store: LocalVectorStore
+    memory_indexer: MemoryIndexer
     context: ContextBuilder
     verification: VerificationEngine
     agent_loops: AgentLoopRegistry
@@ -92,7 +96,10 @@ class SovereignKernel:
         workspaces = WorkspaceRegistry(state / "workspaces.json")
         execution = ExecutionBroker(policy, workspaces)
         memory = MemoryStore(state / "memory.db")
-        context = ContextBuilder(memory)
+        vector_store = LocalVectorStore(state / "memory-vectors.db")
+        memory_indexer = MemoryIndexer(specialists, vector_store)
+        text_vector = SpecialistVectorRetriever(specialists, vector_store)
+        context = ContextBuilder(memory, text_vector=text_vector)
         verification = VerificationEngine()
         agent_loops = AgentLoopRegistry()
         agent_loops.register(
@@ -124,6 +131,8 @@ class SovereignKernel:
             execution,
             workspaces,
             memory,
+            vector_store,
+            memory_indexer,
             context,
             verification,
             agent_loops,

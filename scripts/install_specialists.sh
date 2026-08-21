@@ -77,7 +77,7 @@ PY
   then failures+=("$name:cuda-smoke"); fi
 }
 
-pip_retrieval(){ local e="$1"; uv pip install --python "$e/bin/python" 'sentence-transformers>=5' 'transformers>=4.57' 'accelerate>=1.10' einops pillow qwen-vl-utils 'gliner2[local]' bitsandbytes fastapi uvicorn soundfile; }
+pip_retrieval(){ local e="$1"; uv pip install --python "$e/bin/python" 'sentence-transformers>=5,<6' 'transformers>=4.57' 'accelerate>=1.10' einops pillow qwen-vl-utils 'gliner2[local]' bitsandbytes fastapi uvicorn soundfile; }
 pip_asr(){ local e="$1"; uv pip install --python "$e/bin/python" qwen-asr accelerate soundfile librosa openai-whisper; }
 pip_voxcpm(){ local e="$1" s; s="$(checkout_pinned "$VOXCPM_URL" VoxCPM "$VOXCPM_COMMIT")"; uv pip install --python "$e/bin/python" -e "$s"; }
 pip_moss(){ local e="$1" a d; a="$(checkout_pinned "$MOSS_AUDIO_URL" MOSS-Audio "$MOSS_AUDIO_COMMIT")"; d="$(checkout_pinned "$MOSS_TRANSCRIBE_URL" MOSS-Transcribe-Diarize "$MOSS_TRANSCRIBE_COMMIT")"; uv pip install --python "$e/bin/python" -e "$a"; uv pip install --python "$e/bin/python" -e "$d"; }
