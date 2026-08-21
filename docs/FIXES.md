@@ -317,7 +317,7 @@ not fabrication.
 
 ### F-006 — The router is elaborate machinery with almost nothing to route
 
-- **Severity:** `debt` · **Status:** `open`
+- **Severity:** `debt` · **Status:** `fixed`
 - **Evidence:** Measured live against the built registry:
   `capability -> #models histogram: {1: 84, 2: 5}` (re-measured after F-007 removed the
   bogus `visual_search` capability tag; was `{1: 86, 2: 6}` before that). **84 of 89
@@ -329,8 +329,33 @@ not fabrication.
   resource-fit adjustment × resident bonus × benchmark override, ~130 lines — is permanent
   maintenance cost serving two decisions. The registry's real value is *dispatch*
   (capability → worker → port), which is a dictionary lookup.
-- **Fix:** Keep `RouteDecision` as the audit/provenance record; that part earns its keep. Reduce
-  selection to dispatch plus an explicit opt-in A/B harness for the contested few.
+- **Fix applied:** `route()` now builds the filtered list of eligible `(model, engine)`
+  pairs first (`_eligible()` — the status/license/engine-availability gates, unchanged
+  logic, just factored out). When exactly one pair survives, `_dispatch()` reports it
+  directly: `quality`/`reliability`/`latency_score` are still computed from the real
+  benchmark-or-manifest-prior (the audit/provenance value the fix note said to keep), but
+  the weighted-sum formula, resident-priority bonus and resource-fit score adjustment are
+  skipped entirely, since there is nothing to rank against. `RouteCandidate.reasons` says
+  so explicitly (`"only eligible candidate for this capability"`) so the distinction is
+  visible in the audit record, not just implicit in candidate count. When two or more
+  pairs survive, `_score()` runs the exact same weighted-scoring formula as before,
+  unchanged — the existing `sovereign route` CLI command remains the "opt-in A/B harness"
+  the fix note asked for, now honestly exercising real ranking machinery only when a real
+  choice exists.
+- **Verification — behavior-preservation proven, not assumed:** wrote a script that calls
+  `kernel.scheduler.route()` for every capability (89) × mode (fast/smart/deep) ×
+  license_context (personal/commercial) = 546 combinations, recording `selected_model`,
+  `selected_engine`, `n_candidates` and `warnings`. Ran it against the pre-refactor
+  `scheduler.py` (via `git stash`) and the post-refactor version, then diffed:
+  **0 differences across all 546 route requests.** Every capability dispatches or ranks to
+  the exact same model/engine it did before, with the same candidate counts and warnings —
+  only the *internal* scoring path changed for the uncontested majority, never an
+  observable outcome. Added `test_route_dispatches_without_weighted_scoring_when_uncontested`
+  (confirms `orchestration_fast` takes the fast path: one candidate, the "only eligible
+  candidate" reason, `score == quality`) and
+  `test_route_scores_genuinely_contested_capability` (confirms `asr_multilingual` still
+  goes through real multi-candidate scoring). Full suite **56 passed**,
+  `ruff check src/ tests/ scripts/` clean.
 
 ### F-007 — `visual_search` scores a pipeline against itself, and one manifest source went unverified
 
@@ -1273,12 +1298,11 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
    vectors), plus `delete()`/supersession cleanup so a superseded memory stops being
    reachable by lexical or semantic search. Still an exact O(n) scan by design, not ANN —
    documented as the right tradeoff at this project's target scale.
-7. **F-006** — the one cleanup-tier item left open. `F-007, F-009, F-015, F-016, F-021,
-   F-023, F-024` are all now `fixed`. F-006 is deliberately scoped separately: it is a
-   ~130-line `ResourceScheduler.route()` simplification (reduce to dispatch plus an
-   explicit opt-in A/B harness for the two capabilities that are genuinely contested,
-   per F-007's live recount), not a bounded bug fix like its neighbours — real but
-   larger surgery on code every routing decision runs through.
+7. ~~**F-006**~~ — **fixed.** `ResourceScheduler.route()` now dispatches directly for the
+   84/89 uncontested capabilities and only runs the full weighted-scoring machinery for
+   the 5 genuinely contested ones. Verified behavior-preserving across all 546
+   capability/mode/license combinations (0 differences vs. the pre-refactor scheduler)
+   before this was called done, not assumed from code review alone.
 8. ~~**F-020**~~ — **fixed.** `scripts/doctor.py` derives install state from lock files and
    the filesystem instead of hand-maintained prose, and `docs/IMPLEMENTATION_STATUS.md`'s
    own stale claims (migration runner, bounded dispatch, embedding->rerank->context,
@@ -1288,9 +1312,10 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
-**F-006** (scoped above); **F-013** (retrieval stack right-sizing, blocked on the same
-licence review); **F-022** (explicitly the user's values decision, not mine — already
-resolved for personal use via the local overlay, F-025). Tier 5 (persistent-agency domain
+**F-013** (retrieval stack right-sizing, blocked on the same licence review); **F-022**
+(explicitly the user's values decision, not mine — already resolved for personal use via
+the local overlay, F-025). Every cleanup-tier item (F-006 through F-024) is now `fixed`.
+Tier 5 (persistent-agency domain
 objects: `AgentProfile`, `Delegation`, `CapabilityGrant`, `ApprovalRequest`, durable
 workspace leases, workflow DAGs) and Tier 6 (harness tournament, desktop product, remote
 providers) remain unstarted — both are new subsystem builds, not bounded defect fixes, and

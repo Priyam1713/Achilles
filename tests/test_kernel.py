@@ -56,6 +56,31 @@ def test_route_fast_brain(tmp_path, monkeypatch):
     assert d.selected.model_id == "qwen35-9b"
 
 
+def test_route_dispatches_without_weighted_scoring_when_uncontested(tmp_path, monkeypatch):
+    """FIXES.md F-006: 84 of 89 capabilities have exactly one eligible candidate, so
+    weighing it against itself cannot change the outcome. `orchestration_fast` is one of
+    them -- the single candidate must go through ResourceScheduler._dispatch (score ==
+    quality, no resident/resource-fit weighting applied), not _score."""
+    k = kernel(tmp_path, monkeypatch)
+    d = k.scheduler.route(CapabilityRequest(capability="orchestration_fast", mode=RoutingMode.FAST))
+    assert len(d.candidates) == 1
+    candidate = d.candidates[0]
+    assert "only eligible candidate for this capability" in candidate.reasons
+    assert candidate.score == round(candidate.quality, 6)
+
+
+def test_route_scores_genuinely_contested_capability(tmp_path, monkeypatch):
+    """FIXES.md F-006: the few capabilities with more than one eligible candidate (per the
+    live F-007 recount: asr_multilingual, speech_transcription, synthesis,
+    vision_language, music_generation) must still go through the full weighted-scoring
+    path (_score), not the fast dispatch shortcut."""
+    k = kernel(tmp_path, monkeypatch)
+    d = k.scheduler.route(CapabilityRequest(capability="asr_multilingual", mode=RoutingMode.SMART))
+    assert len(d.candidates) > 1
+    for candidate in d.candidates:
+        assert "only eligible candidate for this capability" not in candidate.reasons
+
+
 def test_untrusted_cannot_authorize_execution(tmp_path, monkeypatch):
     k = kernel(tmp_path, monkeypatch)
     d = k.policy.evaluate(
