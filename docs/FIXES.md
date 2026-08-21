@@ -690,14 +690,29 @@ not fabrication.
 
 ### F-016 — `verified_source` is a self-asserted boolean presented as a check
 
-- **Severity:** `minor` · **Status:** `open`
-- **Evidence:** `CapabilityRegistry.validate()` refuses any non-excluded model without
+- **Severity:** `minor` · **Status:** `fixed`
+- **Evidence:** `CapabilityRegistry.validate()` refused any non-excluded model without
   `verified_source: true`, but the flag is a YAML literal set by whoever wrote the entry.
-- **Impact:** Circular. It reads as provenance enforcement and is actually a self-attestation.
+- **Impact:** Circular. It read as provenance enforcement and was actually a self-attestation.
   The real verification lives in `verify_sources.py`, at install time.
-- **Fix:** Either rename the field to `source_reviewed` so it stops reading as machine-verified,
-  or have `verify_sources.py` write a signed/hashed attestation into `state/` that the registry
-  validates against.
+- **Fix applied:** Took the simpler of the two options named above rather than building a
+  signed-attestation pipeline: renamed the field to `source_reviewed` everywhere (manifest
+  entries in `configs/models.yaml`, `configs/models.local.yaml.example`, the `ModelSpec`
+  pydantic model, `CapabilityRegistry.validate()`'s error messages, `scripts/sync_models.py`,
+  `configs/system.yaml`'s `require_verified_source` -> `require_source_reviewed`, and tests).
+  Added a docstring on `validate()` stating plainly what this field is (a maintainer
+  attestation) and is not (a machine check) — and pointing at `verify_sources.py` (extended
+  for real in F-007) as where the actual machine check lives. A hard rename, no
+  backwards-compatible alias, matching this codebase's stated preference for direct changes
+  over compatibility shims. Building the heavier signed-attestation option remains available
+  later if `verify_sources.py`'s output ever needs to gate the registry directly, but that is
+  a real architectural addition (an operational dependency on `state/source-audit.json`
+  existing at kernel startup), not a cleanup-tier fix.
+- **Verification:** the rename initially broke `test_registry_valid` and 20 other tests —
+  not from the renamed field itself, but because the gitignored personal overlay
+  `configs/models.local.yaml` (F-025's per-operator model file, not in git, so a repo-wide
+  grep does not surface it) still had the old key name. Fixed that file too and re-ran: full
+  suite **54 passed**, `ruff check src/ tests/ scripts/` clean.
 
 ### F-017 — A stray zero-byte file was committed
 
@@ -1163,5 +1178,5 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
    vectors), plus `delete()`/supersession cleanup so a superseded memory stops being
    reachable by lexical or semantic search. Still an exact O(n) scan by design, not ANN —
    documented as the right tradeoff at this project's target scale.
-7. **F-006, F-007 (fixed), F-009 (fixed), F-015 (fixed), F-016, F-021, F-023, F-024** —
-   cleanup, each independently shippable.
+7. **F-006, F-007 (fixed), F-009 (fixed), F-015 (fixed), F-016 (fixed), F-021, F-023,
+   F-024** — cleanup, each independently shippable.

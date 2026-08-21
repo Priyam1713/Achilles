@@ -32,7 +32,7 @@ routing:
       reliability_weight: 0.2
   max_candidates: 8
   benchmark_override: true
-  require_verified_source: true
+  require_source_reviewed: true
 resources:
   # The laptop display also uses VRAM. 1.6GB avoids router/desktop contention on 12GB.
   reserve_vram_mb: 1600

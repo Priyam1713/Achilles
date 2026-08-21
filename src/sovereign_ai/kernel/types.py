@@ -55,7 +55,7 @@ class ModelSpec(BaseModel):
     name: str
     source: str | None = None
     source_type: str
-    verified_source: bool = False
+    source_reviewed: bool = False
     status: ModelStatus
     install_policy: str
     capabilities: list[str]

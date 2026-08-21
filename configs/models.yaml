@@ -3,13 +3,13 @@ models:
   name: Qwen3.8-27B
   source: Qwen/Qwen3.8-27B
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: artifact
   artifact:
     source: unsloth/Qwen3.8-27B-GGUF
     source_type: huggingface
-    verified_source: true
+    source_reviewed: true
     format: gguf
     allow_patterns:
     - Qwen3.8-27B-UD-Q4_K_M.gguf
@@ -54,7 +54,7 @@ models:
   name: Qwen3.5-9B
   source: Qwen/Qwen3.5-9B
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -81,7 +81,7 @@ models:
   name: Octen-Embedding-8B-INT8
   source: Octen/Octen-Embedding-8B-INT8
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -99,7 +99,7 @@ models:
   name: Qwen3-Reranker-8B
   source: Qwen/Qwen3-Reranker-8B
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -121,7 +121,7 @@ models:
   name: Qwen3-VL-Embedding-8B
   source: Qwen/Qwen3-VL-Embedding-8B
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -143,7 +143,7 @@ models:
   name: Qwen3-VL-Reranker-8B
   source: Qwen/Qwen3-VL-Reranker-8B
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -164,7 +164,7 @@ models:
   name: PaddleOCR-VL-1.6
   source: PaddlePaddle/PaddleOCR-VL-1.6
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -185,7 +185,7 @@ models:
   name: GLiNER2 Multi v1
   source: fastino/gliner2-multi-v1
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -205,7 +205,7 @@ models:
   name: Qwen3-ASR-1.7B
   source: Qwen/Qwen3-ASR-1.7B-hf
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -226,7 +226,7 @@ models:
   name: Qwen3 Forced Aligner 0.6B
   source: Qwen/Qwen3-ForcedAligner-0.6B
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -244,7 +244,7 @@ models:
   name: Whisper Large v3 Turbo
   source: openai/whisper-large-v3-turbo
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -263,7 +263,7 @@ models:
   name: MOSS-Transcribe-Diarize 0.9B
   source: OpenMOSS-Team/MOSS-Transcribe-Diarize
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -284,7 +284,7 @@ models:
   name: MOSS-Audio-4B-Thinking
   source: OpenMOSS-Team/MOSS-Audio-4B-Thinking
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -305,7 +305,7 @@ models:
   name: VoxCPM2
   source: openbmb/VoxCPM2
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -327,7 +327,7 @@ models:
   name: RF-DETR Large
   source: Roboflow/rf-detr-large
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -345,7 +345,7 @@ models:
   name: RF-DETR Keypoint Preview
   source: roboflow/rf-detr
   source_type: github_package
-  verified_source: true
+  source_reviewed: true
   status: candidate
   install_policy: package
   capabilities:
@@ -364,7 +364,7 @@ models:
   name: SAM 3.1
   source: facebook/sam3.1
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: gated
   capabilities:
@@ -384,7 +384,7 @@ models:
   name: Depth Anything 3 Base
   source: depth-anything/DA3-BASE
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -405,7 +405,7 @@ models:
   name: UI-TARS-1.5-7B
   source: ByteDance-Seed/UI-TARS-1.5-7B
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -429,7 +429,7 @@ models:
   name: FLUX.2 Klein 9B FP8
   source: black-forest-labs/FLUX.2-klein-9b-fp8
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: gated
   capabilities:
@@ -452,7 +452,7 @@ models:
   name: ACE-Step 1.5 XL SFT
   source: ACE-Step/acestep-v15-xl-sft-diffusers
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -474,7 +474,7 @@ models:
   name: LTX-2.5 Distilled NVFP4
   source: Lightricks/LTX-2.5
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -508,7 +508,7 @@ models:
   name: MiniMax Music 3
   source: MiniMaxAI/MiniMax-Music3
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -528,7 +528,7 @@ models:
   name: MiniMax H3 via WanGP
   source: MiniMaxAI/MiniMax-H3
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: runtime_managed
   capabilities:
@@ -551,7 +551,7 @@ models:
   name: Chronos-2
   source: amazon/chronos-2
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -570,7 +570,7 @@ models:
   name: TabPFN-3
   source: Prior-Labs/tabpfn_3
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: gated
   capabilities:
@@ -588,7 +588,7 @@ models:
   name: ESM3 Small Open v1
   source: biohub/esm3-sm-open-v1
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: gated
   capabilities:
@@ -607,7 +607,7 @@ models:
   name: UMA Medium 1.1
   source: facebook/UMA
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: gated
   capabilities:
@@ -633,7 +633,7 @@ models:
   name: MedGemma 1.5 4B IT
   source: google/medgemma-1.5-4b-it
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: gated
   capabilities:
@@ -652,7 +652,7 @@ models:
   name: Prithvi-EO-2.0-600M
   source: ibm-nasa-geospatial/Prithvi-EO-2.0-600M
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -670,7 +670,7 @@ models:
   name: Pythagoras-Prover-4B
   source: Pythagoras-LM/Pythagoras-Prover-4B
   source_type: huggingface
-  verified_source: true
+  source_reviewed: true
   status: final
   install_policy: sync
   capabilities:
@@ -687,7 +687,7 @@ models:
   name: Generic recommender checkpoint
   source: none
   source_type: none
-  verified_source: true
+  source_reviewed: true
   status: excluded
   install_policy: runtime_only
   capabilities:
@@ -700,7 +700,7 @@ models:
   name: Generic graph checkpoint
   source: none
   source_type: none
-  verified_source: true
+  source_reviewed: true
   status: excluded
   install_policy: runtime_only
   capabilities:
@@ -713,7 +713,7 @@ models:
   name: Autonomous driving VLA
   source: none
   source_type: none
-  verified_source: true
+  source_reviewed: true
   status: excluded
   install_policy: runtime_only
   capabilities:
@@ -726,7 +726,7 @@ models:
   name: Generic robotics VLA
   source: none
   source_type: none
-  verified_source: true
+  source_reviewed: true
   status: excluded
   install_policy: runtime_only
   capabilities:

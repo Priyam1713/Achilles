@@ -37,16 +37,24 @@ class CapabilityRegistry:
         return sorted(self.by_capability)
 
     def validate(self) -> list[str]:
+        """Manifest self-consistency checks, not a source-authenticity check.
+
+        `source_reviewed` (FIXES.md F-016, formerly named `verified_source`) is a
+        maintainer attestation set by whoever wrote the manifest entry -- it proves a
+        human looked at the source, not that a machine confirmed it resolves. The actual
+        machine check of whether a source still resolves lives in `verify_sources.py`,
+        run at install time.
+        """
         errors: list[str] = []
         for model in self.models.values():
-            if model.status != ModelStatus.EXCLUDED and not model.verified_source:
-                errors.append(f"{model.id}: non-excluded model lacks verified_source=true")
+            if model.status != ModelStatus.EXCLUDED and not model.source_reviewed:
+                errors.append(f"{model.id}: non-excluded model lacks source_reviewed=true")
             if model.install_policy == "artifact":
                 artifact = model.artifact or {}
                 if not artifact.get("source"):
                     errors.append(f"{model.id}: artifact install policy lacks artifact source")
-                if not artifact.get("verified_source"):
-                    errors.append(f"{model.id}: artifact source lacks verified_source=true")
+                if not artifact.get("source_reviewed"):
+                    errors.append(f"{model.id}: artifact source lacks source_reviewed=true")
             for engine in model.preferred_engines:
                 if engine not in self.engines:
                     errors.append(f"{model.id}: references unknown engine {engine}")

@@ -436,7 +436,7 @@ models:
     name: Test-Only Local Model
     source: example/test-only-local-model
     source_type: huggingface
-    verified_source: true
+    source_reviewed: true
     status: candidate
     install_policy: local
     capabilities: [reasoning]

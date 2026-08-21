@@ -66,7 +66,7 @@ def main() -> int:
         if model.get("source_type") != "huggingface":
             skipped.append((model["id"], f"owned-by-{model.get('source_type')}"))
             continue
-        if not model.get("verified_source"):
+        if not model.get("source_reviewed"):
             failures.append((model["id"], "source-not-verified"))
             continue
         if model.get("install_policy") == "gated" and not args.include_gated:
@@ -78,7 +78,7 @@ def main() -> int:
         artifact = model.get("artifact") if model.get("install_policy") == "artifact" else None
         if artifact and (
             artifact.get("source_type") != "huggingface"
-            or not artifact.get("verified_source")
+            or not artifact.get("source_reviewed")
         ):
             failures.append((model["id"], "artifact-source-not-verified"))
             continue

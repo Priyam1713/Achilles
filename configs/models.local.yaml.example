@@ -17,7 +17,7 @@
 #   1. A local model id can shadow (override) a manifest model id, but install-profiles.yaml
 #      never references local-only ids, so `Install.ps1 -Profile core|workstation|full` can
 #      never pull one in. Routing to it is only possible by explicit capability request.
-#   2. `verified_source: true` still means what it means everywhere else in this project:
+#   2. `source_reviewed: true` still means what it means everywhere else in this project:
 #      the source was actually checked, not merely typed. Verify it before setting it.
 #   3. Put the REAL reasoning for accepting a non-default license in `license_note`, not just
 #      "ok". If you ever hand this repository to someone else, `models.local.yaml` does not
@@ -45,7 +45,7 @@ models:
     name: NVIDIA Nemotron 3.5 Lightning 30B-A3B
     source: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
     source_type: huggingface
-    verified_source: true
+    source_reviewed: true
     status: candidate
     install_policy: local
     capabilities:
@@ -83,7 +83,7 @@ models:
     name: Qwen3.8-27B OBLITERATED (V2, complementary abliteration blending)
     source: OBLITERATUS/Qwen3.8-27B-OBLITERATED
     source_type: huggingface
-    verified_source: true
+    source_reviewed: true
     status: candidate
     install_policy: local
     capabilities:
