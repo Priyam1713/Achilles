@@ -16,6 +16,7 @@ from sovereign_ai.kernel.app import SovereignKernel
 from sovereign_ai.kernel.auth import SessionAuth, allowed_hosts
 from sovereign_ai.kernel.dispatcher import JobDispatcher, QueueFullError
 from sovereign_ai.kernel.jobs import JobStatus
+from sovereign_ai.kernel.skills import CandidateStatus
 from sovereign_ai.kernel.trigger_scheduler import TriggerScheduler
 from sovereign_ai.kernel.types import ActionRequest, CapabilityRequest, RoutingMode
 from sovereign_ai.resources.telemetry import snapshot
@@ -149,6 +150,23 @@ class RecurringTriggerCreate(BaseModel):
 
 class RecurringTriggerEnabledUpdate(BaseModel):
     enabled: bool
+
+
+class SkillCandidateCreate(BaseModel):
+    run_id: str
+    objective: str
+    proposed_by: str
+
+
+class AgentEvaluationCreate(BaseModel):
+    verdict: Literal["pass", "fail"]
+    evaluated_by: str
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class SkillPromoteRequest(BaseModel):
+    name: str
+    promoted_by: str
 
 
 def create_app(config_root: str | None = None) -> FastAPI:
@@ -794,5 +812,92 @@ def create_app(config_root: str | None = None) -> FastAPI:
             return kernel.triggers.set_enabled(trigger_id, request.enabled).model_dump()
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # --- Tier 5 continued: skill-candidate evaluation/promotion pipeline --------------
+
+    @app.post("/skills/candidates", status_code=201, dependencies=[Depends(require_session)])
+    async def propose_skill_candidate(request: SkillCandidateCreate) -> dict[str, Any]:
+        try:
+            return kernel.skills.propose_from_run(
+                request.run_id, request.objective, request.proposed_by
+            ).model_dump()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/skills/candidates")
+    async def list_skill_candidates(status: CandidateStatus | None = None) -> dict[str, Any]:
+        return {"candidates": [c.model_dump() for c in kernel.skill_candidates.list(status)]}
+
+    @app.get("/skills/candidates/{candidate_id}")
+    async def get_skill_candidate(candidate_id: str) -> dict[str, Any]:
+        candidate = kernel.skill_candidates.get(candidate_id)
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="skill candidate not found")
+        return candidate.model_dump()
+
+    @app.post(
+        "/skills/candidates/{candidate_id}/evaluations",
+        status_code=201,
+        dependencies=[Depends(require_session)],
+    )
+    async def record_agent_evaluation(
+        candidate_id: str, request: AgentEvaluationCreate
+    ) -> dict[str, Any]:
+        try:
+            return kernel.skills.record_evaluation(
+                candidate_id, request.verdict, request.evaluated_by, evidence=request.evidence
+            ).model_dump()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/skills/candidates/{candidate_id}/evaluations")
+    async def list_agent_evaluations(candidate_id: str) -> dict[str, Any]:
+        return {
+            "evaluations": [
+                e.model_dump() for e in kernel.agent_evaluations.list_for_candidate(candidate_id)
+            ]
+        }
+
+    @app.post(
+        "/skills/candidates/{candidate_id}/promote",
+        status_code=201,
+        dependencies=[Depends(require_session)],
+    )
+    async def promote_skill_candidate(
+        candidate_id: str, request: SkillPromoteRequest
+    ) -> dict[str, Any]:
+        from sovereign_ai.kernel.skills import SkillPromotionError
+
+        try:
+            return kernel.skills.promote(candidate_id, request.name, request.promoted_by).model_dump()
+        except SkillPromotionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post(
+        "/skills/candidates/{candidate_id}/reject",
+        dependencies=[Depends(require_session)],
+    )
+    async def reject_skill_candidate(candidate_id: str) -> dict[str, Any]:
+        from sovereign_ai.kernel.skills import SkillPromotionError
+
+        try:
+            return kernel.skills.reject(candidate_id).model_dump()
+        except SkillPromotionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/skills/versions/by-name/{name}")
+    async def list_skill_versions(name: str) -> dict[str, Any]:
+        return {"versions": [v.model_dump() for v in kernel.skill_versions.list_versions(name)]}
+
+    @app.get("/skills/versions/{version_id}")
+    async def get_skill_version(version_id: str) -> dict[str, Any]:
+        version = kernel.skill_versions.get(version_id)
+        if version is None:
+            raise HTTPException(status_code=404, detail="skill version not found")
+        return version.model_dump()
 
     return app

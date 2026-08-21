@@ -2655,3 +2655,211 @@ def test_recurring_trigger_http_lifecycle(tmp_path, monkeypatch):
         # schedule is already due.
         time.sleep(0.1)
         assert app.state.trigger_scheduler.tick() == []
+
+
+# --- Tier 5 continued: skill-candidate evaluation/promotion pipeline --------------------
+
+
+def _succeeded_run(tmp_path, steps=None):
+    from sovereign_ai.kernel.runs import RunStore
+
+    runs = RunStore(tmp_path / "runs.db")
+    run = runs.create("job-1", 1, {"task": "do something"})
+    runs.mark_running(run.id)
+    runs.finish(
+        run.id, "succeeded",
+        result={"steps": steps if steps is not None else [{"kind": "tool_call", "payload": {}}]},
+    )
+    return runs, runs.get(run.id)
+
+
+def _skill_pipeline(tmp_path):
+    from sovereign_ai.kernel.skill_service import SkillService
+    from sovereign_ai.kernel.skills import (
+        AgentEvaluationStore,
+        SkillCandidateStore,
+        SkillVersionStore,
+    )
+
+    runs, run = _succeeded_run(tmp_path)
+    candidates = SkillCandidateStore(tmp_path / "candidates.db")
+    evaluations = AgentEvaluationStore(tmp_path / "evaluations.db")
+    versions = SkillVersionStore(tmp_path / "versions.db")
+    service = SkillService(runs, candidates, evaluations, versions)
+    return service, run
+
+
+def test_skill_service_propose_requires_a_succeeded_run_with_steps(tmp_path):
+    from sovereign_ai.kernel.runs import RunStore
+    from sovereign_ai.kernel.skill_service import SkillService
+    from sovereign_ai.kernel.skills import (
+        AgentEvaluationStore,
+        SkillCandidateStore,
+        SkillVersionStore,
+    )
+
+    runs = RunStore(tmp_path / "runs.db")
+    candidates = SkillCandidateStore(tmp_path / "candidates.db")
+    evaluations = AgentEvaluationStore(tmp_path / "evaluations.db")
+    versions = SkillVersionStore(tmp_path / "versions.db")
+    service = SkillService(runs, candidates, evaluations, versions)
+
+    with pytest.raises(ValueError, match="Unknown run"):
+        service.propose_from_run("does-not-exist", "objective", "tester")
+
+    running_run = runs.create("job-1", 1, {})
+    runs.mark_running(running_run.id)
+    with pytest.raises(ValueError, match="not 'succeeded'"):
+        service.propose_from_run(running_run.id, "objective", "tester")
+
+    empty_steps_run = runs.create("job-2", 1, {})
+    runs.mark_running(empty_steps_run.id)
+    runs.finish(empty_steps_run.id, "succeeded", result={"steps": []})
+    with pytest.raises(ValueError, match="no non-empty 'steps'"):
+        service.propose_from_run(empty_steps_run.id, "objective", "tester")
+
+
+def test_skill_service_propose_creates_a_candidate_with_the_run_trajectory(tmp_path):
+    steps = [{"kind": "tool_call", "payload": {"tool": "read_file"}}]
+    from sovereign_ai.kernel.skill_service import SkillService
+    from sovereign_ai.kernel.skills import (
+        AgentEvaluationStore,
+        SkillCandidateStore,
+        SkillVersionStore,
+    )
+
+    runs, run = _succeeded_run(tmp_path, steps)
+    candidates = SkillCandidateStore(tmp_path / "candidates.db")
+    evaluations = AgentEvaluationStore(tmp_path / "evaluations.db")
+    versions = SkillVersionStore(tmp_path / "versions.db")
+    service = SkillService(runs, candidates, evaluations, versions)
+
+    candidate = service.propose_from_run(run.id, "read a file", "tester")
+    assert candidate.status == "proposed"
+    assert candidate.source_run_id == run.id
+    assert candidate.trajectory == steps
+    assert candidates.get(candidate.id) == candidate
+
+
+def test_skill_service_record_evaluation_transitions_candidate_status(tmp_path):
+    service, run = _skill_pipeline(tmp_path)
+    candidate = service.propose_from_run(run.id, "objective", "tester")
+
+    evaluation = service.record_evaluation(candidate.id, "pass", "reviewer", evidence={"note": "looks right"})
+    assert evaluation.verdict == "pass"
+    assert evaluation.evidence == {"note": "looks right"}
+    assert service.candidates.get(candidate.id).status == "evaluated"
+
+    with pytest.raises(ValueError, match="Unknown skill candidate"):
+        service.record_evaluation("does-not-exist", "pass", "reviewer")
+
+
+def test_skill_service_promote_requires_a_passing_evaluation(tmp_path):
+    from sovereign_ai.kernel.skills import SkillPromotionError
+
+    service, run = _skill_pipeline(tmp_path)
+    candidate = service.propose_from_run(run.id, "objective", "tester")
+
+    with pytest.raises(SkillPromotionError, match="no passing evaluation"):
+        service.promote(candidate.id, "read-a-file", "promoter")
+
+    service.record_evaluation(candidate.id, "fail", "reviewer")
+    with pytest.raises(SkillPromotionError, match="no passing evaluation"):
+        service.promote(candidate.id, "read-a-file", "promoter")
+
+    service.record_evaluation(candidate.id, "pass", "reviewer")
+    version = service.promote(candidate.id, "read-a-file", "promoter")
+    assert version.name == "read-a-file"
+    assert version.version == 1
+    assert version.skill_candidate_id == candidate.id
+    assert service.candidates.get(candidate.id).status == "promoted"
+
+
+def test_skill_service_promote_is_not_repeatable(tmp_path):
+    from sovereign_ai.kernel.skills import SkillPromotionError
+
+    service, run = _skill_pipeline(tmp_path)
+    candidate = service.propose_from_run(run.id, "objective", "tester")
+    service.record_evaluation(candidate.id, "pass", "reviewer")
+    service.promote(candidate.id, "read-a-file", "promoter")
+
+    with pytest.raises(SkillPromotionError, match="already promoted"):
+        service.promote(candidate.id, "read-a-file-again", "promoter")
+    with pytest.raises(SkillPromotionError, match="already promoted"):
+        service.reject(candidate.id)
+
+
+def test_skill_service_reject(tmp_path):
+    service, run = _skill_pipeline(tmp_path)
+    candidate = service.propose_from_run(run.id, "objective", "tester")
+    service.record_evaluation(candidate.id, "fail", "reviewer")
+
+    rejected = service.reject(candidate.id)
+    assert rejected.status == "rejected"
+
+
+def test_skill_version_store_versions_are_immutable_and_incrementing(tmp_path):
+    from sovereign_ai.kernel.skills import SkillVersionStore
+
+    store = SkillVersionStore(tmp_path / "versions.db")
+    first = store.create("greet", "cand-1", "eval-1", [{"a": 1}], "promoter")
+    second = store.create("greet", "cand-2", "eval-2", [{"a": 2}], "promoter")
+
+    assert first.version == 1
+    assert second.version == 2
+    assert store.latest("greet").id == second.id
+    assert [v.version for v in store.list_versions("greet")] == [1, 2]
+    assert not hasattr(store, "update")
+
+
+def test_skill_pipeline_http_end_to_end(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOVEREIGN_STATE_DIR", str(tmp_path / "state"))
+    app = create_app(str(ROOT / "configs"))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["Authorization"] = f"Bearer {app.state.session_token}"
+        kernel_instance = app.state.kernel
+
+        job = kernel_instance.jobs.create("agent", {"task": "read a file"})
+        run = kernel_instance.runs.create(job.id, 1, job.request)
+        kernel_instance.runs.mark_running(run.id)
+        kernel_instance.runs.finish(
+            run.id, "succeeded",
+            result={"steps": [{"kind": "tool_call", "payload": {"tool": "read_file"}}]},
+        )
+
+        proposed = client.post(
+            "/skills/candidates",
+            json={"run_id": run.id, "objective": "read a file", "proposed_by": "tester"},
+        )
+        assert proposed.status_code == 201
+        candidate_id = proposed.json()["id"]
+
+        premature = client.post(
+            f"/skills/candidates/{candidate_id}/promote",
+            json={"name": "read-a-file", "promoted_by": "promoter"},
+        )
+        assert premature.status_code == 409
+
+        evaluated = client.post(
+            f"/skills/candidates/{candidate_id}/evaluations",
+            json={"verdict": "pass", "evaluated_by": "reviewer", "evidence": {"note": "ok"}},
+        )
+        assert evaluated.status_code == 201
+        assert client.get(f"/skills/candidates/{candidate_id}").json()["status"] == "evaluated"
+        assert len(client.get(f"/skills/candidates/{candidate_id}/evaluations").json()["evaluations"]) == 1
+
+        promoted = client.post(
+            f"/skills/candidates/{candidate_id}/promote",
+            json={"name": "read-a-file", "promoted_by": "promoter"},
+        )
+        assert promoted.status_code == 201
+        version_id = promoted.json()["id"]
+        assert promoted.json()["version"] == 1
+
+        fetched = client.get(f"/skills/versions/{version_id}")
+        assert fetched.status_code == 200
+        by_name = client.get("/skills/versions/by-name/read-a-file").json()["versions"]
+        assert [v["id"] for v in by_name] == [version_id]
+
+        evaluated_list = client.get("/skills/candidates", params={"status": "promoted"}).json()
+        assert candidate_id in [c["id"] for c in evaluated_list["candidates"]]

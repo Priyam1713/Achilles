@@ -40,6 +40,8 @@ from .registry import CapabilityRegistry
 from .roster import RosterService
 from .runs import RunStore
 from .secrets import SecretStore
+from .skill_service import SkillService
+from .skills import AgentEvaluationStore, SkillCandidateStore, SkillVersionStore
 from .triggers import RecurringTriggerStore
 from .workflow_service import WorkflowService
 from .workflows import WorkflowDefinitionStore, WorkflowInstanceStore
@@ -88,6 +90,10 @@ class SovereignKernel:
     workflow_instances: WorkflowInstanceStore
     workflows: WorkflowService
     triggers: RecurringTriggerStore
+    skill_candidates: SkillCandidateStore
+    agent_evaluations: AgentEvaluationStore
+    skill_versions: SkillVersionStore
+    skills: SkillService
 
     @classmethod
     def build(cls, config_root: str | None = None) -> SovereignKernel:
@@ -145,6 +151,10 @@ class SovereignKernel:
         workflow_instances = WorkflowInstanceStore(state / "workflow_instances.db")
         workflows = WorkflowService(workflow_definitions, workflow_instances, jobs)
         triggers = RecurringTriggerStore(state / "recurring_triggers.db")
+        skill_candidates = SkillCandidateStore(state / "skill_candidates.db")
+        agent_evaluations = AgentEvaluationStore(state / "agent_evaluations.db")
+        skill_versions = SkillVersionStore(state / "skill_versions.db")
+        skills = SkillService(runs, skill_candidates, agent_evaluations, skill_versions)
         return cls(
             config,
             registry,
@@ -187,4 +197,8 @@ class SovereignKernel:
             workflow_instances,
             workflows,
             triggers,
+            skill_candidates,
+            agent_evaluations,
+            skill_versions,
+            skills,
         )

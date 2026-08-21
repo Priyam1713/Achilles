@@ -213,14 +213,27 @@ triggers and calls the same `WorkflowService.start()` a manual
 `POST /workflows/definitions/{id}/start` uses — no separate execution path for scheduled
 vs. manual starts. Interval-only scheduling (no cron expressions or time-of-day rules).
 
+The skill-candidate evaluation/promotion pipeline is also implemented now (FIXES.md
+F-040), closing every object `docs/ARCHITECTURE.md`'s persistent-agency object-boundary
+table named — **this completes Tier 5**. `SkillCandidateStore` extracts a proposal only
+from a genuinely `succeeded` `Run`'s real recorded trajectory (never from a failed or
+still-running attempt); `AgentEvaluationStore` records a `pass`/`fail` verdict plus
+evidence; `SkillVersionStore` is `(name, version)`-keyed and genuinely immutable, and
+`promote()` requires a passing evaluation already on record and is not repeatable.
+Deliberately does not include a "replay this skill" execution engine — a promoted
+`SkillVersion` is inert data until something else chooses to consult it; building an
+engine that re-drives an `AgentLoop` against a stored trajectory is real, separate,
+considerably larger work than the propose/evaluate/promote pipeline itself.
+
 Still pending, genuinely unbuilt (not started, not just unwired):
 
-- the skill-candidate evaluation/promotion pipeline (`SkillCandidate`/`SkillVersion`/
-  `AgentEvaluation`)
 - `collaboration/store.py`'s full retrofit onto `MigrationRunner` (F-026) — the
   `agent_profile_id` column was added via a targeted, idempotent `ALTER TABLE` instead,
   since that store is hash-chain integrity-critical and a full retrofit is real, separate
   surgery
+- a "replay this skill" execution engine consuming a promoted `SkillVersion`'s trajectory
+  (see F-040's own honest limits — the evaluation/promotion pipeline is built, execution
+  from a stored trajectory is not)
 
 These should be implemented as migrations and kernel services before adding Hermes Bot Mode,
 A2A ingress or a roster UI, so no compatibility surface becomes the authoritative store.

@@ -1866,6 +1866,74 @@ not fabrication.
   them (a poll that finds many simultaneously due triggers starts all of their workflows
   in the same tick, sequentially).
 
+### F-040 — Added: the skill-candidate evaluation/promotion pipeline, closing Tier 5's
+  last named object
+
+- **Severity:** `major` (Tier 5's last remaining piece) · **Status:** `fixed` for the
+  scope described below — no replay/execution engine, see "Honest limits."
+- **Motivating problem:** `docs/ARCHITECTURE.md`'s object-boundary table named
+  `SkillCandidate`/`SkillVersion`/`AgentEvaluation` from the start; `knowledge/research.md`
+  gave the concrete grounding this fix builds from directly: *"A successful trajectory
+  becomes an untrusted `SkillCandidate`, then replay/evaluation — not automatic durable
+  automation."* Nothing existed. There was no way to say "this Run's trajectory worked,
+  consider it a candidate procedure," no way to record evidence for or against promoting
+  it, and no immutable record of a promotion decision.
+- **Fix applied:**
+  - `kernel/skills.py` — `SkillCandidateStore`/`SkillCandidateRecord`: id, the
+    `source_run_id` it was extracted from, the `objective` it accomplished, the literal
+    `trajectory` (copied from that Run's `result["steps"]`), `proposed_by`, and a status
+    lifecycle (`proposed` → `evaluated` → `promoted`/`rejected`). `AgentEvaluationStore`/
+    `AgentEvaluationRecord`: a `pass`/`fail` verdict plus free-form `evidence`, tied to one
+    candidate — this project's own quality-eval discipline (F-028, for models) applied to
+    skills. `SkillVersionStore`/`SkillVersionRecord`: `(name, version)`-keyed and
+    genuinely immutable (no `update` method at all, mirroring `WorkflowDefinitionStore`,
+    F-038) — a promotion is a new version under a name, never an edit.
+  - `kernel/skill_service.py` — `SkillService.propose_from_run()` requires the source
+    `Run` to have actually reached `status == "succeeded"` with a non-empty `steps`
+    trajectory in its result — proposing from a failed or still-running attempt would be
+    proposing a procedure not known to work, exactly what this pipeline exists to gate
+    against. `record_evaluation()` transitions a fresh candidate to `evaluated`
+    regardless of verdict — the *act* of evaluating happened either way; only `promote()`
+    cares which way it went. `promote()` requires the candidate's most recent evaluation
+    to have a `pass` verdict, is not repeatable (an already-`promoted` or `rejected`
+    candidate refuses a second promotion via `SkillPromotionError`, a distinguishable
+    exception so the API layer can return 409 without string-matching), and records
+    exactly which `evaluation_id` justified the decision — the "signed promotion"
+    `docs/ARCHITECTURE.md` describes, meaning auditable and evidence-gated, not
+    cryptographic signing (this codebase has no such infrastructure and this fix does not
+    introduce one).
+  - New endpoints: `POST /skills/candidates`, `GET /skills/candidates[?status=]`,
+    `GET /skills/candidates/{id}`, `POST /skills/candidates/{id}/evaluations`,
+    `GET /skills/candidates/{id}/evaluations`, `POST /skills/candidates/{id}/promote`,
+    `POST /skills/candidates/{id}/reject`, `GET /skills/versions/by-name/{name}`,
+    `GET /skills/versions/{id}`.
+- **Verification:** 9 new tests. `propose_from_run` rejects an unknown run, a run that
+  has not succeeded, and a succeeded run whose result has no non-empty `steps`; a
+  successful propose copies the real trajectory verbatim. `record_evaluation` transitions
+  status and rejects an unknown candidate. `promote` refuses with no evaluation on record,
+  refuses after a `fail` verdict, succeeds after a `pass` verdict, and is proven
+  non-repeatable (a second promotion attempt, and a reject attempt on an already-promoted
+  candidate, both correctly raise). `reject` transitions status. `SkillVersionStore`
+  version immutability/auto-increment, mirroring `WorkflowDefinitionStore`'s own test.
+  Then a full HTTP round trip: a real `Run` marked `succeeded` with a real trajectory,
+  proposed via the API, a premature promotion attempt correctly 409s before any
+  evaluation exists, a `pass` evaluation recorded, promotion succeeds and returns
+  `version: 1`, the version is independently fetchable by id and by name, and the
+  candidate now shows up filtered by `status=promoted`. Full suite **127 passed**,
+  `ruff check src/ tests/ scripts/` clean.
+- **Honest limits:** deliberately does not include a "replay this skill" execution
+  engine — a promoted `SkillVersion` is inert data (an immutable record of a trajectory
+  that once worked) until something else chooses to consult it. Building an engine that
+  re-drives an `AgentLoop` against a stored trajectory, and handles however the live
+  world may have diverged since it was recorded, is real, separate work considerably
+  larger than this pipeline's own scope — nothing in `knowledge/research.md`'s grounding
+  quote promised more than "then replay/evaluation," and only the evaluation half (plus
+  the propose/promote bookkeeping around it) is built here. No automatic candidate
+  proposal from every successful run — proposing is an explicit call, matching "not
+  automatic durable automation." No `AgentProfile`/authority integration: a
+  `SkillVersion` is not currently referenced by `AgentProfile` or any `Run`, so nothing
+  yet consults "does this profile have this skill" as part of routing or execution.
+
 ---
 
 ## Priority order
@@ -1964,15 +2032,25 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
     real-`time.sleep()`-based "already due" simulation raced against test-execution
     overhead) by adding an overridable `now` parameter throughout, rather than papering
     over it with a longer sleep.
+18. ~~**F-040**~~ — **fixed, evaluation/promotion half only (no replay engine, by
+    design).** `SkillCandidate` (extracted only from a genuinely `succeeded` Run's real
+    trajectory), `AgentEvaluation` (pass/fail plus evidence) and `SkillVersion`
+    (immutable, versioned, promotion gated on a passing evaluation and non-repeatable)
+    close every object `docs/ARCHITECTURE.md`'s object-boundary table named for Tier 5.
+    **This closes Tier 5**: every named object across F-031 through F-040 is now real,
+    tested and wired through the existing kernel machinery rather than a parallel one.
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
 **F-013** (retrieval stack right-sizing, blocked on the same licence review); **F-022**
 (explicitly the user's values decision, not mine — already resolved for personal use via
 the local overlay, F-025). Every cleanup-tier item (F-006 through F-024) is now `fixed`.
-Tier 5's safety-critical core (F-031 through F-037), DAG execution (F-038) and recurring
-triggers (F-039) are all built; identity propagation is closed for `Run` and
-`ExecutionBroker`; an issued `CapabilityGrant` now genuinely authorizes execution end to
-end. The one remaining Tier 5 piece is the skill-candidate evaluation/promotion
-pipeline; all of Tier 6 (harness tournament, desktop product, remote providers) remains
-unstarted — genuine new subsystem builds, not bounded defect fixes.
+**Tier 5 is complete** (F-031 through F-040): the roster domain, mailbox/presence,
+memory-scope filtering, `WorkspaceLease` enforcement, identity propagation, a
+`CapabilityGrant`-authorized execution path, workflow DAGs with recurring triggers, and
+the skill-candidate pipeline are all real, tested, and composed through the existing
+`PolicyEngine`/`JobDispatcher` rather than a second authority or execution plane. All of
+Tier 6 (harness tournament, desktop product, remote providers) remains unstarted —
+genuine new subsystem builds, not bounded defect fixes, several explicitly flagged
+earlier this session as needing external toolchains this workstation does not have
+(Rust/Cargo for Goose, per F-027) or weeks of scope.
