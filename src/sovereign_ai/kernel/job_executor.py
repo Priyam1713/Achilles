@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
@@ -59,13 +60,30 @@ def _assistant_content(result: dict[str, Any]) -> str:
     return content or "The model completed the job, but its backend returned no displayable text."
 
 
-async def execute(kernel: SovereignKernel, job: JobRecord, run: RunRecord) -> dict[str, Any]:
+async def execute(
+    kernel: SovereignKernel,
+    job: JobRecord,
+    run: RunRecord,
+    submit_callback: Callable[[JobRecord], Any] | None = None,
+) -> dict[str, Any]:
     """What a job attempt actually does, independent of how it was submitted.
 
     Owned by the kernel (not the API layer) because "route a chat/specialist/media
     request and post the collaboration reply" is kernel business logic, not HTTP plumbing.
     `JobDispatcher` calls this once per `Run` attempt; on success or failure it also posts
-    the collaboration-room reply the request originated from, if any.
+    the collaboration-room reply the request originated from, if any, and -- if this job
+    belongs to a `WorkflowInstance` (`FIXES.md` Tier 5) -- advances that workflow and
+    submits whatever step(s) just became ready.
+
+    `submit_callback` is how a workflow's downstream step actually gets to run: this
+    function creates the new `Job` row (via `WorkflowService.advance`) but, like
+    `RosterService`, does not own a `JobDispatcher` reference itself -- the dispatcher is
+    an API-layer concern, constructed per FastAPI app, not part of `SovereignKernel`. The
+    caller that *does* own one (`api/server.py`'s `create_app`) passes its own
+    `dispatcher.submit` in. Omitting it (any test that constructs a bare `execute()` call)
+    still creates the correct `Job` row and updates the workflow instance; it just isn't
+    auto-dispatched, which is the same graceful degradation `RosterService`'s callers
+    already have to handle for delegation-spawned jobs.
     """
     try:
         if job.kind == "chat":
@@ -91,9 +109,12 @@ async def execute(kernel: SovereignKernel, job: JobRecord, run: RunRecord) -> di
             result = await _run_agent_loop(kernel, job, run)
     except Exception as exc:
         # The dispatcher records the Job/Run failure itself from this re-raised exception;
-        # this side effect only needs to notify the room that asked, and must not swallow
+        # these side effects only need to notify whoever's waiting, and must not swallow
         # the original error.
         await post_failure(kernel, job, f"{type(exc).__name__}: {exc}")
+        _advance_workflow_best_effort(
+            kernel, job, "failed", error=f"{type(exc).__name__}: {exc}", submit_callback=submit_callback
+        )
         raise
 
     origin = job.metadata.get("collaboration")
@@ -109,7 +130,39 @@ async def execute(kernel: SovereignKernel, job: JobRecord, run: RunRecord) -> di
                 event_type="collaboration.reply_failed",
                 payload={"error": f"{type(exc).__name__}: {exc}"},
             )
+    _advance_workflow_best_effort(kernel, job, "succeeded", result=result, submit_callback=submit_callback)
     return result
+
+
+def _advance_workflow_best_effort(
+    kernel: SovereignKernel,
+    job: JobRecord,
+    status: str,
+    *,
+    result: dict[str, Any] | None = None,
+    error: str | None = None,
+    submit_callback: Callable[[JobRecord], Any] | None,
+) -> None:
+    """Advance the `WorkflowInstance` this job's step belongs to, if any. Mirrors
+    `post_failure`'s contract: best-effort, must never raise into the dispatcher -- a
+    workflow bookkeeping failure must not turn a job that actually succeeded (or failed
+    for its own real reason) into something else."""
+    workflow = job.metadata.get("workflow")
+    if not workflow:
+        return
+    try:
+        _, new_jobs = kernel.workflows.advance(
+            workflow["instance_id"], workflow["step_id"], status, result=result, error=error
+        )
+        if submit_callback is not None:
+            for new_job in new_jobs:
+                submit_callback(new_job)
+    except Exception as exc:
+        kernel.events.append(
+            stream_id=f"job:{job.id}",
+            event_type="workflow.advance_failed",
+            payload={"error": f"{type(exc).__name__}: {exc}"},
+        )
 
 
 async def _run_agent_loop(kernel: SovereignKernel, job: JobRecord, run: RunRecord) -> dict[str, Any]:

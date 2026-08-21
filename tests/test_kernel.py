@@ -2262,3 +2262,243 @@ def test_native_agent_loop_run_command_denied_by_mismatched_lease(tmp_path, monk
     observation = step.payload["observation"]
     assert "denied" in observation["error"]
     assert "not active for subject" in observation["error"]
+
+
+# --- Tier 5 continued: workflow DAGs -----------------------------------------------------
+
+
+def test_workflow_definition_store_validates_dag_shape(tmp_path):
+    from sovereign_ai.kernel.workflows import (
+        WorkflowDefinitionStore,
+        WorkflowStep,
+        WorkflowValidationError,
+    )
+
+    store = WorkflowDefinitionStore(tmp_path / "definitions.db")
+
+    with pytest.raises(WorkflowValidationError, match="at least one step"):
+        store.create("empty", [])
+
+    with pytest.raises(WorkflowValidationError, match="unique"):
+        store.create("dup", [WorkflowStep(id="a", job_kind="chat"), WorkflowStep(id="a", job_kind="chat")])
+
+    with pytest.raises(WorkflowValidationError, match="unknown step"):
+        store.create("bad-dep", [WorkflowStep(id="a", job_kind="chat", depends_on=["does-not-exist"])])
+
+    with pytest.raises(WorkflowValidationError, match="cycle"):
+        store.create(
+            "cycle",
+            [
+                WorkflowStep(id="a", job_kind="chat", depends_on=["b"]),
+                WorkflowStep(id="b", job_kind="chat", depends_on=["a"]),
+            ],
+        )
+
+    # A valid diamond DAG must be accepted.
+    valid = store.create(
+        "diamond",
+        [
+            WorkflowStep(id="a", job_kind="chat"),
+            WorkflowStep(id="b", job_kind="chat", depends_on=["a"]),
+            WorkflowStep(id="c", job_kind="chat", depends_on=["a"]),
+            WorkflowStep(id="d", job_kind="chat", depends_on=["b", "c"]),
+        ],
+    )
+    assert [step.id for step in valid.steps] == ["a", "b", "c", "d"]
+
+
+def test_workflow_definition_store_versions_are_immutable_and_incrementing(tmp_path):
+    from sovereign_ai.kernel.workflows import WorkflowDefinitionStore, WorkflowStep
+
+    store = WorkflowDefinitionStore(tmp_path / "definitions.db")
+    first = store.create("wf", [WorkflowStep(id="a", job_kind="chat")])
+    second = store.create("wf", [WorkflowStep(id="a", job_kind="chat"), WorkflowStep(id="b", job_kind="chat")])
+
+    assert first.version == 1
+    assert second.version == 2
+    assert first.id != second.id
+    assert store.latest("wf").id == second.id
+    assert [d.version for d in store.list_versions("wf")] == [1, 2]
+    # No update method exists at all -- immutability is structural, not just convention.
+    assert not hasattr(store, "update")
+
+
+def _linear_workflow(tmp_path):
+    from sovereign_ai.kernel.jobs import JobStore
+    from sovereign_ai.kernel.workflow_service import WorkflowService
+    from sovereign_ai.kernel.workflows import (
+        WorkflowDefinitionStore,
+        WorkflowInstanceStore,
+        WorkflowStep,
+    )
+
+    definitions = WorkflowDefinitionStore(tmp_path / "definitions.db")
+    instances = WorkflowInstanceStore(tmp_path / "instances.db")
+    jobs = JobStore(tmp_path / "jobs.db")
+    service = WorkflowService(definitions, instances, jobs)
+    definition = definitions.create(
+        "linear",
+        [
+            WorkflowStep(id="a", job_kind="chat"),
+            WorkflowStep(id="b", job_kind="chat", depends_on=["a"]),
+        ],
+    )
+    return service, definition
+
+
+def test_workflow_service_start_only_creates_jobs_for_ready_steps(tmp_path):
+    service, definition = _linear_workflow(tmp_path)
+    instance, jobs = service.start(definition.id)
+    assert instance.status == "running"
+    assert [job.kind for job in jobs] == ["chat"]
+    assert instance.step_states["a"]["status"] == "queued"
+    assert instance.step_states["a"]["job_id"] == jobs[0].id
+    assert instance.step_states["b"]["status"] == "pending"
+    assert instance.step_states["b"]["job_id"] is None
+
+
+def test_workflow_service_advance_creates_downstream_job_and_completes(tmp_path):
+    service, definition = _linear_workflow(tmp_path)
+    instance, _jobs = service.start(definition.id)
+
+    instance, new_jobs = service.advance(instance.id, "a", "succeeded", result={"ok": True})
+    assert instance.status == "running"
+    assert len(new_jobs) == 1
+    assert instance.step_states["b"]["status"] == "queued"
+    assert instance.step_states["b"]["job_id"] == new_jobs[0].id
+
+    instance, final_jobs = service.advance(instance.id, "b", "succeeded", result={"ok": True})
+    assert instance.status == "completed"
+    assert final_jobs == []
+
+
+def test_workflow_service_step_failure_fails_the_whole_instance(tmp_path):
+    service, definition = _linear_workflow(tmp_path)
+    instance, _jobs = service.start(definition.id)
+
+    instance, new_jobs = service.advance(instance.id, "a", "failed", error="boom")
+    assert instance.status == "failed"
+    assert instance.step_states["a"]["error"] == "boom"
+    assert new_jobs == []
+
+    # Already terminal: a further advance call is a safe no-op, not an error, and must
+    # not resurrect the instance or create the downstream job after the fact.
+    instance, more_jobs = service.advance(instance.id, "b", "succeeded")
+    assert instance.status == "failed"
+    assert more_jobs == []
+
+
+def test_workflow_service_advance_unknown_instance_or_definition_raises(tmp_path):
+    service, _definition = _linear_workflow(tmp_path)
+    with pytest.raises(ValueError, match="Unknown workflow instance"):
+        service.advance("does-not-exist", "a", "succeeded")
+    with pytest.raises(ValueError, match="Unknown workflow definition"):
+        service.start("does-not-exist")
+
+
+def test_job_executor_advances_workflow_on_success_and_submits_downstream_job(tmp_path, monkeypatch):
+    """End to end through the real kernel and job_executor.execute(), not the
+    WorkflowService in isolation: a workflow's first step actually completing must
+    advance the instance and hand the newly-ready downstream job to submit_callback."""
+    from sovereign_ai.kernel import job_executor
+
+    k = kernel(tmp_path, monkeypatch)
+    definition = k.workflows.create_definition(
+        "chat-chain",
+        [
+            {"id": "a", "job_kind": "chat", "request_template": {
+                "request": {"capability": "reasoning", "mode": "fast"},
+                "messages": [{"role": "user", "content": "step a"}],
+            }},
+            {"id": "b", "job_kind": "chat", "depends_on": ["a"], "request_template": {
+                "request": {"capability": "reasoning", "mode": "fast"},
+                "messages": [{"role": "user", "content": "step b"}],
+            }},
+        ],
+    )
+    instance, jobs = k.workflows.start(definition.id)
+    job_a = jobs[0]
+    run_a = k.runs.create(job_a.id, 1, job_a.request)
+
+    fake_result = {"result": {"choices": [{"message": {"content": "done with a"}}]}}
+    monkeypatch.setattr(k.inference, "chat", lambda *a, **kw: _async_return(fake_result))
+
+    submitted = []
+    result = asyncio.run(
+        job_executor.execute(k, job_a, run_a, submit_callback=submitted.append)
+    )
+    assert result == fake_result
+
+    updated_instance = k.workflow_instances.get(instance.id)
+    assert updated_instance.status == "running"
+    assert updated_instance.step_states["b"]["status"] == "queued"
+    assert len(submitted) == 1
+    assert submitted[0].id == updated_instance.step_states["b"]["job_id"]
+
+
+def _async_return(value):
+    async def _coro():
+        return value
+    return _coro()
+
+
+def test_workflow_http_start_creates_and_dispatches_the_first_step(tmp_path, monkeypatch):
+    """A workflow with no real inference backend in this test environment: the step's job
+    is genuinely submitted to the real dispatcher and reaches a terminal (failed) state,
+    and that failure genuinely propagates to fail the workflow instance -- proving the
+    job_executor -> WorkflowService wiring fires through the real HTTP/dispatcher stack,
+    not just in a direct unit call."""
+    monkeypatch.setenv("SOVEREIGN_STATE_DIR", str(tmp_path / "state"))
+    app = create_app(str(ROOT / "configs"))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["Authorization"] = f"Bearer {app.state.session_token}"
+
+        created = client.post(
+            "/workflows/definitions",
+            json={
+                "name": "http-chain",
+                "steps": [
+                    {
+                        "id": "a", "job_kind": "chat",
+                        "request_template": {
+                            "request": {"capability": "reasoning", "mode": "fast"},
+                            "messages": [{"role": "user", "content": "hi"}],
+                        },
+                    },
+                    {
+                        "id": "b", "job_kind": "chat", "depends_on": ["a"],
+                        "request_template": {
+                            "request": {"capability": "reasoning", "mode": "fast"},
+                            "messages": [{"role": "user", "content": "hi again"}],
+                        },
+                    },
+                ],
+            },
+        )
+        assert created.status_code == 201
+        definition_id = created.json()["id"]
+
+        started = client.post(f"/workflows/definitions/{definition_id}/start")
+        assert started.status_code == 201
+        body = started.json()
+        assert len(body["jobs"]) == 1
+        job_id = body["jobs"][0]["id"]
+        instance_id = body["instance"]["id"]
+
+        job = None
+        for _ in range(200):
+            job = client.get(f"/jobs/{job_id}").json()
+            if job["status"] in ("succeeded", "failed", "cancelled"):
+                break
+            time.sleep(0.1)
+        assert job["status"] == "failed"  # no real inference backend in this environment
+
+        instance = None
+        for _ in range(200):
+            instance = client.get(f"/workflows/instances/{instance_id}").json()
+            if instance["status"] != "running":
+                break
+            time.sleep(0.1)
+        assert instance["status"] == "failed"
+        assert instance["step_states"]["a"]["status"] == "failed"
+        assert instance["step_states"]["b"]["status"] == "pending"

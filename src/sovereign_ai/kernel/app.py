@@ -40,6 +40,8 @@ from .registry import CapabilityRegistry
 from .roster import RosterService
 from .runs import RunStore
 from .secrets import SecretStore
+from .workflow_service import WorkflowService
+from .workflows import WorkflowDefinitionStore, WorkflowInstanceStore
 
 
 @dataclass
@@ -81,6 +83,9 @@ class SovereignKernel:
     workspace_leases: WorkspaceLeaseStore
     roster: RosterService
     presence: PresenceService
+    workflow_definitions: WorkflowDefinitionStore
+    workflow_instances: WorkflowInstanceStore
+    workflows: WorkflowService
 
     @classmethod
     def build(cls, config_root: str | None = None) -> SovereignKernel:
@@ -134,6 +139,9 @@ class SovereignKernel:
         approvals = ApprovalRequestStore(state / "approvals.db")
         roster = RosterService(agent_profiles, delegations, capability_grants, approvals, jobs, policy)
         presence = PresenceService(capability_grants, workspace_leases, delegations, jobs)
+        workflow_definitions = WorkflowDefinitionStore(state / "workflow_definitions.db")
+        workflow_instances = WorkflowInstanceStore(state / "workflow_instances.db")
+        workflows = WorkflowService(workflow_definitions, workflow_instances, jobs)
         return cls(
             config,
             registry,
@@ -172,4 +180,7 @@ class SovereignKernel:
             workspace_leases,
             roster,
             presence,
+            workflow_definitions,
+            workflow_instances,
+            workflows,
         )

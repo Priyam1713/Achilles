@@ -1711,6 +1711,93 @@ not fabrication.
   run to execute a command, provided the job's `AgentPayload.agent_profile_id` (F-035)
   names the same subject the grant was issued to.
 
+### F-038 — Added: versioned workflow DAGs (`WorkflowDefinition`/`WorkflowInstance`)
+
+- **Severity:** `major` (a new subsystem, Tier 5's last piece besides skill evaluation)
+  · **Status:** `fixed` for the scope described below; recurring/scheduled triggers are
+  explicitly not built, see "Honest limits."
+- **Motivating problem:** `docs/ARCHITECTURE.md`'s object-boundary table and
+  `knowledge/research.md`'s minimal implementation sequence both named `WorkflowDefinition`
+  ("immutable versioned DAG/factory definition") as part of the persistent-agency domain,
+  and `docs/IMPLEMENTATION_STATUS.md` listed "versioned workflow DAGs and recurring
+  triggers that create ordinary jobs" as genuinely unbuilt. Nothing existed: no way to
+  declare a multi-step task graph once and run it, no way for one step's completion to
+  automatically start the next.
+- **Fix applied:**
+  - `kernel/workflows.py` — `WorkflowDefinitionStore`/`WorkflowDefinitionRecord`: a
+    `(name, version)`-keyed, genuinely immutable definition (no `update` method exists at
+    all — a changed graph is always a new version under the same name, `version`
+    auto-incrementing per name, never an edit of an existing row, so a running instance's
+    graph can never shift underneath it). `_validate_dag()` rejects an empty step list,
+    duplicate step ids, a `depends_on` referencing an unknown step id, and — via Kahn's
+    algorithm, not a hand-rolled cycle heuristic — an actual dependency cycle, all before
+    a single row is written.
+  - `WorkflowInstanceStore`/`WorkflowInstanceRecord`: the mutable in-flight counterpart —
+    one row per execution, `step_states` tracking each step's `pending`/`queued`/
+    `succeeded`/`failed` status and the `Job` id it created, if any.
+  - `kernel/workflow_service.py` — `WorkflowService`, mirroring `RosterService`'s own
+    shape deliberately: `start()`/`advance()` create the durable `Job` row for whichever
+    step(s) just became ready (every dependency succeeded) via `JobStore.create`, and
+    return them for the caller to submit — this service does not own a `JobDispatcher`
+    reference either, for the same reason `RosterService` doesn't (the dispatcher is
+    constructed per FastAPI app, not part of `SovereignKernel`; keeping this synchronous
+    keeps it unit-testable without a running event loop). Any single step failing fails
+    the whole instance — no partial-success semantics in this pass; `advance()` on an
+    already-terminal instance is a safe no-op (covers a DAG with two independent branches
+    where one has already failed the instance by the time the other's job completes).
+  - **The part that makes this a real DAG *executor*, not just a data structure with
+    nothing driving it**: `job_executor.execute()` gained an optional `submit_callback`
+    parameter and a new `_advance_workflow_best_effort()` helper, called on both the
+    success and failure paths. If a completing job's `metadata["workflow"]` names an
+    `instance_id`/`step_id` (set by `WorkflowService._job_for_step` when it created that
+    job), the helper calls `kernel.workflows.advance(...)` and hands any newly-ready
+    downstream jobs to `submit_callback` — mirroring `post_failure`'s contract exactly:
+    best-effort, must never raise into the dispatcher, a workflow-bookkeeping failure must
+    not turn a job that genuinely succeeded into something else. `api/server.py`'s
+    dispatcher construction now passes `submit_callback=dispatcher.submit` into the
+    executor lambda — a closure over `dispatcher` itself, safe because the lambda body
+    only evaluates at call time, well after `dispatcher`'s own assignment completes.
+  - New endpoints: `POST /workflows/definitions`, `GET /workflows/definitions/{id}`,
+    `GET /workflows/definitions/by-name/{name}`, `POST
+    /workflows/definitions/{id}/start`, `GET /workflows/instances/{id}`,
+    `GET /workflows/definitions/{id}/instances`.
+- **Verification:** 8 new tests. DAG validation (empty, duplicate ids, unknown
+  dependency, cycle, and a genuinely valid diamond DAG all pass/fail correctly);
+  version immutability and auto-incrementing, confirmed via `latest()`/`list_versions()`
+  and the direct assertion that no `update` method exists; `start()` only creates jobs
+  for dependency-free steps, leaving the rest `pending`; `advance()` on a linear two-step
+  chain creates the downstream job only once its dependency succeeds, and completes the
+  instance only once every step has; a failed step fails the whole instance and a
+  subsequent `advance()` call for a sibling step is a safe no-op rather than resurrecting
+  it; unknown instance/definition ids raise. Then two tests proving the executor wiring
+  is real, not just present: a direct call to `job_executor.execute()` against a real
+  kernel (with `kernel.inference.chat` stubbed to a fixed result, avoiding a live model
+  dependency) confirms the downstream job is created **and** handed to a fake
+  `submit_callback`; a full HTTP round trip (`POST .../start` → poll `GET /jobs/{id}`
+  through the real dispatcher to a genuine terminal `failed` state, no live inference
+  backend in this environment → poll `GET /workflows/instances/{id}`) confirms that
+  real failure propagates through the real dispatcher into the workflow instance,
+  marking it `failed` and leaving the downstream step `pending`, never dispatched.
+  **Needed a longer polling budget than this file's other HTTP job-completion tests**
+  (200 × 0.1s, not 40 × 0.05s): a real `inference.chat()` attempt against no backend
+  takes several seconds to time out in this environment (confirmed empirically, ~13s for
+  the whole test), unlike `ExecutionBroker`'s near-instant `.available()` checks used
+  elsewhere — the first version of this test polled for `!= "queued"` and asserted
+  `"failed"` immediately after, which is wrong on its own terms (it should have polled
+  for a genuinely terminal status), and failed by catching the job still `"running"`.
+  Full suite **112 passed**, `ruff check src/ tests/ scripts/` clean.
+- **Honest limits:** recurring/scheduled triggers ("run this workflow every N seconds")
+  are not built at all — `docs/IMPLEMENTATION_STATUS.md`'s "recurring triggers" half of
+  its own pending-item description remains genuinely open; this fix is the DAG execution
+  half only. No cancellation of a sibling step's already-dispatched job when one step
+  fails (it completes normally; `advance()` simply no-ops on the now-terminal instance
+  rather than resurrecting it — safe, but not the same as actively cancelling in-flight
+  work). No retry-a-failed-step semantics; a failed workflow instance must be re-`start()`ed
+  as a new instance from the beginning. No `AgentProfile`/authority integration at all —
+  a workflow step's `job_kind`/`request_template` runs with whatever authority that job
+  kind normally has; the roster/grant system (F-031, F-037) and the workflow system are
+  currently independent of each other, not composed.
+
 ---
 
 ## Priority order
@@ -1796,14 +1883,21 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
     plus an end-to-end `NativeAgentLoop` test proving a real run now actually executes.
     `RosterService`'s approval pipeline is now load-bearing for execution, not just
     record-keeping.
+16. ~~**F-038**~~ — **fixed, DAG execution half only.** `WorkflowDefinition`
+    (immutable, versioned, cycle-validated) and `WorkflowInstance` are real, and
+    `job_executor.execute()`'s new completion hook makes it a genuine executor: a step
+    succeeding creates and submits its now-ready downstream step's job automatically,
+    verified through the real dispatcher end to end, not just in `WorkflowService`
+    isolation. Recurring/scheduled triggers remain unbuilt — a separate subsystem.
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
 **F-013** (retrieval stack right-sizing, blocked on the same licence review); **F-022**
 (explicitly the user's values decision, not mine — already resolved for personal use via
 the local overlay, F-025). Every cleanup-tier item (F-006 through F-024) is now `fixed`.
-Tier 5's safety-critical core (F-031 through F-037) is built, its identity-propagation gap
-is closed for `Run` and `ExecutionBroker`, and an issued `CapabilityGrant` now genuinely
-authorizes execution end to end. Remaining Tier 5 pieces (workflow DAGs, skill evaluation)
-and all of Tier 6 (harness tournament, desktop product, remote providers) remain
-unstarted — genuine new subsystem builds, not bounded defect fixes.
+Tier 5's safety-critical core (F-031 through F-037) and DAG execution (F-038) are built;
+identity propagation is closed for `Run` and `ExecutionBroker`; an issued
+`CapabilityGrant` now genuinely authorizes execution end to end. Remaining Tier 5 pieces
+(recurring/scheduled workflow triggers, skill evaluation) and all of Tier 6 (harness
+tournament, desktop product, remote providers) remain unstarted — genuine new subsystem
+builds, not bounded defect fixes.

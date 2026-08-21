@@ -128,6 +128,18 @@ class WorkspaceLeaseCreate(BaseModel):
     ttl_seconds: float = 3600.0
 
 
+class WorkflowStepCreate(BaseModel):
+    id: str
+    job_kind: Literal["chat", "specialist", "media", "agent"]
+    request_template: dict[str, Any] = Field(default_factory=dict)
+    depends_on: list[str] = Field(default_factory=list)
+
+
+class WorkflowDefinitionCreate(BaseModel):
+    name: str
+    steps: list[WorkflowStepCreate]
+
+
 def create_app(config_root: str | None = None) -> FastAPI:
     kernel = SovereignKernel.build(config_root)
     session = SessionAuth(kernel.config.state_dir / "session.token")
@@ -137,7 +149,12 @@ def create_app(config_root: str | None = None) -> FastAPI:
     dispatcher = JobDispatcher(
         kernel.jobs,
         kernel.runs,
-        executor=lambda job, run: job_executor.execute(kernel, job, run),
+        # submit_callback closes over `dispatcher` itself, defined two lines below --
+        # safe because a lambda body is only evaluated when called, and no job runs
+        # before this assignment completes (FIXES.md Tier 5: this is what lets a
+        # WorkflowInstance's downstream step actually get dispatched once its
+        # dependencies succeed, not just recorded as a new Job row).
+        executor=lambda job, run: job_executor.execute(kernel, job, run, submit_callback=dispatcher.submit),
         max_concurrency=int(resources.get("max_concurrent_jobs", 4)),
         queue_max=int(resources.get("job_queue_max", 100)),
     )
@@ -675,5 +692,63 @@ def create_app(config_root: str | None = None) -> FastAPI:
     @app.delete("/workspaces/leases/{lease_id}", dependencies=[Depends(require_session)])
     async def release_workspace_lease(lease_id: str) -> None:
         kernel.workspace_leases.release(lease_id)
+
+    # --- Tier 5 continued: workflow DAGs -----------------------------------------------
+
+    @app.post("/workflows/definitions", status_code=201, dependencies=[Depends(require_session)])
+    async def create_workflow_definition(request: WorkflowDefinitionCreate) -> dict[str, Any]:
+        from sovereign_ai.kernel.workflows import WorkflowValidationError
+
+        try:
+            return kernel.workflows.create_definition(
+                request.name, [step.model_dump() for step in request.steps]
+            ).model_dump()
+        except WorkflowValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/workflows/definitions/{definition_id}")
+    async def get_workflow_definition(definition_id: str) -> dict[str, Any]:
+        definition = kernel.workflow_definitions.get(definition_id)
+        if definition is None:
+            raise HTTPException(status_code=404, detail="workflow definition not found")
+        return definition.model_dump()
+
+    @app.get("/workflows/definitions/by-name/{name}")
+    async def list_workflow_definition_versions(name: str) -> dict[str, Any]:
+        return {"versions": [d.model_dump() for d in kernel.workflow_definitions.list_versions(name)]}
+
+    @app.post(
+        "/workflows/definitions/{definition_id}/start",
+        status_code=201,
+        dependencies=[Depends(require_session)],
+    )
+    async def start_workflow(definition_id: str) -> dict[str, Any]:
+        try:
+            instance, jobs = kernel.workflows.start(definition_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        submitted = []
+        for job in jobs:
+            try:
+                dispatcher.submit(job)
+            except QueueFullError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            submitted.append(job.model_dump())
+        return {"instance": instance.model_dump(), "jobs": submitted}
+
+    @app.get("/workflows/instances/{instance_id}")
+    async def get_workflow_instance(instance_id: str) -> dict[str, Any]:
+        instance = kernel.workflow_instances.get(instance_id)
+        if instance is None:
+            raise HTTPException(status_code=404, detail="workflow instance not found")
+        return instance.model_dump()
+
+    @app.get("/workflows/definitions/{definition_id}/instances")
+    async def list_workflow_instances(definition_id: str) -> dict[str, Any]:
+        return {
+            "instances": [
+                i.model_dump() for i in kernel.workflow_instances.list_for_definition(definition_id)
+            ]
+        }
 
     return app

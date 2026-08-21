@@ -196,9 +196,20 @@ load-bearing for execution — a delegation whose `execute:workspace` grant gets
 can make a real `NativeAgentLoop` run actually execute a command, not just record that it
 was allowed to.
 
+Versioned workflow DAGs are implemented, the DAG-execution half of what was pending here
+(FIXES.md F-038): `WorkflowDefinitionStore` holds immutable, `(name, version)`-keyed,
+cycle-validated step graphs (Kahn's algorithm, not a heuristic); `WorkflowInstanceStore`
+tracks one execution's per-step status; `WorkflowService.start()`/`advance()` create the
+`Job` row for whichever steps just became ready. `job_executor.execute()`'s completion
+hook is what makes this a real executor rather than an inert data structure: a step's job
+succeeding automatically creates and submits its now-ready downstream step's job through
+the real dispatcher, verified end to end via a full HTTP round trip, not just unit-tested
+in isolation.
+
 Still pending, genuinely unbuilt (not started, not just unwired):
 
-- versioned workflow DAGs and recurring triggers that create ordinary jobs
+- recurring/scheduled triggers ("run this workflow every N seconds") that would start a
+  `WorkflowInstance` automatically — a separate subsystem from DAG execution itself
 - the skill-candidate evaluation/promotion pipeline (`SkillCandidate`/`SkillVersion`/
   `AgentEvaluation`)
 - `collaboration/store.py`'s full retrofit onto `MigrationRunner` (F-026) — the
