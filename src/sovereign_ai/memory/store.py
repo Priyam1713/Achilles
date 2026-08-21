@@ -82,7 +82,17 @@ class MemoryStore:
                 "INSERT INTO memories_fts(id, content, source, project) VALUES(?,?,?,?)",
                 (memory_id, content, source or "", project or ""),
             )
+            if supersedes is not None:
+                # Keep the old memory row for provenance/audit, but pull it out of the
+                # lexical index so a search never surfaces both the stale and current
+                # version (FIXES.md F-008).
+                con.execute("DELETE FROM memories_fts WHERE id=?", (supersedes,))
         return memory_id
+
+    def retire(self, memory_id: str) -> None:
+        """Remove a memory from the lexical index without deleting its audit row."""
+        with self._connect() as con:
+            con.execute("DELETE FROM memories_fts WHERE id=?", (memory_id,))
 
     def search_lexical(self, query: str, limit: int = 12) -> list[dict[str, Any]]:
         with self._connect() as con:

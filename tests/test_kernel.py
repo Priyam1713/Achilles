@@ -1120,3 +1120,76 @@ def test_context_builder_uses_wired_vector_retriever_from_kernel(tmp_path, monke
     assert k.context.text_vector.specialists is k.specialists
     assert k.context.text_vector.vector_store is k.vector_store
     assert k.memory_indexer.vector_store is k.vector_store
+
+
+def test_local_vector_store_delete_removes_row(tmp_path):
+    """FIXES.md F-008: supersession must be able to purge the old vector, not just
+    add a new one alongside it forever."""
+    from sovereign_ai.memory.vector import LocalVectorStore
+
+    v = LocalVectorStore(tmp_path / "vec.db")
+    v.put("a", [1, 0], "alpha")
+    v.put("b", [0, 1], "beta")
+    v.delete("a")
+    hits = v.search_vector([1, 0], limit=5)
+    assert [h["id"] for h in hits] == ["b"]
+
+
+def test_local_vector_store_search_ranks_by_cosine_similarity_at_scale(tmp_path):
+    """Correctness check on the vectorized (numpy) scoring path, not just the two-row
+    smoke test above: with many stored vectors of mixed norm, the nearest neighbour by
+    cosine similarity must still win, proving the batched matrix-vector product wasn't
+    a silent behavior change (FIXES.md F-008)."""
+    import random
+
+    from sovereign_ai.memory.vector import LocalVectorStore
+
+    rng = random.Random(7)
+    v = LocalVectorStore(tmp_path / "vec.db")
+    for i in range(500):
+        vec = [rng.uniform(-1, 1) for _ in range(16)]
+        v.put(f"noise-{i}", vec, f"noise {i}")
+    target = [1.0] + [0.0] * 15
+    v.put("target", [5.0] + [0.0] * 15, "the target, scaled up so norm alone can't win")
+    hits = v.search_vector(target, limit=3)
+    assert hits[0]["id"] == "target"
+    assert hits[0]["score"] > 0.999
+
+
+def test_memory_store_put_with_supersedes_retires_old_memory_from_fts(tmp_path):
+    """FIXES.md F-008: 'the FTS table has no delete or update path, so it desynchronizes
+    on the first supersession' -- a superseded memory must stop surfacing in lexical
+    search, while its row stays in `memories` for provenance/audit."""
+    from sovereign_ai.memory.store import MemoryStore
+
+    store = MemoryStore(tmp_path / "mem.db")
+    old_id = store.put("fact", "the sky is green", source="test")
+    assert store.search_lexical("green")
+
+    new_id = store.put("fact", "the sky is blue", source="test", supersedes=old_id)
+    hits = store.search_lexical("green")
+    assert hits == []
+    assert [h["id"] for h in store.search_lexical("blue")] == [new_id]
+
+    with store._connect() as con:
+        row = con.execute("SELECT id, supersedes FROM memories WHERE id=?", (old_id,)).fetchone()
+    assert row is not None and row["id"] == old_id
+
+
+def test_memory_indexer_supersedes_purges_old_vector(tmp_path):
+    from sovereign_ai.memory.retrieval_adapter import MemoryIndexer
+    from sovereign_ai.memory.vector import LocalVectorStore
+
+    store = LocalVectorStore(tmp_path / "vec.db")
+    fake = _FakeSpecialists(
+        embeddings={"the sky is green": [1.0, 0.0], "the sky is blue": [0.0, 1.0]}
+    )
+    indexer = MemoryIndexer(fake, store)
+
+    async def drive():
+        await indexer.index("mem-old", "the sky is green")
+        await indexer.index("mem-new", "the sky is blue", supersedes="mem-old")
+
+    asyncio.run(drive())
+    hits = store.search_vector([1.0, 0.0], limit=5)
+    assert [h["id"] for h in hits] == ["mem-new"]

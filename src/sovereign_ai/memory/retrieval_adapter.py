@@ -106,6 +106,7 @@ class MemoryIndexer:
         trust: str = "trusted_local",
         confidence: float = 1.0,
         metadata: dict[str, Any] | None = None,
+        supersedes: str | None = None,
     ) -> None:
         result = await self.specialists.invoke(
             CapabilityRequest(capability=self.embed_capability, mode=RoutingMode.FAST),
@@ -117,3 +118,7 @@ class MemoryIndexer:
             memory_id, vector, content=content, source=source, trust=trust,
             confidence=confidence, metadata=metadata,
         )
+        if supersedes is not None:
+            # Mirrors MemoryStore.put()'s FTS cleanup: a superseded memory must stop
+            # being retrievable by meaning too, not just by keyword (FIXES.md F-008).
+            self.vector_store.delete(supersedes)
