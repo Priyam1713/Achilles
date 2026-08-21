@@ -55,10 +55,15 @@ class SpecialistVectorRetriever:
             )
         return vectors
 
-    async def search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+    async def search(
+        self, query: str, limit: int = 20, allowed_projects: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """`allowed_projects` mirrors `MemoryStore.search_lexical`'s parameter of the same
+        name (FIXES.md Tier 5) -- applied at the first (vector) stage, before reranking,
+        so a scoped-out memory never even reaches the reranker."""
         (query_vector,) = await self.embed([query])
         first_stage = self.vector_store.search_vector(
-            query_vector, limit=limit * self.first_stage_multiplier
+            query_vector, limit=limit * self.first_stage_multiplier, allowed_projects=allowed_projects
         )
         if not first_stage:
             return []
@@ -107,6 +112,7 @@ class MemoryIndexer:
         confidence: float = 1.0,
         metadata: dict[str, Any] | None = None,
         supersedes: str | None = None,
+        project: str | None = None,
     ) -> None:
         result = await self.specialists.invoke(
             CapabilityRequest(capability=self.embed_capability, mode=RoutingMode.FAST),
@@ -116,7 +122,7 @@ class MemoryIndexer:
         (vector,) = result["result"]
         self.vector_store.put(
             memory_id, vector, content=content, source=source, trust=trust,
-            confidence=confidence, metadata=metadata,
+            confidence=confidence, metadata=metadata, project=project,
         )
         if supersedes is not None:
             # Mirrors MemoryStore.put()'s FTS cleanup: a superseded memory must stop

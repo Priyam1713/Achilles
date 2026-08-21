@@ -1456,6 +1456,51 @@ not fabrication.
   `ExecutionBroker`, `collaboration/store.py`'s full `MigrationRunner` retrofit, and
   `AgentProfile` identity propagation into `Run` records.
 
+### F-033 — Added: enforceable memory scope filtering (`AgentProfile.memory_scopes` had
+  nothing reading it)
+
+- **Severity:** `minor` (the field existed with no consumer — the same "capability slot
+  with nothing reading it" pattern F-008 and F-030 already found elsewhere) ·
+  **Status:** `fixed` as a mechanism; wiring a caller's actual profile through
+  automatically remains open, see below.
+- **Motivating problem:** `AgentProfile.memory_scopes: list[str]` (F-031) was a real
+  field with no code anywhere reading it. `MemoryStore` already stored a `project` column
+  on every memory (and `LocalVectorStore` had no equivalent column at all), but
+  `ContextBuilder.retrieve_text()` took no caller/subject/scope argument whatsoever — it
+  was a blind global search across every memory in the store, every time, for every
+  caller. `sensitivity` remains the same kind of write-only field this fix does not
+  address (see "Honest limits").
+- **Fix applied:** `MemoryStore.search_lexical()` and `LocalVectorStore.search_vector()`
+  both gained an `allowed_projects: list[str] | None = None` parameter with identical
+  semantics: `None` applies no filter (every existing caller's behavior is completely
+  unchanged, since none of them pass it); `[]` means unscoped memories only (`project IS
+  NULL`) — the fail-closed reading for a profile with zero granted scopes, not "no
+  filter"; a non-empty list means unscoped plus those specific projects. `LocalVectorStore`
+  gained the `project` column it never had (idempotent `PRAGMA table_info` + `ALTER
+  TABLE`, matching the pattern already used for collaboration's `agent_profile_id`), and
+  `put()`/`MemoryIndexer.index()` both now accept and store it, so a memory's scope tag
+  is actually preserved into the vector index, not silently dropped. `ContextBuilder
+  .retrieve_text()` threads `allowed_projects` into both the lexical and vector calls —
+  the one place every text context assembly passes through, so a caller that does pass a
+  scope gets it enforced on both retrieval paths, not just one.
+- **Verification:** 3 new tests, all asserting on real filtered output, not on the
+  parameter merely being accepted: lexical search returns all 3 memories unrestricted,
+  exactly the unscoped one when `allowed_projects=[]`, and unscoped-plus-`alpha` (never
+  `beta`) when `allowed_projects=["alpha"]` — the same three-way check repeated for
+  `LocalVectorStore.search_vector`. A third test uses a small recording fake
+  `VectorRetriever` to prove `ContextBuilder.retrieve_text` actually forwards
+  `allowed_projects` to the vector stage's `search()` call, while a real `MemoryStore`
+  proves the lexical stage is genuinely filtered in the same call. Full suite
+  **84 passed**, `ruff check src/ tests/ scripts/` clean.
+- **Honest limits, matching the precedent set by `WorkspaceLease` (F-031):** the
+  *mechanism* is real and enforced when exercised, but nothing currently calls
+  `retrieve_text(..., allowed_projects=profile.memory_scopes)` automatically — no code
+  path today knows "which `AgentProfile` is asking" (the same identity-propagation gap
+  F-031 already named for `Run` records applies here too: `NativeAgentLoop`/
+  `job_executor` have no current-profile concept to read `memory_scopes` from). Wiring
+  that is real, separate integration work, not bundled into this pass. `sensitivity`
+  remains unread by anything, unlike `project`/`memory_scopes` after this fix.
+
 ---
 
 ## Priority order
@@ -1512,14 +1557,20 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
     existing state (events/memberships for mailbox; grants/leases/jobs for presence) —
     no new mutable authority or self-asserted status, matching the design note's own
     "avoids another mutable queue and model-claimed status."
+11. ~~**F-033**~~ — **fixed as a mechanism.** `MemoryStore`/`LocalVectorStore`/
+    `ContextBuilder` all genuinely enforce `allowed_projects` scope filtering when a
+    caller passes it — proven by tests asserting on filtered output, not just parameter
+    acceptance. What remains open is propagation: no code path yet knows which
+    `AgentProfile` a given call is acting for, so nothing calls it automatically yet.
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
 **F-013** (retrieval stack right-sizing, blocked on the same licence review); **F-022**
 (explicitly the user's values decision, not mine — already resolved for personal use via
 the local overlay, F-025). Every cleanup-tier item (F-006 through F-024) is now `fixed`.
-Tier 5's safety-critical core (F-031) and mailbox/presence (F-032) are built; remaining
-Tier 5 pieces (enforceable memory ACLs, workflow DAGs, skill evaluation, `WorkspaceLease`
-enforcement in `ExecutionBroker`) and all of Tier 6 (harness tournament, desktop product,
-remote providers) remain unstarted — genuine new subsystem builds, not bounded defect
+Tier 5's safety-critical core (F-031), mailbox/presence (F-032) and memory scope
+filtering (F-033) are built; remaining Tier 5 pieces (workflow DAGs, skill evaluation,
+`WorkspaceLease` enforcement in `ExecutionBroker`, and `AgentProfile` identity
+propagation into `Run`/memory-scope calls) and all of Tier 6 (harness tournament, desktop
+product, remote providers) remain unstarted — genuine new subsystem builds, not bounded defect
 fixes.

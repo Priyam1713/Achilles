@@ -153,10 +153,21 @@ derives `active`/`idle` purely from whether the subject holds an active `Capabil
 an active `WorkspaceLease`, or a delegation with a `queued`/`running` job — no self-asserted
 status, no new liveness signal invented.
 
+Memory scope filtering is implemented as a real, enforced mechanism (FIXES.md F-033):
+`MemoryStore.search_lexical()` and `LocalVectorStore.search_vector()` both accept an
+`allowed_projects` filter (unscoped memories always visible; a non-empty list adds those
+specific projects; an empty list means unscoped-only — the fail-closed reading for zero
+granted scopes), and `ContextBuilder.retrieve_text()` threads it through both the lexical
+and vector retrieval stages. What remains open is propagation, not the mechanism: nothing
+currently calls it with an actual `AgentProfile.memory_scopes` value, because no code path
+yet knows which profile a given call is acting for — the same gap already named below for
+`Run` identity.
+
 Still pending, genuinely unbuilt (not started, not just unwired):
 
-- enforceable memory scope/visibility filters — `AgentProfile.memory_scopes` is a real
-  field; nothing yet reads it to restrict what `MemoryStore`/`ContextBuilder` return
+- propagating `AgentProfile` identity through `NativeAgentLoop`/`job_executor` so calls
+  into `ContextBuilder.retrieve_text()` (memory scope) and `Run` records (F-031) actually
+  know which profile they are acting for
 - versioned workflow DAGs and recurring triggers that create ordinary jobs
 - the skill-candidate evaluation/promotion pipeline (`SkillCandidate`/`SkillVersion`/
   `AgentEvaluation`)
@@ -165,8 +176,6 @@ Still pending, genuinely unbuilt (not started, not just unwired):
   path requires an active lease yet — a deliberate scope boundary, not an oversight, since
   making every execution call require one would change behavior every existing
   execution/`NativeAgentLoop` test currently depends on)
-- propagating `AgentProfile` identity through `NativeAgentLoop`/`job_executor` so a `Run`
-  actually records which profile it acted for
 - `collaboration/store.py`'s full retrofit onto `MigrationRunner` (F-026) — the
   `agent_profile_id` column was added via a targeted, idempotent `ALTER TABLE` instead,
   since that store is hash-chain integrity-critical and a full retrofit is real, separate

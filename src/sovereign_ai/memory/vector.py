@@ -44,6 +44,13 @@ class LocalVectorStore:
             c.execute(
                 "CREATE TABLE IF NOT EXISTS vectors (id TEXT PRIMARY KEY, dim INTEGER NOT NULL, vec BLOB NOT NULL, content TEXT, source TEXT, trust TEXT, confidence REAL, metadata_json TEXT)"
             )
+            # FIXES.md Tier 5: mirrors memory/store.py's `project` scope tag, so vector
+            # search can be filtered by AgentProfile.memory_scopes the same way lexical
+            # search already is. `_init()` runs on every construction (this store predates
+            # MigrationRunner), so the column add must be idempotent -- check first.
+            existing_columns = {row["name"] for row in c.execute("PRAGMA table_info(vectors)").fetchall()}
+            if "project" not in existing_columns:
+                c.execute("ALTER TABLE vectors ADD COLUMN project TEXT")
 
     @staticmethod
     def _pack(v: Iterable[float]) -> tuple[int, bytes]:
@@ -59,22 +66,40 @@ class LocalVectorStore:
         trust: str = "trusted_local",
         confidence: float = 1.0,
         metadata: dict | None = None,
+        project: str | None = None,
     ):
         dim, blob = self._pack(vector)
         with self._con() as c:
             c.execute(
-                "INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?,?,?)",
-                (id, dim, blob, content, source, trust, confidence, json.dumps(metadata or {})),
+                """INSERT OR REPLACE INTO vectors
+                   (id,dim,vec,content,source,trust,confidence,metadata_json,project)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                (id, dim, blob, content, source, trust, confidence, json.dumps(metadata or {}), project),
             )
 
     def delete(self, id: str) -> None:
         with self._con() as c:
             c.execute("DELETE FROM vectors WHERE id=?", (id,))
 
-    def search_vector(self, query: Iterable[float], limit: int = 20):
+    def search_vector(
+        self, query: Iterable[float], limit: int = 20, allowed_projects: list[str] | None = None
+    ):
+        """`allowed_projects` mirrors `MemoryStore.search_lexical`'s parameter of the same
+        name (FIXES.md Tier 5): `None` applies no filter (existing behavior, unchanged);
+        an empty list means unscoped vectors only; a non-empty list means unscoped plus
+        those specific projects."""
         q = np.asarray([float(x) for x in query], dtype=np.float32)
+        sql = "SELECT * FROM vectors WHERE dim=?"
+        params = [len(q)]
+        if allowed_projects is not None:
+            if allowed_projects:
+                placeholders = ",".join("?" for _ in allowed_projects)
+                sql += f" AND (project IS NULL OR project IN ({placeholders}))"
+                params.extend(allowed_projects)
+            else:
+                sql += " AND project IS NULL"
         with self._con() as c:
-            rows = c.execute("SELECT * FROM vectors WHERE dim=?", (len(q),)).fetchall()
+            rows = c.execute(sql, params).fetchall()
         if not rows:
             return []
 

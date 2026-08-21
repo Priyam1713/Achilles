@@ -1783,3 +1783,73 @@ def test_roster_http_mailbox_and_presence(tmp_path, monkeypatch):
 
         missing = client.get("/collaboration/identities/does-not-exist/mailbox")
         assert missing.status_code == 404
+
+
+# --- Tier 5 continued: enforceable memory scope filtering -------------------------------
+
+
+def test_memory_store_search_lexical_scope_filtering(tmp_path):
+    """FIXES.md Tier 5: allowed_projects=None preserves existing unrestricted behavior;
+    an empty list means unscoped-only (fail-closed for a profile with zero granted
+    scopes); a non-empty list means unscoped plus those specific projects."""
+    from sovereign_ai.memory.store import MemoryStore
+
+    store = MemoryStore(tmp_path / "mem.db")
+    store.put("fact", "shared knowledge everyone can see", project=None)
+    store.put("fact", "alpha project secret plan", project="alpha")
+    store.put("fact", "beta project secret plan", project="beta")
+
+    unrestricted = store.search_lexical("secret OR shared OR knowledge OR plan")
+    assert len(unrestricted) == 3
+
+    unscoped_only = store.search_lexical("secret OR shared OR knowledge OR plan", allowed_projects=[])
+    assert [r["project"] for r in unscoped_only] == [None]
+
+    alpha_scoped = store.search_lexical(
+        "secret OR shared OR knowledge OR plan", allowed_projects=["alpha"]
+    )
+    projects = {r["project"] for r in alpha_scoped}
+    assert projects == {None, "alpha"}
+    assert "beta" not in projects
+
+
+def test_local_vector_store_search_vector_scope_filtering(tmp_path):
+    from sovereign_ai.memory.vector import LocalVectorStore
+
+    store = LocalVectorStore(tmp_path / "vec.db")
+    store.put("shared", [1.0, 0.0], "shared", project=None)
+    store.put("alpha", [1.0, 0.0], "alpha-scoped", project="alpha")
+    store.put("beta", [1.0, 0.0], "beta-scoped", project="beta")
+
+    assert {h["id"] for h in store.search_vector([1.0, 0.0], limit=10)} == {"shared", "alpha", "beta"}
+    assert {h["id"] for h in store.search_vector([1.0, 0.0], limit=10, allowed_projects=[])} == {"shared"}
+    assert {h["id"] for h in store.search_vector([1.0, 0.0], limit=10, allowed_projects=["alpha"])} == {
+        "shared", "alpha",
+    }
+
+
+class _RecordingVectorRetriever:
+    """Records the args ContextBuilder.retrieve_text calls it with, proving propagation
+    without needing the full specialist-broker machinery."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, int, list[str] | None]] = []
+
+    async def search(self, query, limit=20, allowed_projects=None):
+        self.calls.append((query, limit, allowed_projects))
+        return []
+
+
+def test_context_builder_propagates_scope_to_both_lexical_and_vector_search(tmp_path):
+    from sovereign_ai.memory.context import ContextBuilder
+    from sovereign_ai.memory.store import MemoryStore
+
+    memory = MemoryStore(tmp_path / "mem.db")
+    memory.put("fact", "alpha project detail", project="alpha")
+    memory.put("fact", "beta project detail", project="beta")
+    fake_vector = _RecordingVectorRetriever()
+    builder = ContextBuilder(memory, text_vector=fake_vector)
+
+    items = asyncio.run(builder.retrieve_text("project detail", allowed_projects=["alpha"]))
+    assert [item.content for item in items] == ["alpha project detail"]
+    assert fake_vector.calls == [("project detail", 24, ["alpha"])]

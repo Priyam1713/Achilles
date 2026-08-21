@@ -94,18 +94,35 @@ class MemoryStore:
         with self._connect() as con:
             con.execute("DELETE FROM memories_fts WHERE id=?", (memory_id,))
 
-    def search_lexical(self, query: str, limit: int = 12) -> list[dict[str, Any]]:
+    def search_lexical(
+        self, query: str, limit: int = 12, allowed_projects: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """`allowed_projects=None` (the default) applies no scope filter -- every existing
+        caller keeps its current, unrestricted behavior. Pass a list (empty or not) to
+        enforce `AgentProfile.memory_scopes` (FIXES.md Tier 5): a memory with no `project`
+        set is always visible (it was never scoped to begin with), and a memory whose
+        `project` is in the list is visible; anything else is filtered out before it ever
+        reaches a caller. An empty list therefore means "unscoped memories only" -- the
+        fail-closed reading for a profile with zero granted scopes, not "no filter"."""
+        sql = """
+            SELECT m.*, bm25(memories_fts) AS rank
+            FROM memories_fts f JOIN memories m ON f.id=m.id
+            WHERE memories_fts MATCH ?
+            AND (m.expires_at IS NULL OR m.expires_at > ?)
+        """
+        params: list[Any] = [query, time.time()]
+        if allowed_projects is not None:
+            if allowed_projects:
+                placeholders = ",".join("?" for _ in allowed_projects)
+                sql += f" AND (m.project IS NULL OR m.project IN ({placeholders}))"
+                params.extend(allowed_projects)
+            else:
+                # No scopes granted: only unscoped memories are visible, not everything.
+                sql += " AND m.project IS NULL"
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit)
         with self._connect() as con:
-            rows = con.execute(
-                """
-                SELECT m.*, bm25(memories_fts) AS rank
-                FROM memories_fts f JOIN memories m ON f.id=m.id
-                WHERE memories_fts MATCH ?
-                AND (m.expires_at IS NULL OR m.expires_at > ?)
-                ORDER BY rank LIMIT ?
-                """,
-                (query, time.time(), limit),
-            ).fetchall()
+            rows = con.execute(sql, params).fetchall()
         out = []
         for row in rows:
             item = dict(row)

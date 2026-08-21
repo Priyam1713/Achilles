@@ -7,7 +7,9 @@ from .store import MemoryStore
 
 
 class VectorRetriever(Protocol):
-    async def search(self, query: Any, limit: int = 20) -> list[dict[str, Any]]: ...
+    async def search(
+        self, query: Any, limit: int = 20, allowed_projects: list[str] | None = None
+    ) -> list[dict[str, Any]]: ...
 
 
 @dataclass
@@ -30,8 +32,16 @@ class ContextBuilder:
         self.text_vector = text_vector
         self.multimodal_vector = multimodal_vector
 
-    async def retrieve_text(self, query: str, limit: int = 12) -> list[ContextItem]:
-        lexical = self.memory.search_lexical(query, limit=limit)
+    async def retrieve_text(
+        self, query: str, limit: int = 12, allowed_projects: list[str] | None = None
+    ) -> list[ContextItem]:
+        """`allowed_projects` enforces `AgentProfile.memory_scopes` (FIXES.md Tier 5) at
+        the one place every text context assembly passes through, lexical and vector
+        alike. `None` (the default) applies no filter -- every existing caller keeps its
+        current, unrestricted behavior; nothing currently threads a profile's scopes in
+        here automatically (that propagation -- knowing *which* profile a given call is
+        acting for -- remains open, tracked alongside F-031's `Run`-identity gap)."""
+        lexical = self.memory.search_lexical(query, limit=limit, allowed_projects=allowed_projects)
         merged: dict[str, ContextItem] = {}
         for row in lexical:
             merged[row["id"]] = ContextItem(
@@ -42,7 +52,9 @@ class ContextBuilder:
                 score=max(0.01, 1.0 / (1.0 + abs(row["rank"]))),
             )
         if self.text_vector:
-            for row in await self.text_vector.search(query, limit=limit * 2):
+            for row in await self.text_vector.search(
+                query, limit=limit * 2, allowed_projects=allowed_projects
+            ):
                 key = row.get("id") or row.get("content", "")[:64]
                 score = float(row.get("score", 0.0))
                 if key in merged:
