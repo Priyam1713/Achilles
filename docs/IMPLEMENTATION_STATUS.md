@@ -171,13 +171,30 @@ policy/backend logic runs. No existing caller passes these yet, so this is addit
 behavior change — verified by the full suite passing unchanged the moment the parameters
 were wired, before any new test existed.
 
+The identity-propagation gap named above is now closed for `Run` records and
+`ExecutionBroker` (FIXES.md F-035): `AgentPayload` carries `agent_profile_id`/
+`workspace_lease_id`, `NativeAgentLoop._run_command` forwards them into
+`execution.run_approved()`, and `RosterService`'s delegation-spawned jobs set
+`agent_profile_id` to the delegating subject — which lands on the `Run` row for free,
+since `JobDispatcher.submit()` already snapshots the whole job request onto it. Memory
+scope (F-033) is a separate story: nothing in production code calls
+`ContextBuilder.retrieve_text()` at all yet, so there is no call site to propagate into.
+
+**Writing F-035's own tests surfaced a real, open gap (FIXES.md F-036, flagged for a
+decision, not fixed): holding an active `CapabilityGrant` or a genuinely matching
+`WorkspaceLease` does not currently let a `NativeAgentLoop`-issued `run_command` succeed
+at all.** `PolicyEngine`'s untrusted-content gate returns `allowed=False` unconditionally
+for `action="execute"` from the `UNTRUSTED_MODEL_OUTPUT` trust `_run_command` always uses
+— regardless of `mutates_state`, regardless of the `approved` flag, regardless of any
+grant or lease held, because `ExecutionBroker` raises on `not decision.allowed` before
+ever reaching the `approval_required`/`approved` check. This predates this session (an
+existing test already asserts the denial as correct), so it may be intentional
+defense-in-depth — but if so, `CapabilityGrant`/`ApprovalRequest` is presumably meant to
+be the real path to execution, and nothing currently wires it into `ExecutionBroker`
+either. See F-036 for the two candidate fixes and why this needs a decision.
+
 Still pending, genuinely unbuilt (not started, not just unwired):
 
-- propagating `AgentProfile` identity through `NativeAgentLoop`/`job_executor` so calls
-  into `ContextBuilder.retrieve_text()` (memory scope, F-033) and `ExecutionBroker
-  .run_approved()` (workspace lease, F-034), and `Run` records (F-031), actually know
-  which profile they are acting for — one propagation gap, named three times because it
-  blocks three different opt-in mechanisms from ever firing automatically
 - versioned workflow DAGs and recurring triggers that create ordinary jobs
 - the skill-candidate evaluation/promotion pipeline (`SkillCandidate`/`SkillVersion`/
   `AgentEvaluation`)

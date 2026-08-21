@@ -1550,6 +1550,117 @@ not fabrication.
   lease enforcement the *default* for every execution call remains a separate, larger
   decision this fix deliberately did not make.
 
+### F-035 — Closed: the propagation gap F-031/F-033/F-034 all named — `AgentProfile`
+  identity now actually flows into `Run` records and `ExecutionBroker`
+
+- **Severity:** `minor` (unblocks three already-built, previously inert opt-in
+  mechanisms) · **Status:** `fixed`
+- **Motivating problem:** F-031, F-033 and F-034 each built a real, tested,
+  opt-in-by-parameter mechanism (`Run` identity, memory scope filtering, `WorkspaceLease`
+  enforcement) and each one separately noted the same gap: nothing in `NativeAgentLoop`/
+  `job_executor` actually knew which `AgentProfile` a call was acting for, so none of the
+  three could ever fire outside a test.
+- **Fix applied:** `AgentPayload` (`kernel/job_executor.py`) gained
+  `agent_profile_id`/`workspace_lease_id` fields, both optional and unused by default —
+  an ordinary agent job (no delegation involved) is unaffected. `_run_agent_loop` threads
+  both into the loop's `state` dict; `NativeAgentLoop._run_command` forwards
+  `state.get("agent_profile_id")`/`state.get("workspace_lease_id")` into
+  `execution.run_approved()`'s new F-034 parameters. `RosterService`'s two job-creation
+  call sites (`propose_delegation`'s immediate-grant path and `resolve_approval`'s
+  all-grants-satisfied path) now set `"agent_profile_id": <the delegating subject>` on
+  the job request, with the assignment ordered *after* any caller-supplied `inputs` so a
+  caller can never override which subject a delegated job is actually attributed to.
+  `Run` identity needed no dispatcher change at all: `JobDispatcher.submit()` already
+  snapshots the whole `job.request` onto the new `Run` row, so `agent_profile_id`
+  landing in `job.request` makes it `Run.request["agent_profile_id"]` for free.
+- **Verification:** 6 new tests — `AgentPayload` accepts and defaults both new fields;
+  both `RosterService` job-creation paths (immediate grant and post-approval) produce a
+  `job.request["agent_profile_id"]` matching the delegating subject; and, the strongest
+  proof, two tests driving a real `NativeAgentLoop` through a real `ExecutionBroker`/
+  `WorkspaceLeaseStore` with `state["agent_profile_id"]`/`state["workspace_lease_id"]`
+  set — one with a lease genuinely held by that subject (clears the lease gate; see
+  F-036 for what happens next), one with a lease held by a *different* subject (denied,
+  by the lease gate specifically, confirmed via the exact "not active for subject"
+  message rather than a generic denial). Full suite **96 passed**,
+  `ruff check src/ tests/ scripts/` clean.
+- **What this does not close:** memory-scope propagation (F-033) specifically remains
+  open for a different reason than "no identity to propagate" — nothing in production
+  code calls `ContextBuilder.retrieve_text()` at all yet (confirmed by grep: only its own
+  definition and tests reference it). There is currently no request path augmenting agent
+  context with retrieved memory, so there is nothing to propagate a profile's
+  `memory_scopes` *into*. That is a materially different, larger gap than propagation
+  alone.
+- **What writing this fix's tests surfaced — see F-036, left open deliberately:** the
+  "genuinely matching lease" test could not be made to reach backend selection the way
+  its equivalent in F-034 did. It is denied — correctly, per current `PolicyEngine`
+  behavior — by policy, downstream of the lease check. Holding an active `CapabilityGrant`
+  or `WorkspaceLease` does not currently let a `NativeAgentLoop`-issued `run_command`
+  succeed at all, regardless of approval. This is a real, pre-existing architectural gap
+  this fix's own tests exposed, not something introduced here.
+
+### F-036 — `NativeAgentLoop`'s `run_command` cannot succeed under any circumstances,
+  regardless of grants, leases or the `approved` flag — open, needs a decision
+
+- **Severity:** `major` (the flagship "agent can act" capability from F-027 has no
+  working path to actually executing anything) · **Status:** `open` — flagged for a
+  decision, not resolved unilaterally, matching how this session already paused once for
+  Tier 5's own go-ahead before writing any of F-031 through F-035.
+- **Evidence, confirmed directly against `PolicyEngine.evaluate()`, not inferred from
+  reading the code:**
+  ```
+  mutates_state=True:  allowed=False approval_required=True
+    reason='Untrusted content cannot directly authorize mutation or credential access.'
+  mutates_state=False: allowed=False approval_required=True
+    reason='Untrusted content cannot directly authorize mutation or credential access.'
+  ```
+  for `action="execute", scope="workspace", trust=UNTRUSTED_MODEL_OUTPUT` — the exact
+  request `NativeAgentLoop._run_command` always constructs (`trust` is hardcoded there,
+  not settable by a caller). `PolicyEngine`'s untrusted-content gate fires whenever
+  `trust` is one of the five untrusted labels **and** (`mutates_state` **or**
+  `uses_credentials` **or** `action in {"execute","credential","delete","network_post"}`)
+  — `action="execute"` alone is sufficient, so `mutates_state` never matters for this
+  tool. The gate sets `allowed=False`, and `ExecutionBroker.run_approved()` raises
+  `PermissionError(decision.reason)` on `not decision.allowed` *before* it ever reaches
+  the separate `decision.approval_required and not approved` check. The `approved: bool`
+  parameter that flows from `AgentPayload.approved` through `state["approved"]` through
+  `_execute_tool`/`_run_command` — the whole "may require human approval" mechanism
+  `NativeAgentLoop`'s own `SYSTEM_PROMPT` describes to the model — is dead code for this
+  path: no value of `approved` changes the outcome, because the function never reaches
+  the branch that reads it. The same is true of F-034's new `WorkspaceLease` gate: a
+  lease that genuinely matches subject/path/write-mode clears *that* check and still hits
+  this same unconditional block immediately afterward (F-035's own test proves this).
+- **Impact:** As shipped, an agent driven by `NativeAgentLoop` cannot ever successfully
+  run a shell command — not with `approved=True`, not while holding an active
+  `CapabilityGrant`, not while holding a matching `WorkspaceLease`. `read_file`/
+  `list_directory` still work (they never go through `PolicyEngine` — only
+  `WorkspaceRegistry`), so the loop can observe but never act. This predates today's
+  session; F-027 built the loop and `PolicyEngine`'s untrusted gate already behaved this
+  way, but nothing had exercised the "approved path should eventually succeed" case until
+  F-035's tests tried to.
+- **Why this needs a decision, not a unilateral fix:** the existing test
+  `test_untrusted_cannot_authorize_execution` (pre-dates this session) explicitly asserts
+  `not d.allowed` for this exact gate and is clearly a deliberate security property, not
+  an oversight — this project's fail-closed stance may specifically intend that an
+  `approved` boolean flowing through agent-controlled loop state is *never* sufficient
+  provenance for authorizing execute/credential/delete/network_post, precisely because
+  the model itself could just always claim `"approved": true`. If so, the real intended
+  authorization path for an agent to ever execute something is presumably the
+  `CapabilityGrant`/`ApprovalRequest` system F-031 built — but *that* is not currently
+  wired into `ExecutionBroker.run_approved()` at all either: holding an active grant
+  changes nothing about what `PolicyEngine.evaluate()` returns. Two materially different
+  fixes are possible and this document should not pick one alone: (a) have
+  `ExecutionBroker.run_approved()` check `CapabilityGrantStore.is_active(subject_id,
+  action, scope)` *before* calling `PolicyEngine.evaluate()`, and treat an active grant as
+  already-satisfied authorization (skipping the untrusted gate for exactly that
+  subject/action/scope, for exactly the grant's TTL) — this makes `RosterService`'s
+  whole approval pipeline actually load-bearing for execution, not just record-keeping;
+  or (b) something narrower and more conservative that does not touch
+  `PolicyEngine.evaluate()`'s semantics at all. Either changes what "untrusted content
+  cannot directly authorize mutation" is allowed to mean in practice, which is exactly
+  the kind of safety-architecture call this project's own values (and this session's
+  precedent) say should be confirmed, not assumed.
+- **Fix:** not applied. Flagged for the user.
+
 ---
 
 ## Priority order
@@ -1616,15 +1727,33 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
     coverage, write mode) when a caller opts in via `subject_id`/`workspace_lease_id` —
     purely additive, verified by the full suite passing unchanged before any new test
     existed. Same propagation gap remains: nothing calls it automatically yet.
+13. ~~**F-035**~~ — **fixed.** The propagation gap F-031/F-033/F-034 all named is closed
+    for `Run` identity and `ExecutionBroker`: `AgentPayload`, `_run_agent_loop`,
+    `NativeAgentLoop._run_command` and both `RosterService` job-creation paths now
+    genuinely thread `agent_profile_id`/`workspace_lease_id` end to end, verified against
+    a real `NativeAgentLoop`/`ExecutionBroker`/`WorkspaceLeaseStore`, not mocks.
+    Memory-scope propagation (F-033) specifically stays open for a different, larger
+    reason: nothing calls `ContextBuilder.retrieve_text()` in production code at all yet.
+14. **F-036** — **open, flagged for a decision.** Writing F-035's own tests surfaced
+    that `NativeAgentLoop`'s `run_command` cannot succeed under any circumstances today —
+    not with `approved=True`, not while holding an active `CapabilityGrant` or a matching
+    `WorkspaceLease` — because `PolicyEngine`'s untrusted-content gate returns
+    `allowed=False` unconditionally for `action="execute"` from `UNTRUSTED_MODEL_OUTPUT`
+    trust, and `ExecutionBroker` raises on that before the `approval_required`/`approved`
+    branch is ever reached. This may be entirely intentional (an existing, pre-session
+    test explicitly asserts this exact denial), but if so, the actual mechanism by which
+    an agent is ever supposed to execute anything — presumably `CapabilityGrant` — isn't
+    wired into `ExecutionBroker` either. A real security-architecture decision, not
+    something to resolve unilaterally.
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
 **F-013** (retrieval stack right-sizing, blocked on the same licence review); **F-022**
 (explicitly the user's values decision, not mine — already resolved for personal use via
-the local overlay, F-025). Every cleanup-tier item (F-006 through F-024) is now `fixed`.
-Tier 5's safety-critical core (F-031), mailbox/presence (F-032), memory scope filtering
-(F-033) and opt-in `WorkspaceLease` enforcement (F-034) are all built; one propagation gap
-now blocks three of them from firing automatically (no code path knows which
-`AgentProfile`/`Run` a given call is acting for). Remaining Tier 5 pieces (workflow DAGs,
-skill evaluation) and all of Tier 6 (harness tournament, desktop product, remote
-providers) remain unstarted — genuine new subsystem builds, not bounded defect fixes.
+the local overlay, F-025); **F-036** (whether/how an active `CapabilityGrant` should ever
+let an agent-issued execute action actually succeed — a safety-architecture call).
+Every cleanup-tier item (F-006 through F-024) is now `fixed`. Tier 5's safety-critical
+core (F-031 through F-035) is built and its identity-propagation gap is closed for `Run`
+and `ExecutionBroker`. Remaining Tier 5 pieces (workflow DAGs, skill evaluation) and all
+of Tier 6 (harness tournament, desktop product, remote providers) remain unstarted —
+genuine new subsystem builds, not bounded defect fixes.

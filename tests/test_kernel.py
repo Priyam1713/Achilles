@@ -1984,3 +1984,110 @@ def test_execution_broker_raises_if_no_lease_store_configured(tmp_path):
 
     with pytest.raises(RuntimeError, match="no WorkspaceLeaseStore configured"):
         asyncio.run(drive())
+
+
+# --- Tier 5 continued: AgentProfile identity propagation --------------------------------
+
+
+def test_agent_payload_carries_profile_and_lease_ids():
+    from sovereign_ai.kernel.job_executor import AgentPayload
+
+    payload = AgentPayload(task="do work")
+    assert payload.agent_profile_id is None
+    assert payload.workspace_lease_id is None
+
+    scoped = AgentPayload(task="do work", agent_profile_id="swift", workspace_lease_id="lease-1")
+    assert scoped.agent_profile_id == "swift"
+    assert scoped.workspace_lease_id == "lease-1"
+
+
+def test_roster_service_delegation_job_carries_agent_profile_id_immediate_grant(tmp_path):
+    roster = _roster_with_fake_policy(tmp_path)
+    _, job = roster.propose_delegation(
+        "swift",
+        "read the repo",
+        [{"action": "read", "scope": "workspace", "mutates_state": False, "uses_credentials": False}],
+    )
+    assert job is not None
+    assert job.request["agent_profile_id"] == "swift"
+
+
+def test_roster_service_delegation_job_carries_agent_profile_id_after_approval(tmp_path):
+    roster = _roster_with_fake_policy(tmp_path)
+    roster.propose_delegation(
+        "swift", "run a command", [{"action": "execute", "scope": "workspace"}]
+    )
+    pending = roster.approvals.list_pending()
+    _, job = roster.resolve_approval(pending[0].id, "owner", True, "approved")
+    assert job is not None
+    assert job.request["agent_profile_id"] == "swift"
+
+
+def test_native_agent_loop_run_command_lease_gate_passes_but_policy_still_blocks(tmp_path, monkeypatch):
+    """A run_command call whose state carries a genuinely matching agent_profile_id/
+    workspace_lease_id clears the F-034 lease gate -- but is still denied, by
+    PolicyEngine, downstream of that gate. This is real, current behavior, not a
+    weakened test: `_run_command` hardcodes `trust=UNTRUSTED_MODEL_OUTPUT`, and
+    PolicyEngine's untrusted-content gate returns `allowed=False` for `action="execute"`
+    unconditionally -- regardless of `mutates_state` and regardless of the `approved`
+    flag, since the function returns on `not decision.allowed` before the
+    `approval_required and not approved` branch is ever reached. Confirmed directly
+    against PolicyEngine.evaluate() for both mutates_state values before writing this
+    test. See FIXES.md F-036: holding an active CapabilityGrant/WorkspaceLease does not
+    currently help a NativeAgentLoop-issued run_command succeed at all -- this is a real,
+    open gap, not something this test papers over."""
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    lease = k.workspace_leases.try_acquire(str(workspace), "swift-profile", writable=True, ttl_seconds=60)
+
+    fake = _FakeInference(['{"tool": "run_command", "args": {"argv": ["true"], "mutates_state": true}}'])
+    loop = NativeAgentLoop(fake, k.execution, k.workspaces, k.events)
+    state = {
+        "run_id": "test-run-lease",
+        "task": "run a command",
+        "workspace": str(workspace),
+        "approved": True,
+        "agent_profile_id": "swift-profile",
+        "workspace_lease_id": lease.id,
+    }
+
+    step = asyncio.run(loop.next_step(state))
+    observation = step.payload["observation"]
+    # Denied by PolicyEngine specifically (not by the lease gate -- that message says
+    # "not active for subject"/"covers"/"read-only", none of which appear here), proving
+    # the lease check itself passed and the block is downstream of it.
+    assert observation["error"] == (
+        "denied: Untrusted content cannot directly authorize mutation or credential access."
+    )
+
+
+def test_native_agent_loop_run_command_denied_by_mismatched_lease(tmp_path, monkeypatch):
+    """Same setup, but the run's state names a lease belonging to a different subject --
+    must be denied by the lease gate specifically, not silently ignored."""
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    lease = k.workspace_leases.try_acquire(str(workspace), "someone-else", writable=True, ttl_seconds=60)
+
+    fake = _FakeInference(['{"tool": "run_command", "args": {"argv": ["true"], "mutates_state": true}}'])
+    loop = NativeAgentLoop(fake, k.execution, k.workspaces, k.events)
+    state = {
+        "run_id": "test-run-lease-denied",
+        "task": "run a command",
+        "workspace": str(workspace),
+        "approved": True,
+        "agent_profile_id": "swift-profile",
+        "workspace_lease_id": lease.id,
+    }
+
+    step = asyncio.run(loop.next_step(state))
+    observation = step.payload["observation"]
+    assert "denied" in observation["error"]
+    assert "not active for subject" in observation["error"]

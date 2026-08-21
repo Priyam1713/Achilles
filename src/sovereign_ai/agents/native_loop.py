@@ -164,7 +164,7 @@ class NativeAgentLoop(AgentLoop):
             if tool == "list_directory":
                 return self._list_directory(args.get("path") or workspace or "")
             if tool == "run_command":
-                return await self._run_command(args, workspace, approved)
+                return await self._run_command(args, workspace, approved, state)
             return {"error": f"unknown tool: {tool!r}"}
         except PermissionError as exc:
             return {"error": f"denied: {exc}"}
@@ -194,18 +194,24 @@ class NativeAgentLoop(AgentLoop):
         return {"path": str(target), "entries": entries[:200]}
 
     async def _run_command(
-        self, args: dict[str, Any], workspace: str | None, approved: bool
+        self, args: dict[str, Any], workspace: str | None, approved: bool, state: dict[str, Any]
     ) -> dict[str, Any]:
         argv = args.get("argv")
         if not isinstance(argv, list) or not argv:
             return {"error": "run_command requires a non-empty 'argv' list"}
         mutates = bool(args.get("mutates_state", True))
+        # FIXES.md F-035: opts this call into WorkspaceLease enforcement (F-034) when the
+        # job that started this run supplied both -- e.g. a delegation-spawned run.
+        # Neither is set for an ordinary agent job, which reproduces exactly the
+        # pre-existing WorkspaceRegistry-only behavior.
         result = await self.execution.run_approved(
             [str(item) for item in argv],
             workspace,
             trust=TrustLabel.UNTRUSTED_MODEL_OUTPUT,
             approved=approved,
             mutates_state=mutates,
+            subject_id=state.get("agent_profile_id"),
+            workspace_lease_id=state.get("workspace_lease_id"),
         )
         return {
             "returncode": result.returncode,

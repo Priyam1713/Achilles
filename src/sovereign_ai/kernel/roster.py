@@ -145,7 +145,12 @@ class RosterService:
         if not all_active:
             return self.delegations.set_status(delegation.id, "awaiting_approval"), None
 
-        job = self.jobs.create(job_kind, {"delegation_id": delegation.id, **(inputs or {})})
+        # agent_profile_id is set last so a caller-supplied `inputs` dict can never
+        # override which subject this job is actually delegated to (FIXES.md F-035).
+        job = self.jobs.create(
+            job_kind,
+            {"delegation_id": delegation.id, **(inputs or {}), "agent_profile_id": parent_subject_id},
+        )
         delegation = self.delegations.set_status(delegation.id, "approved", child_job_id=job.id)
         return delegation, job
 
@@ -189,7 +194,12 @@ class RosterService:
             return approval, None
 
         job = self.jobs.create(
-            "agent", {"delegation_id": delegation.id, **delegation.inputs}
+            "agent",
+            {
+                "delegation_id": delegation.id,
+                **delegation.inputs,
+                "agent_profile_id": delegation.parent_subject_id,
+            },
         )
         self.delegations.set_status(delegation.id, "approved", child_job_id=job.id)
         return approval, job

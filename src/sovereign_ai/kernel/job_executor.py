@@ -41,6 +41,17 @@ class AgentPayload(BaseModel):
     mode: str = "smart"
     max_steps: int = 10
     approved: bool = False
+    # FIXES.md Tier 5/F-035: which AgentProfile this run is acting for, if any. Optional
+    # and unused by default -- an agent job submitted the ordinary way (no delegation
+    # involved) still has no profile, exactly as before this field existed. A delegation-
+    # spawned job (RosterService.propose_delegation/resolve_approval) is the intended
+    # source of a real value here. Recorded on the Run for free: JobDispatcher.submit()
+    # already snapshots the whole job.request onto the new Run, so this becomes
+    # Run.request["agent_profile_id"] with no dispatcher change. workspace_lease_id opts
+    # this run's run_command calls into WorkspaceLease enforcement (F-034); omitting it
+    # keeps today's behavior (WorkspaceRegistry-only) unchanged.
+    agent_profile_id: str | None = None
+    workspace_lease_id: str | None = None
 
 
 def _assistant_content(result: dict[str, Any]) -> str:
@@ -122,6 +133,8 @@ async def _run_agent_loop(kernel: SovereignKernel, job: JobRecord, run: RunRecor
         "mode": payload.mode,
         "max_steps": payload.max_steps,
         "approved": payload.approved,
+        "agent_profile_id": payload.agent_profile_id,
+        "workspace_lease_id": payload.workspace_lease_id,
     }
     steps: list[dict[str, Any]] = []
     while True:
