@@ -10,14 +10,29 @@ pid=$!
 trap 'kill $pid 2>/dev/null || true' EXIT
 for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:18080/health >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS http://127.0.0.1:18080/models?reload=1 > "$SOAI_STATE_DIR/llama-models-smoke.json"
+
+model_status() {
+  curl -fsS "http://127.0.0.1:18080/models" | python3 -c "import json,sys; d=json.load(sys.stdin); x=[m for m in d.get('data',[]) if m.get('id')=='$1']; print(x[0].get('status',{}).get('value','') if x else '')"
+}
+
 for m in qwen35-9b qwen38-27b; do
+  # FIXES.md F-024: a preset with load-on-startup=true (currently qwen35-9b) is already
+  # loading -- or finished loading -- by the time this loop reaches it, because the
+  # router started it automatically the moment the process came up, before this script's
+  # health-check even returned. Issuing POST /models/load again on top of that raced load
+  # gets rejected with 400 by the router, which under -fsS + set -euo pipefail killed this
+  # whole script (and, via the EXIT trap, the router it had just started). Check status
+  # first and only issue the explicit load when the model genuinely hasn't started yet.
   echo "Loading $m..."
-  curl -fsS -X POST http://127.0.0.1:18080/models/load -H 'content-type: application/json' -d "{\"model\":\"$m\"}" >/dev/null
+  state="$(model_status "$m")"
+  if [[ "$state" != loading && "$state" != loaded ]]; then
+    curl -fsS -X POST http://127.0.0.1:18080/models/load -H 'content-type: application/json' -d "{\"model\":\"$m\"}" >/dev/null
+  fi
   ok=0
   for _ in $(seq 1 240); do
-    state=$(curl -fsS http://127.0.0.1:18080/models | python3 -c "import json,sys; d=json.load(sys.stdin); x=[m for m in d.get('data',[]) if m.get('id')=='$m']; print(x[0].get('status',{}).get('value','') if x else '')")
+    state="$(model_status "$m")"
     [[ "$state" == loaded ]] && { ok=1; break; }
-    [[ "$state" == unloaded ]] && sleep 1 || sleep 1
+    sleep 1
   done
   [[ $ok == 1 ]] || { echo "$m failed to load; see $LOG" >&2; exit 1; }
   curl -fsS -X POST http://127.0.0.1:18080/v1/chat/completions -H 'content-type: application/json' -d "{\"model\":\"$m\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly READY\"}],\"max_tokens\":8,\"temperature\":0}" > "$SOAI_STATE_DIR/llama-smoke-$m.json"

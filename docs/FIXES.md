@@ -882,7 +882,7 @@ not fabrication.
 
 ### F-024 — `llama_smoke.sh` races its own `load-on-startup` model and fails closed
 
-- **Severity:** `minor` · **Status:** `open`
+- **Severity:** `minor` · **Status:** `fixed`
 - **Evidence:** Ran `scripts/prepare_llama_models.sh` for the first time end to end
   (`KEEP_QWEN_HF=1 KEEP_INTERMEDIATE_F16=1`, everything else default). It generates
   `state/llama-models.ini` correctly, then calls `llama_smoke.sh`, which failed:
@@ -907,15 +907,26 @@ not fabrication.
   though the router, the preset, and both models are actually fine — confirmed by
   benchmarking and by a direct, unrelated live load-and-inference test (this same session,
   F-012 verification) succeeding cleanly against the identical preset file.
-- **Fix:** Either drop `load-on-startup = true` from the `[qwen35-9b]` preset section
-  specifically for the smoke-test invocation (the ini is machine-generated per-run, so the
-  script could write a smoke-only variant without it), or have `llama_smoke.sh` check
-  `/models` status before issuing `POST /models/load` and skip the explicit load when a
-  model is already `loading`/`loaded`, polling straight through to the completion check
-  instead of treating "already loading" as failure.
-- **Worked around for this session:** ran the router directly (not through
-  `llama_smoke.sh`) with `--models-max 1` and no autoload race, to verify the newly-added
-  Nemotron preset section end to end. The underlying script bug is still present.
+- **Fix applied:** Took the second, more general option named above — a fix scoped to
+  dropping `load-on-startup` from one preset would only have covered `qwen35-9b`
+  specifically and left the same race waiting for the next resident preset. Added a
+  `model_status()` helper to `scripts/llama_smoke.sh` that queries `GET /models` for a
+  given model id's current status. Before issuing `POST /models/load`, the script now
+  checks status first and only issues the explicit load when the model is not already
+  `loading` or `loaded`; either way it falls through to the existing polling loop that
+  waits for `loaded`. The polling loop itself was also deduplicated to call the same
+  helper instead of repeating the inline Python one-liner a second time.
+- **Verification — the actual race, live, not just theorized:** ran the fixed
+  `llama_smoke.sh` against the real router end to end (GPU otherwise idle, `nvidia-smi`
+  confirmed 0 MiB used beforehand). It completed with exit code 0 — `qwen35-9b OK`,
+  `qwen38-27b OK` — where before the fix this same invocation reproducibly died with
+  `curl: (22) ... 400` and took the router down with it via the `EXIT` trap. Confirmed the
+  race was genuinely exercised, not accidentally avoided: `state/llama-router-smoke.log`
+  shows `(startup) loading model qwen35-9b` at `0.753s`, *before* `llama_server: listening`
+  at `0.778s` — the router's `/health` endpoint (and therefore this script's own
+  health-check loop) comes up while the autoloaded model is still mid-load, exactly the
+  window the old code raced into. `bash -n` passes. Full suite **54 passed**,
+  `ruff check src/ tests/ scripts/` clean.
 
 ### F-025 — Added: a personal model overlay so licence-gated choices never reach the shared manifest
 
@@ -1208,5 +1219,9 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
    vectors), plus `delete()`/supersession cleanup so a superseded memory stops being
    reachable by lexical or semantic search. Still an exact O(n) scan by design, not ANN —
    documented as the right tradeoff at this project's target scale.
-7. **F-006, F-007 (fixed), F-009 (fixed), F-015 (fixed), F-016 (fixed), F-021 (fixed),
-   F-023 (fixed), F-024** — cleanup, each independently shippable.
+7. **F-006** — the one cleanup-tier item left open. `F-007, F-009, F-015, F-016, F-021,
+   F-023, F-024` are all now `fixed`. F-006 is deliberately scoped separately: it is a
+   ~130-line `ResourceScheduler.route()` simplification (reduce to dispatch plus an
+   explicit opt-in A/B harness for the two capabilities that are genuinely contested,
+   per F-007's live recount), not a bounded bug fix like its neighbours — real but
+   larger surgery on code every routing decision runs through.
