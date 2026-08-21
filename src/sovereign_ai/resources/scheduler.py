@@ -23,6 +23,11 @@ class ResourceScheduler:
         self.config = config
         self.registry = registry
         self.benchmarks = benchmarks
+        # FIXES.md F-009: reserve_vram_mb has exactly one source of truth --
+        # configs/system.yaml. Read it once here and fail loudly if it is ever
+        # missing rather than silently falling back to a hardcoded number that
+        # can drift from the value scripts/prepare_llama_models.sh derives.
+        self.reserve_vram_mb = int(config.system["resources"]["reserve_vram_mb"])
 
     def _weights(self, mode: str) -> Weights:
         raw = self.config.system["routing"]["modes"][mode]
@@ -71,9 +76,10 @@ class ResourceScheduler:
                     reasons = ["manifest prior; no local benchmark yet"]
 
                 # Hardware-fit is a planning prior, never a substitute for local benchmarks.
-                reserve = int(self.config.system.get("resources", {}).get("reserve_vram_mb", 1300))
                 usable_total = (
-                    max(1, resources.vram_total_mb - reserve) if resources.vram_total_mb else 11000
+                    max(1, resources.vram_total_mb - self.reserve_vram_mb)
+                    if resources.vram_total_mb
+                    else 11000
                 )
                 if not model.estimated_vram_mb:
                     resource_fit = 0.7

@@ -40,6 +40,18 @@ for artifact in "$QWEN38" "$MM" "$MTP"; do
   [[ -f "$artifact" ]] || { echo "Missing synced Qwen3.8 artifact: $artifact" >&2; exit 1; }
 done
 
+# Single source of truth (FIXES.md F-009): this used to hard-code 1800 here while
+# configs/system.yaml separately declared reserve_vram_mb: 1600 and
+# ResourceScheduler.route() had its own 1300 fallback -- three numbers for one policy,
+# free to silently drift apart. Derive the preset value from the same config the
+# scheduler reads, so this script and the running kernel can never disagree about it.
+FIT_TARGET="$("$ROOT"/.venv/bin/python -c "
+import yaml
+with open('$ROOT/configs/system.yaml', encoding='utf-8') as f:
+    system = yaml.safe_load(f)
+print(int(system['resources']['reserve_vram_mb']))
+")"
+
 cat > "$SOAI_STATE_DIR/llama-models.ini" <<EOF2
 version = 1
 
@@ -48,7 +60,7 @@ c = 16384
 jinja = true
 n-gpu-layers = auto
 fit = true
-fit-target = 1800
+fit-target = $FIT_TARGET
 flash-attn = on
 cache-type-k = q8_0
 cache-type-v = q8_0

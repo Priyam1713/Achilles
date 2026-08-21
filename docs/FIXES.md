@@ -359,12 +359,27 @@ not fabrication.
 
 ### F-009 — One resource policy, three different numbers
 
-- **Severity:** `minor` · **Status:** `open`
+- **Severity:** `minor` · **Status:** `fixed`
 - **Evidence:** `reserve_vram_mb: 1600` in [`configs/system.yaml:38`](../configs/system.yaml);
   default `1300` in [`resources/scheduler.py:74`](../src/sovereign_ai/resources/scheduler.py);
-  `fit-target = 1800` in the generated `llama-models.ini`.
-- **Fix:** Single source of truth in `configs/system.yaml`; derive the llama.cpp preset value from
-  it at generation time; remove the divergent code default or make it raise.
+  `fit-target = 1800` hardcoded in the heredoc in
+  [`scripts/prepare_llama_models.sh`](../scripts/prepare_llama_models.sh). Same policy, three
+  independently-editable numbers, free to drift apart with no error until a real VRAM budget
+  problem surfaced downstream.
+- **Fix applied:**
+  - `scripts/prepare_llama_models.sh` no longer hardcodes `1800`. It now shells out to a small
+    Python one-liner that loads `configs/system.yaml` and reads
+    `resources.reserve_vram_mb`, writing that value into the generated `llama-models.ini`'s
+    `fit-target`. Verified live: returns `1600`, matching the config.
+  - `resources/scheduler.py`'s `ResourceScheduler.__init__` now reads
+    `config.system["resources"]["reserve_vram_mb"]` once (a plain `KeyError` if the key is
+    ever removed — no silent fallback) and stores it as `self.reserve_vram_mb`. `route()` was
+    changed from `int(self.config.system.get("resources", {}).get("reserve_vram_mb", 1300))`
+    computed on every candidate, to a single read of `self.reserve_vram_mb`, deleting the
+    divergent `1300` literal entirely.
+  - `configs/system.yaml` remains the one place a human edits this number; both the installer
+    script and the running kernel now derive from it and cannot silently disagree.
+- **Verification:** full suite **50 passed**, `ruff check src/ tests/ scripts/` clean.
 
 ### F-010 — Job dispatch is unbounded and non-resumable
 
