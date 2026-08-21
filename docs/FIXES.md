@@ -1599,12 +1599,13 @@ not fabrication.
   this fix's own tests exposed, not something introduced here.
 
 ### F-036 — `NativeAgentLoop`'s `run_command` cannot succeed under any circumstances,
-  regardless of grants, leases or the `approved` flag — open, needs a decision
+  regardless of grants, leases or the `approved` flag — resolved by F-037
 
 - **Severity:** `major` (the flagship "agent can act" capability from F-027 has no
-  working path to actually executing anything) · **Status:** `open` — flagged for a
-  decision, not resolved unilaterally, matching how this session already paused once for
-  Tier 5's own go-ahead before writing any of F-031 through F-035.
+  working path to actually executing anything) · **Status:** `fixed` — the user chose
+  option (a) below; see F-037 for what was actually built. Left in place, unedited below
+  the status line, as the record of the question that was asked and why it needed asking
+  rather than being resolved unilaterally.
 - **Evidence, confirmed directly against `PolicyEngine.evaluate()`, not inferred from
   reading the code:**
   ```
@@ -1659,7 +1660,56 @@ not fabrication.
   cannot directly authorize mutation" is allowed to mean in practice, which is exactly
   the kind of safety-architecture call this project's own values (and this session's
   precedent) say should be confirmed, not assumed.
-- **Fix:** not applied. Flagged for the user.
+- **Fix:** see F-037 — the user chose option (a).
+
+### F-037 — Added: `CapabilityGrant` now actually authorizes execution, closing F-036
+
+- **Severity:** `major`, same as F-036 · **Status:** `fixed`. **User decision:** option
+  (a) from F-036 — have `ExecutionBroker` check for an active grant before calling
+  `PolicyEngine.evaluate()`, treating one as already-satisfied authorization.
+- **Fix applied:** `ExecutionBroker.run_approved()` gained a third optional dependency,
+  `capability_grants: CapabilityGrantStore | None`. Before constructing an
+  `ActionRequest`/calling `policy.evaluate()`, it now checks
+  `capability_grants.is_active(subject_id, "execute", "workspace")`. If that is `True`,
+  `PolicyEngine.evaluate()` is skipped entirely and the call proceeds straight to backend
+  selection — the grant already represents a policy decision made once (by
+  `RosterService`, either because `PolicyEngine` allowed the request outright, or because
+  a human resolved the `ApprovalRequest` policy demanded), so re-deriving it on every use
+  would be redundant, and for `UNTRUSTED_MODEL_OUTPUT`-sourced execute actions
+  specifically, re-deriving it would always fail (that is exactly F-036). No implicit
+  wildcards, matching `CapabilityGrantStore.is_active`'s own contract: the grant must
+  name this exact subject, this exact action, this exact scope, and not be expired or
+  revoked — a grant issued to a different subject, for a different action, past its TTL,
+  or explicitly revoked, all fall through to the unchanged `PolicyEngine` path and are
+  denied exactly as before this fix. A caller that supplies no `subject_id`, or a broker
+  built without a `CapabilityGrantStore` at all (the F-034-era constructor shape), also
+  falls through unchanged — this is strictly additive, never a new way to be *less*
+  restrictive than before by omission. `kernel/app.py` reordered `capability_grants`'
+  construction to before `execution` and threads it through.
+- **Verification:** live, direct check before any test was written (not assumed):
+  the exact same `run_approved()` call, `trust=UNTRUSTED_MODEL_OUTPUT`,
+  `action="execute"` — denied with no grant (`PermissionError`, the F-036 behavior,
+  unchanged); reaches backend selection once a matching grant is issued
+  (`RuntimeError: No hardened execution backend available`, the same "cleared every
+  gate" signal F-034's tests already established as meaningful in this environment). Then
+  8 new tests: the grant bypass proven directly on `ExecutionBroker` (denied without,
+  succeeds with); a grant for a *different* action does not bypass; an *expired* grant
+  does not bypass; a *revoked* grant does not bypass; *someone else's* matching grant
+  does not bypass; a call with *no `subject_id`* falls through to normal policy even
+  though a matching grant exists for some other subject; a broker with *no
+  `CapabilityGrantStore` configured* behaves exactly as before F-037. Then the full loop,
+  closed end to end through a real `NativeAgentLoop`: the F-035-era "lease alone, no
+  grant, still blocked" test kept and repinned as an explicit no-grant baseline, plus a
+  new companion test where the same call additionally holds a real `CapabilityGrant` and
+  now genuinely reaches backend selection. Full suite **104 passed**,
+  `ruff check src/ tests/ scripts/` clean.
+- **What this means for the roster domain as a whole:** `RosterService`'s
+  `propose_delegation`/`resolve_approval` pipeline (F-031) is no longer just a
+  record-keeping system that happens to also exist alongside execution — a delegation
+  that gets its requested `execute:workspace` grant approved (by policy outright, or by a
+  human resolving the `ApprovalRequest`) can now actually cause a `NativeAgentLoop`-driven
+  run to execute a command, provided the job's `AgentPayload.agent_profile_id` (F-035)
+  names the same subject the grant was issued to.
 
 ---
 
@@ -1734,26 +1784,26 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
     a real `NativeAgentLoop`/`ExecutionBroker`/`WorkspaceLeaseStore`, not mocks.
     Memory-scope propagation (F-033) specifically stays open for a different, larger
     reason: nothing calls `ContextBuilder.retrieve_text()` in production code at all yet.
-14. **F-036** — **open, flagged for a decision.** Writing F-035's own tests surfaced
-    that `NativeAgentLoop`'s `run_command` cannot succeed under any circumstances today —
-    not with `approved=True`, not while holding an active `CapabilityGrant` or a matching
-    `WorkspaceLease` — because `PolicyEngine`'s untrusted-content gate returns
-    `allowed=False` unconditionally for `action="execute"` from `UNTRUSTED_MODEL_OUTPUT`
-    trust, and `ExecutionBroker` raises on that before the `approval_required`/`approved`
-    branch is ever reached. This may be entirely intentional (an existing, pre-session
-    test explicitly asserts this exact denial), but if so, the actual mechanism by which
-    an agent is ever supposed to execute anything — presumably `CapabilityGrant` — isn't
-    wired into `ExecutionBroker` either. A real security-architecture decision, not
-    something to resolve unilaterally.
+14. ~~**F-036**~~ — **fixed by F-037.** The user chose option (a): an active
+    `CapabilityGrant` now genuinely lets an agent-issued execute action succeed. This is
+    exactly the pause-and-ask this document said the finding needed — resolved by asking,
+    not by picking a side unilaterally.
+15. ~~**F-037**~~ — **fixed.** `ExecutionBroker` checks `CapabilityGrantStore.is_active()`
+    before `PolicyEngine.evaluate()`; a genuine, unexpired, unrevoked grant naming the
+    exact subject/action/scope bypasses the untrusted-content gate that made F-036 true.
+    8 new tests pin the boundaries (wrong subject, wrong action, expired, revoked, no
+    grant store, no subject id all still fall through to the unchanged prior behavior),
+    plus an end-to-end `NativeAgentLoop` test proving a real run now actually executes.
+    `RosterService`'s approval pipeline is now load-bearing for execution, not just
+    record-keeping.
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
 **F-013** (retrieval stack right-sizing, blocked on the same licence review); **F-022**
 (explicitly the user's values decision, not mine — already resolved for personal use via
-the local overlay, F-025); **F-036** (whether/how an active `CapabilityGrant` should ever
-let an agent-issued execute action actually succeed — a safety-architecture call).
-Every cleanup-tier item (F-006 through F-024) is now `fixed`. Tier 5's safety-critical
-core (F-031 through F-035) is built and its identity-propagation gap is closed for `Run`
-and `ExecutionBroker`. Remaining Tier 5 pieces (workflow DAGs, skill evaluation) and all
-of Tier 6 (harness tournament, desktop product, remote providers) remain unstarted —
-genuine new subsystem builds, not bounded defect fixes.
+the local overlay, F-025). Every cleanup-tier item (F-006 through F-024) is now `fixed`.
+Tier 5's safety-critical core (F-031 through F-037) is built, its identity-propagation gap
+is closed for `Run` and `ExecutionBroker`, and an issued `CapabilityGrant` now genuinely
+authorizes execution end to end. Remaining Tier 5 pieces (workflow DAGs, skill evaluation)
+and all of Tier 6 (harness tournament, desktop product, remote providers) remain
+unstarted — genuine new subsystem builds, not bounded defect fixes.

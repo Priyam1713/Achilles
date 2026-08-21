@@ -1986,6 +1986,148 @@ def test_execution_broker_raises_if_no_lease_store_configured(tmp_path):
         asyncio.run(drive())
 
 
+def _broker_with_grants(tmp_path):
+    from sovereign_ai.execution.broker import ExecutionBroker
+    from sovereign_ai.execution.workspaces import WorkspaceRegistry
+    from sovereign_ai.kernel.capability_grants import CapabilityGrantStore
+    from sovereign_ai.kernel.policy import PolicyEngine
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = WorkspaceRegistry(tmp_path / "workspaces.json")
+    registry.add(workspace, writable=True)
+    grants = CapabilityGrantStore(tmp_path / "grants.db")
+    broker = ExecutionBroker(PolicyEngine(_FakeConfig()), registry, capability_grants=grants)
+    broker.openshell.available = lambda: False
+    broker.docker.available = lambda: False
+    return broker, grants, workspace
+
+
+def test_execution_broker_active_capability_grant_bypasses_untrusted_policy_gate(tmp_path):
+    """FIXES.md F-037 (closes F-036): a real CapabilityGrant for exactly
+    (subject, "execute", "workspace") lets a call that PolicyEngine's own untrusted-
+    content gate would otherwise deny unconditionally reach backend selection instead."""
+    broker, grants, workspace = _broker_with_grants(tmp_path)
+
+    async def without_grant():
+        return await broker.run_approved(
+            ["true"], str(workspace), trust=TrustLabel.UNTRUSTED_MODEL_OUTPUT,
+            mutates_state=True, subject_id="swift",
+        )
+
+    with pytest.raises(PermissionError, match="Untrusted content cannot directly authorize"):
+        asyncio.run(without_grant())
+
+    grants.issue("swift", "execute", "workspace", "policy", ttl_seconds=3600)
+
+    async def with_grant():
+        return await broker.run_approved(
+            ["true"], str(workspace), trust=TrustLabel.UNTRUSTED_MODEL_OUTPUT,
+            mutates_state=True, subject_id="swift",
+        )
+
+    with pytest.raises(RuntimeError, match="No hardened execution backend available"):
+        asyncio.run(with_grant())
+
+
+def test_execution_broker_grant_for_a_different_scope_does_not_bypass(tmp_path):
+    """No implicit wildcards (CapabilityGrantStore.is_active's own stated contract): a
+    grant issued for a different action never authorizes "execute"."""
+    broker, grants, workspace = _broker_with_grants(tmp_path)
+    grants.issue("swift", "read", "workspace", "policy", ttl_seconds=3600)
+
+    async def drive():
+        return await broker.run_approved(
+            ["true"], str(workspace), trust=TrustLabel.UNTRUSTED_MODEL_OUTPUT,
+            mutates_state=True, subject_id="swift",
+        )
+
+    with pytest.raises(PermissionError, match="Untrusted content cannot directly authorize"):
+        asyncio.run(drive())
+
+
+def test_execution_broker_expired_grant_does_not_bypass(tmp_path):
+    broker, grants, workspace = _broker_with_grants(tmp_path)
+    grants.issue("swift", "execute", "workspace", "policy", ttl_seconds=-1)
+
+    async def drive():
+        return await broker.run_approved(
+            ["true"], str(workspace), trust=TrustLabel.UNTRUSTED_MODEL_OUTPUT,
+            mutates_state=True, subject_id="swift",
+        )
+
+    with pytest.raises(PermissionError, match="Untrusted content cannot directly authorize"):
+        asyncio.run(drive())
+
+
+def test_execution_broker_revoked_grant_does_not_bypass(tmp_path):
+    broker, grants, workspace = _broker_with_grants(tmp_path)
+    grant = grants.issue("swift", "execute", "workspace", "policy", ttl_seconds=3600)
+    grants.revoke(grant.id)
+
+    async def drive():
+        return await broker.run_approved(
+            ["true"], str(workspace), trust=TrustLabel.UNTRUSTED_MODEL_OUTPUT,
+            mutates_state=True, subject_id="swift",
+        )
+
+    with pytest.raises(PermissionError, match="Untrusted content cannot directly authorize"):
+        asyncio.run(drive())
+
+
+def test_execution_broker_someone_elses_grant_does_not_bypass(tmp_path):
+    broker, grants, workspace = _broker_with_grants(tmp_path)
+    grants.issue("someone-else", "execute", "workspace", "policy", ttl_seconds=3600)
+
+    async def drive():
+        return await broker.run_approved(
+            ["true"], str(workspace), trust=TrustLabel.UNTRUSTED_MODEL_OUTPUT,
+            mutates_state=True, subject_id="swift",
+        )
+
+    with pytest.raises(PermissionError, match="Untrusted content cannot directly authorize"):
+        asyncio.run(drive())
+
+
+def test_execution_broker_no_subject_id_falls_through_to_normal_policy(tmp_path):
+    """A caller that never supplies subject_id gets exactly today's pre-F-037 behavior --
+    even if some other subject happens to hold a matching grant, an anonymous call is
+    never implicitly credited with it."""
+    broker, grants, workspace = _broker_with_grants(tmp_path)
+    grants.issue("swift", "execute", "workspace", "policy", ttl_seconds=3600)
+
+    async def drive():
+        return await broker.run_approved(
+            ["true"], str(workspace), trust=TrustLabel.UNTRUSTED_MODEL_OUTPUT, mutates_state=True,
+        )
+
+    with pytest.raises(PermissionError, match="Untrusted content cannot directly authorize"):
+        asyncio.run(drive())
+
+
+def test_execution_broker_grant_bypass_does_not_apply_when_no_grant_store_configured(tmp_path):
+    """A broker built without a CapabilityGrantStore (the F-034-era constructor shape)
+    must behave exactly as it did before F-037 -- never silently authorize anything."""
+    from sovereign_ai.execution.broker import ExecutionBroker
+    from sovereign_ai.execution.workspaces import WorkspaceRegistry
+    from sovereign_ai.kernel.policy import PolicyEngine
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = WorkspaceRegistry(tmp_path / "workspaces.json")
+    registry.add(workspace, writable=True)
+    broker = ExecutionBroker(PolicyEngine(_FakeConfig()), registry)
+
+    async def drive():
+        return await broker.run_approved(
+            ["true"], str(workspace), trust=TrustLabel.UNTRUSTED_MODEL_OUTPUT,
+            mutates_state=True, subject_id="swift",
+        )
+
+    with pytest.raises(PermissionError, match="Untrusted content cannot directly authorize"):
+        asyncio.run(drive())
+
+
 # --- Tier 5 continued: AgentProfile identity propagation --------------------------------
 
 
@@ -2023,19 +2165,16 @@ def test_roster_service_delegation_job_carries_agent_profile_id_after_approval(t
     assert job.request["agent_profile_id"] == "swift"
 
 
-def test_native_agent_loop_run_command_lease_gate_passes_but_policy_still_blocks(tmp_path, monkeypatch):
+def test_native_agent_loop_run_command_lease_without_grant_still_blocked_by_policy(tmp_path, monkeypatch):
     """A run_command call whose state carries a genuinely matching agent_profile_id/
-    workspace_lease_id clears the F-034 lease gate -- but is still denied, by
-    PolicyEngine, downstream of that gate. This is real, current behavior, not a
-    weakened test: `_run_command` hardcodes `trust=UNTRUSTED_MODEL_OUTPUT`, and
-    PolicyEngine's untrusted-content gate returns `allowed=False` for `action="execute"`
-    unconditionally -- regardless of `mutates_state` and regardless of the `approved`
-    flag, since the function returns on `not decision.allowed` before the
-    `approval_required and not approved` branch is ever reached. Confirmed directly
-    against PolicyEngine.evaluate() for both mutates_state values before writing this
-    test. See FIXES.md F-036: holding an active CapabilityGrant/WorkspaceLease does not
-    currently help a NativeAgentLoop-issued run_command succeed at all -- this is a real,
-    open gap, not something this test papers over."""
+    workspace_lease_id clears the F-034 lease gate -- but without an active
+    CapabilityGrant, is still denied by PolicyEngine downstream of that gate.
+    `_run_command` hardcodes `trust=UNTRUSTED_MODEL_OUTPUT`, and PolicyEngine's
+    untrusted-content gate returns `allowed=False` for `action="execute"` unconditionally
+    -- regardless of `mutates_state` and the `approved` flag -- unless F-037's grant
+    bypass applies (see the companion test below for that case). Confirmed directly
+    against PolicyEngine.evaluate() before F-036 was filed; this test keeps that
+    no-grant behavior honest and pinned now that a grant *can* change the outcome."""
     from sovereign_ai.agents.native_loop import NativeAgentLoop
 
     k = kernel(tmp_path, monkeypatch)
@@ -2063,6 +2202,38 @@ def test_native_agent_loop_run_command_lease_gate_passes_but_policy_still_blocks
     assert observation["error"] == (
         "denied: Untrusted content cannot directly authorize mutation or credential access."
     )
+
+
+def test_native_agent_loop_run_command_succeeds_with_a_matching_capability_grant(tmp_path, monkeypatch):
+    """FIXES.md F-037: closes F-036. The same setup as the test above, but with a real
+    CapabilityGrant issued for exactly (subject, "execute", "workspace") -- this is what
+    actually makes the roster/approval pipeline load-bearing for execution, not just
+    record-keeping. Reaches backend selection (stubbed to have no backend), proving the
+    call cleared both the lease gate and the policy gate, via the grant."""
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    lease = k.workspace_leases.try_acquire(str(workspace), "swift-profile", writable=True, ttl_seconds=60)
+    k.capability_grants.issue("swift-profile", "execute", "workspace", "policy", ttl_seconds=3600)
+    monkeypatch.setattr(k.execution.openshell, "available", lambda: False)
+    monkeypatch.setattr(k.execution.docker, "available", lambda: False)
+
+    fake = _FakeInference(['{"tool": "run_command", "args": {"argv": ["true"], "mutates_state": true}}'])
+    loop = NativeAgentLoop(fake, k.execution, k.workspaces, k.events)
+    state = {
+        "run_id": "test-run-grant",
+        "task": "run a command",
+        "workspace": str(workspace),
+        "agent_profile_id": "swift-profile",
+        "workspace_lease_id": lease.id,
+    }
+
+    step = asyncio.run(loop.next_step(state))
+    observation = step.payload["observation"]
+    assert observation["error"] == "RuntimeError: No hardened execution backend available"
 
 
 def test_native_agent_loop_run_command_denied_by_mismatched_lease(tmp_path, monkeypatch):

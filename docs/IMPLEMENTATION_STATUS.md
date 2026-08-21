@@ -180,18 +180,21 @@ since `JobDispatcher.submit()` already snapshots the whole job request onto it. 
 scope (F-033) is a separate story: nothing in production code calls
 `ContextBuilder.retrieve_text()` at all yet, so there is no call site to propagate into.
 
-**Writing F-035's own tests surfaced a real, open gap (FIXES.md F-036, flagged for a
-decision, not fixed): holding an active `CapabilityGrant` or a genuinely matching
-`WorkspaceLease` does not currently let a `NativeAgentLoop`-issued `run_command` succeed
-at all.** `PolicyEngine`'s untrusted-content gate returns `allowed=False` unconditionally
-for `action="execute"` from the `UNTRUSTED_MODEL_OUTPUT` trust `_run_command` always uses
-— regardless of `mutates_state`, regardless of the `approved` flag, regardless of any
-grant or lease held, because `ExecutionBroker` raises on `not decision.allowed` before
-ever reaching the `approval_required`/`approved` check. This predates this session (an
-existing test already asserts the denial as correct), so it may be intentional
-defense-in-depth — but if so, `CapabilityGrant`/`ApprovalRequest` is presumably meant to
-be the real path to execution, and nothing currently wires it into `ExecutionBroker`
-either. See F-036 for the two candidate fixes and why this needs a decision.
+Writing F-035's own tests surfaced that, as of that fix, holding an active
+`CapabilityGrant` or a genuinely matching `WorkspaceLease` did not let a
+`NativeAgentLoop`-issued `run_command` succeed at all — `PolicyEngine`'s untrusted-content
+gate returned `allowed=False` unconditionally for `action="execute"` from the
+`UNTRUSTED_MODEL_OUTPUT` trust `_run_command` always uses, and `ExecutionBroker` raised on
+that before ever reaching the `approval_required`/`approved` check (FIXES.md F-036,
+flagged for a decision rather than resolved unilaterally, since an existing pre-session
+test explicitly asserted the denial as correct). The user chose to wire
+`CapabilityGrant` into `ExecutionBroker` as the real authorization path (FIXES.md F-037):
+`run_approved()` now checks `CapabilityGrantStore.is_active(subject_id, "execute",
+"workspace")` before calling `PolicyEngine.evaluate()` at all, and a genuine match
+bypasses the untrusted-content gate entirely. `RosterService`'s approval pipeline is now
+load-bearing for execution — a delegation whose `execute:workspace` grant gets approved
+can make a real `NativeAgentLoop` run actually execute a command, not just record that it
+was allowed to.
 
 Still pending, genuinely unbuilt (not started, not just unwired):
 

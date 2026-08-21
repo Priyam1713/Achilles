@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+from sovereign_ai.kernel.capability_grants import CapabilityGrantStore
 from sovereign_ai.kernel.policy import PolicyEngine
 from sovereign_ai.kernel.types import ActionRequest, TrustLabel
 from sovereign_ai.resources.workspace_leases import WorkspaceLeaseStore
@@ -19,10 +20,12 @@ class ExecutionBroker:
         policy: PolicyEngine,
         workspaces: WorkspaceRegistry,
         workspace_leases: WorkspaceLeaseStore | None = None,
+        capability_grants: CapabilityGrantStore | None = None,
     ):
         self.policy = policy
         self.workspaces = workspaces
         self.workspace_leases = workspace_leases
+        self.capability_grants = capability_grants
         self.openshell = OpenShellBackend()
         self.docker = DockerBackend()
 
@@ -71,18 +74,36 @@ class ExecutionBroker:
             if mutates_state and not lease.writable:
                 raise PermissionError(f"workspace lease {workspace_lease_id} is read-only")
 
-        req = ActionRequest(
-            action="execute",
-            scope="workspace",
-            trust=trust,
-            description=" ".join(argv),
-            mutates_state=mutates_state,
+        # FIXES.md F-036/F-037: a subject holding an active CapabilityGrant for exactly
+        # this action/scope has *already* cleared policy -- RosterService only ever
+        # issues one after PolicyEngine.evaluate() allowed it outright, or after a human
+        # resolved the ApprovalRequest policy demanded. Re-running PolicyEngine here would
+        # re-derive a decision that was already made and already expires on its own
+        # (CapabilityGrantStore.is_active checks TTL and revocation), and for untrusted-
+        # sourced execute/credential/delete/network_post actions PolicyEngine's own
+        # untrusted-content gate can *never* return allowed=True (see F-036) -- without
+        # this check, a grant issued for exactly this purpose could never actually
+        # authorize anything, making the whole roster/approval pipeline inert for
+        # execution. `subject_id` alone is not enough to skip policy: only a real,
+        # unexpired, unrevoked grant naming this exact action and scope does.
+        grant_authorized = bool(
+            subject_id
+            and self.capability_grants is not None
+            and self.capability_grants.is_active(subject_id, "execute", "workspace")
         )
-        decision = self.policy.evaluate(req)
-        if not decision.allowed:
-            raise PermissionError(decision.reason)
-        if decision.approval_required and not approved:
-            raise PermissionError("Execution requires explicit approval")
+        if not grant_authorized:
+            req = ActionRequest(
+                action="execute",
+                scope="workspace",
+                trust=trust,
+                description=" ".join(argv),
+                mutates_state=mutates_state,
+            )
+            decision = self.policy.evaluate(req)
+            if not decision.allowed:
+                raise PermissionError(decision.reason)
+            if decision.approval_required and not approved:
+                raise PermissionError("Execution requires explicit approval")
         if self.openshell.available():
             return await self.openshell.run(argv, canonical_cwd, sync_back=mutates_state)
         if self.docker.available():
