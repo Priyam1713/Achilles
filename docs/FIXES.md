@@ -359,28 +359,78 @@ not fabrication.
 
 ### F-010 — Job dispatch is unbounded and non-resumable
 
-- **Severity:** `major` · **Status:** `open` (self-reported)
-- **Evidence:** [`api/server.py:171`](../src/sovereign_ai/api/server.py) — `enqueue_job()` calls
-  `asyncio.create_task()` with no semaphore, no queue and no backpressure. Jobs run in the API
-  process. `recover_interrupted()` marks survivors `interrupted` with no resume.
-- **Impact:** The README lists "durable background job journals" as implemented. The journal is
-  durable; the *execution* is not. On a machine with one GPU and a
-  `max_concurrent_gpu_heavy_jobs: 1` arbiter, unbounded task creation means unbounded queueing
-  behind a semaphore with no visibility and no admission control.
-- **Fix:** Bounded durable dispatcher with an explicit worker pool, admission limits, and `Run`
-  records beneath `Job` so a retry is a new attempt rather than a rewritten history.
+- **Severity:** `major` · **Status:** `fixed`
+- **Evidence:** `api/server.py`'s `enqueue_job()` called `asyncio.create_task()` with no
+  semaphore, no queue and no backpressure. Jobs ran in the API process.
+  `recover_interrupted()` marked survivors `interrupted` with no resume. No `Run` object
+  existed beneath `Job`, so a retry (had one been implemented) would have had nowhere to
+  record a second attempt without overwriting the first.
+- **Impact:** The README listed "durable background job journals" as implemented. The
+  journal was durable; the *execution* was not. Unbounded task creation meant unbounded
+  in-process concurrency with no admission control, on a machine with one GPU.
+- **Fix applied:**
+  - New `kernel/runs.py`: `RunStore`/`RunRecord` — one row per execution *attempt* beneath
+    a `Job`. `next_attempt(job_id)` and `list_for_job(job_id)` give an honest history; a
+    retry is `attempt=2`, never a rewrite of `attempt=1`.
+  - New `kernel/dispatcher.py`: `JobDispatcher` — a fixed pool of worker coroutines
+    (`max_concurrency`, default 4, configurable via `system.yaml`
+    `resources.max_concurrent_jobs`) pulling from a bounded `asyncio.Queue`
+    (`job_queue_max`, default 100). A submission beyond capacity raises `QueueFullError`
+    immediately — explicit backpressure, not silent unbounded growth. Cancellation is
+    tracked by `job_id` so `DELETE /jobs/{id}` keeps its existing external contract.
+  - New `kernel/job_executor.py`: the chat/specialist/media dispatch logic and
+    collaboration-reply posting, moved out of the API layer (it was kernel business logic
+    living in HTTP plumbing) into a single reusable `execute(kernel, job, run)` the
+    dispatcher calls per attempt.
+  - `api/server.py`: `enqueue_job()` is now pure admission (create `Job`, hand to
+    dispatcher, 503 on `QueueFullError`); the FastAPI `lifespan` starts/stops the
+    dispatcher instead of gathering an ad-hoc `app.state.job_tasks` dict. New
+    `GET /jobs/{job_id}/runs` exposes the attempt history; `/status` now reports
+    `dispatcher_active`/`dispatcher_queue_depth`.
+- **Verification:** seven new tests in `tests/test_kernel.py` — bounded concurrency is
+  actually enforced (`peak == max_concurrency` under a controlled slow executor), a failed
+  attempt followed by a retry produces two distinct `Run` rows (`attempt` 1 then 2, not one
+  rewritten row), `dispatcher.cancel(job_id)` stops the active run and marks it
+  `cancelled`, a queue at capacity raises `QueueFullError` and the rejected job is marked
+  `failed` with a clear reason (never silently dropped), and an HTTP-level test confirms
+  `POST /jobs` → `GET /jobs/{id}/runs` shows exactly one recorded attempt. Full suite:
+  **31 passed**, `ruff check src/ tests/` clean.
 
 ### F-011 — The GPU arbiter does not arbitrate the GPU
 
-- **Severity:** `major` · **Status:** `open`
-- **Evidence:** `GPUArbiter` is an `asyncio.Semaphore` and its own docstring says "Process-local
-  exclusive GPU lease." The 14 specialist workers are **separate OS processes** on separate
-  ports. `ResidencyCoordinator.release_llama()` evicts only llama.cpp.
-- **Impact:** Nothing prevents two specialist workers from simultaneously holding VRAM on a 12 GB
-  card. The README's "GPU heavy-job arbiter" is a semaphore in one process.
-- **Fix:** Move the lease to a durable, cross-process record with TTL and heartbeat, and make
-  every worker acquire it before allocating. This is the `ResourceLease` object already designed
-  in `D-008` — the arbiter is where it first becomes load-bearing.
+- **Severity:** `major` · **Status:** `fixed`
+- **Evidence:** `GPUArbiter` was an `asyncio.Semaphore` whose own docstring admitted
+  "Process-local exclusive GPU lease." A second `sovereign serve` process, or a kernel
+  restarted after a crash while a lease was held, would each start with a fresh in-memory
+  semaphore believing the GPU was free.
+- **Scope check before fixing (important, not obvious from the original finding):** the 14
+  specialist workers never acquire a GPU lease themselves — `SpecialistBroker`/`MediaBroker`/
+  `InferenceBroker` already share **one** `GPUArbiter` instance (constructed once in
+  `kernel/app.py`), and a worker is only ever reached through one of those brokers, which
+  holds the lease around the whole HTTP call into the worker. So calls *from one kernel
+  process* were already correctly serialized. The real gap was **two kernel processes**, or
+  one kernel process restarting without knowing whether the process that held the last
+  lease is still alive — that is what an in-memory semaphore structurally cannot detect.
+- **Fix applied:** New `resources/gpu_leases.py`: `GPULeaseStore`, a durable SQLite table
+  (`state/gpu-leases.db`) that is the actual source of truth at grant time. `GPUArbiter`
+  keeps its `asyncio.Semaphore` for cheap in-process FIFO ordering, but an exclusive lease
+  is only granted after `GPULeaseStore.try_acquire()` confirms no unexpired, live-PID lease
+  is held — contended acquires poll with backoff instead of trusting a local semaphore
+  alone. `reap_stale()` removes both TTL-expired leases and leases whose recorded PID
+  (`psutil.pid_exists`) no longer exists, so a crashed holder cannot wedge the GPU past its
+  TTL, and a restarted kernel sees reality rather than a blank slate.
+- **Explicit scope limit, stated rather than glossed over:** leases are always acquired by
+  the kernel process, never by a worker directly — a caller that reaches a worker's own
+  HTTP port without going through the kernel's brokers is not covered by this store. That
+  is a separate problem (authenticating each worker's own endpoint) and remains open.
+- **Verification:** four new tests in `tests/test_kernel.py`. Two exercise `GPULeaseStore`
+  directly (a second exclusive `try_acquire` is refused while the first is held, and a
+  fabricated lease from a nonexistent PID is reaped even with an hour left on its TTL). The
+  load-bearing one, `test_arbiter_lease_is_durable_across_separate_arbiter_instances`,
+  constructs **two independent `GPUArbiter` objects** sharing only a state directory —
+  standing in for two separate kernel processes — and proves the second cannot acquire the
+  exclusive lease until the first releases it, which two unrelated `asyncio.Semaphore`
+  instances could never enforce on their own. Full suite: **35 passed**, `ruff` clean.
 
 ### F-012 — The manifest predates hybrid-MoE models that fit this GPU far better
 
@@ -744,6 +794,42 @@ not fabrication.
   wire the Nemotron decision in F-012/F-022 above, including a real end-to-end inference
   call through the router.
 
+### F-026 — Added: a real migration runner and online backup/restore
+
+- **Severity:** `debt` (new architecture, not a defect) · **Status:** `fixed`
+- **Motivating problem:** every store in this project opened with an ad-hoc
+  `CREATE TABLE IF NOT EXISTS`. That is safe only for a table that does not exist yet — it
+  has no way to express "add a column" or "backfill a value" on a database that already has
+  the old shape without either destroying data or silently doing nothing.
+  `knowledge/research.md` names this directly: "Introduce one migration runner and tested
+  backup/restore before adding `AgentProfile`, `Run`, grants, leases or memory ACLs." F-010
+  and F-011 (above) added exactly `Run` and a durable GPU lease this session — the runner
+  needed to exist before those tables did, not after.
+- **Fix applied:** `kernel/migrations.py` — `Migration`/`MigrationRunner`: versions must be
+  contiguous starting at 1 (constructor raises otherwise), applied versions are tracked in a
+  `schema_migrations` table so `current_version()` is a fact read from the database, not an
+  assumption, and `apply_pending()` only records a migration as applied after its SQL has
+  actually run. `kernel/backup.py` — `backup_database()`/`restore_database()` use SQLite's
+  own online backup API (`Connection.backup`), safe to run against a live WAL-mode writer,
+  rather than a raw file copy that could capture a torn snapshot mid-write.
+  `kernel/runs.py` (F-010) and `resources/gpu_leases.py` (F-011) — both new stores added
+  this session — were built directly on this runner as its first real, working use, rather
+  than shipping with their own one-off `CREATE TABLE IF NOT EXISTS`.
+- **Honest limit, stated rather than glossed over:** the pre-existing stores
+  (`jobs.db`, `events.db`, `checkpoints.db`, `benchmarks.db`, `memory.db`,
+  `memory-graph.db`, `collaboration.db`) still use their original ad-hoc initialization and
+  have **not** been retrofitted onto this runner. That is a real, bounded follow-up
+  (mechanical per store, no design work left), not a hidden gap — the runner and backup
+  utility exist and are proven; migrating each remaining store onto them is the honest
+  remainder.
+- **Verification:** `tests/test_kernel.py` — a two-migration sequence applies in order,
+  `apply_pending()` is a true no-op on a second call (re-running an `ALTER TABLE ADD COLUMN`
+  would error if it weren't), and non-contiguous or duplicate version numbers are rejected
+  at construction time, before any SQL runs. `backup_database()`/`restore_database()` are
+  tested as a genuine round trip: data written after a backup is confirmed present, then
+  erased by restoring the earlier snapshot, proving restore actually reverts state rather
+  than merely not-erroring. Full suite: **38 passed**, `ruff check src/ tests/` clean.
+
 ---
 
 ## Priority order
@@ -763,9 +849,11 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
 3. ~~**F-002, F-003, F-004**~~ — **fixed and verified** (session token, Host/Origin
    middleware, non-upserting identity creation, authorized membership). New HTTP-level
    tests cover all three. Prerequisite work for `D-010` is now in place.
-4. **F-014 + F-013** — cut the manifest and the retrieval stack. Turns the install from a coin
+4. ~~**F-010 + F-011 + F-026**~~ — **fixed.** Bounded job dispatcher with durable `Run`
+   attempts, a cross-process durable GPU lease, and the migration runner both were built
+   on. `Run` and `ResourceLease` from `D-008` stopped being architecture and became code.
+5. **F-014 + F-013** — cut the manifest and the retrieval stack. Turns the install from a coin
    flip into something reproducible.
-5. **F-008** — real vector index, or an honest README.
-6. **F-010 + F-011** — bounded dispatcher and a cross-process resource lease. These two are where
-   `Run` and `ResourceLease` from `D-008` stop being architecture and start being code.
-7. **F-006, F-007, F-009, F-015, F-016** — cleanup, each independently shippable.
+6. **F-008** — real vector index, or an honest README.
+7. **F-006, F-007, F-009, F-015 (fixed), F-016, F-021, F-023, F-024** — cleanup, each
+   independently shippable.

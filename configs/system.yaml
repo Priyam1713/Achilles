@@ -42,6 +42,12 @@ resources:
   model_idle_ttl_seconds: 300
   max_concurrent_gpu_heavy_jobs: 1
   full_install_min_free_disk_gb: 600
+  # Bounded job dispatch (FIXES.md F-010). Separate from max_concurrent_gpu_heavy_jobs
+  # above: the GPU arbiter serializes heavy inference specifically, while this bounds
+  # total in-flight job attempts of any kind (chat/specialist/media), so a burst of small
+  # non-GPU submissions can't spawn unbounded in-process tasks either.
+  max_concurrent_jobs: 4
+  job_queue_max: 100
 execution:
   preferred_backend: openshell
   fallback_backend: docker

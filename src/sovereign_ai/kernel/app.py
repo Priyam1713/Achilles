@@ -28,6 +28,7 @@ from .events import EventStore
 from .jobs import JobStore
 from .policy import PolicyEngine
 from .registry import CapabilityRegistry
+from .runs import RunStore
 from .secrets import SecretStore
 
 
@@ -37,6 +38,7 @@ class SovereignKernel:
     registry: CapabilityRegistry
     events: EventStore
     jobs: JobStore
+    runs: RunStore
     checkpoints: CheckpointStore
     benchmarks: BenchmarkStore
     policy: PolicyEngine
@@ -71,13 +73,15 @@ class SovereignKernel:
             raise RuntimeError("Registry validation failed:\n" + "\n".join(errors))
         events = EventStore(state / "events.db")
         jobs = JobStore(state / "jobs.db")
+        runs = RunStore(state / "runs.db")
         checkpoints = CheckpointStore(state / "checkpoints.db")
         benchmarks = BenchmarkStore(state / "benchmarks.db")
         policy = PolicyEngine(config)
         secrets = SecretStore()
         scheduler = ResourceScheduler(config, registry, benchmarks)
         gpu = GPUArbiter(
-            int(config.system.get("resources", {}).get("max_concurrent_gpu_heavy_jobs", 1))
+            int(config.system.get("resources", {}).get("max_concurrent_gpu_heavy_jobs", 1)),
+            state_dir=state,
         )
         residency = ResidencyCoordinator()
         inference = InferenceBroker(registry, scheduler, gpu)
@@ -103,6 +107,7 @@ class SovereignKernel:
             registry,
             events,
             jobs,
+            runs,
             checkpoints,
             benchmarks,
             policy,

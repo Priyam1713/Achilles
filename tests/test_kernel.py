@@ -1,5 +1,6 @@
 import asyncio
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -8,9 +9,13 @@ from starlette.testclient import TestClient
 from sovereign_ai.api.server import create_app
 from sovereign_ai.kernel.app import SovereignKernel
 from sovereign_ai.kernel.config import ConfigBundle
+from sovereign_ai.kernel.dispatcher import JobDispatcher, QueueFullError
 from sovereign_ai.kernel.jobs import JobStore
 from sovereign_ai.kernel.registry import CapabilityRegistry
+from sovereign_ai.kernel.runs import RunStore
 from sovereign_ai.kernel.types import ActionRequest, CapabilityRequest, RoutingMode, TrustLabel
+from sovereign_ai.resources.arbiter import GPUArbiter
+from sovereign_ai.resources.gpu_leases import GPULeaseStore
 from sovereign_ai.transactions.manager import TransactionManager, TransactionStep
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -454,3 +459,296 @@ models:
     for profile in overlaid.install_profiles["profiles"].values():
         assert "test-only-local-model" not in profile.get("models", [])
 
+
+
+def test_run_store_tracks_attempt_history(tmp_path):
+    """FIXES.md F-010: a retry is a new Run, not a rewrite of the last attempt."""
+    runs = RunStore(tmp_path / "runs.db")
+    assert runs.next_attempt("job-1") == 1
+
+    first = runs.create("job-1", 1, {"x": 1})
+    assert first.attempt == 1
+    runs.mark_running(first.id)
+    runs.finish(first.id, "failed", error="boom")
+
+    assert runs.next_attempt("job-1") == 2
+    second = runs.create("job-1", 2, {"x": 1})
+    runs.mark_running(second.id)
+    runs.finish(second.id, "succeeded", result={"ok": True})
+
+    history = runs.list_for_job("job-1")
+    assert [r.attempt for r in history] == [1, 2]
+    assert history[0].status == "failed" and history[0].error == "boom"
+    assert history[1].status == "succeeded" and history[1].result == {"ok": True}
+
+
+def test_run_store_recovers_interrupted(tmp_path):
+    runs = RunStore(tmp_path / "runs.db")
+    run = runs.create("job-1", 1, {})
+    runs.mark_running(run.id)
+    assert runs.recover_interrupted() == 1
+    assert runs.get(run.id).status == "interrupted"
+
+
+def test_dispatcher_bounds_concurrency(tmp_path):
+    """FIXES.md F-010: submissions beyond max_concurrency queue instead of spawning
+    unbounded in-process tasks."""
+    jobs = JobStore(tmp_path / "jobs.db")
+    runs = RunStore(tmp_path / "runs.db")
+    peak = 0
+    concurrent = 0
+    release = asyncio.Event()
+
+    async def slow_executor(job, run):
+        nonlocal peak, concurrent
+        concurrent += 1
+        peak = max(peak, concurrent)
+        await release.wait()
+        concurrent -= 1
+        return {"ok": True}
+
+    async def drive():
+        dispatcher = JobDispatcher(jobs, runs, slow_executor, max_concurrency=2, queue_max=10)
+        dispatcher.start()
+        for _ in range(4):
+            dispatcher.submit(jobs.create("chat", {}))
+        await asyncio.sleep(0.05)
+        assert dispatcher.active_count == 2
+        release.set()
+        await asyncio.sleep(0.05)
+        await dispatcher.shutdown()
+
+    asyncio.run(drive())
+    assert peak == 2
+
+
+def test_dispatcher_retry_creates_a_new_run_not_a_rewrite(tmp_path):
+    jobs = JobStore(tmp_path / "jobs.db")
+    runs = RunStore(tmp_path / "runs.db")
+    attempts: list[int] = []
+
+    async def flaky_executor(job, run):
+        attempts.append(run.attempt)
+        if run.attempt == 1:
+            raise RuntimeError("first attempt fails")
+        return {"ok": True}
+
+    async def drive():
+        dispatcher = JobDispatcher(jobs, runs, flaky_executor, max_concurrency=1, queue_max=10)
+        dispatcher.start()
+        job = jobs.create("chat", {})
+        dispatcher.submit(job)
+        await asyncio.sleep(0.05)
+        dispatcher.submit(jobs.get(job.id))
+        await asyncio.sleep(0.05)
+        await dispatcher.shutdown()
+        return job.id
+
+    job_id = asyncio.run(drive())
+    assert attempts == [1, 2]
+    history = runs.list_for_job(job_id)
+    assert [r.attempt for r in history] == [1, 2]
+    assert history[0].status == "failed"
+    assert history[1].status == "succeeded"
+    assert jobs.get(job_id).status == "succeeded"
+
+
+def test_dispatcher_cancel_stops_the_active_run(tmp_path):
+    jobs = JobStore(tmp_path / "jobs.db")
+    runs = RunStore(tmp_path / "runs.db")
+    started = asyncio.Event()
+
+    async def blocking_executor(job, run):
+        started.set()
+        await asyncio.sleep(10)
+        return {"ok": True}
+
+    async def drive():
+        dispatcher = JobDispatcher(jobs, runs, blocking_executor, max_concurrency=1, queue_max=10)
+        dispatcher.start()
+        job = jobs.create("chat", {})
+        dispatcher.submit(job)
+        await started.wait()
+        cancelled = dispatcher.cancel(job.id)
+        await asyncio.sleep(0.05)
+        await dispatcher.shutdown()
+        return job.id, cancelled
+
+    job_id, cancelled = asyncio.run(drive())
+    assert cancelled is True
+    assert jobs.get(job_id).status == "cancelled"
+
+
+def test_dispatcher_queue_full_fails_closed(tmp_path):
+    """FIXES.md F-010: backpressure is explicit, not an unboundedly growing backlog."""
+    jobs = JobStore(tmp_path / "jobs.db")
+    runs = RunStore(tmp_path / "runs.db")
+
+    async def never_finishes(job, run):
+        await asyncio.sleep(10)
+
+    async def drive():
+        dispatcher = JobDispatcher(jobs, runs, never_finishes, max_concurrency=1, queue_max=1)
+        dispatcher.start()
+        dispatcher.submit(jobs.create("chat", {}))  # picked up by the one worker
+        await asyncio.sleep(0.02)  # let the worker actually dequeue it
+        dispatcher.submit(jobs.create("chat", {}))  # fills the one queue slot
+        overflow = jobs.create("chat", {})
+        with pytest.raises(QueueFullError):
+            dispatcher.submit(overflow)
+        await dispatcher.shutdown()
+        return overflow.id
+
+    job_id = asyncio.run(drive())
+    record = jobs.get(job_id)
+    assert record.status == "failed"
+    assert "queue is full" in (record.error or "")
+
+
+def test_job_submission_uses_bounded_dispatcher_and_exposes_run_history(tmp_path, monkeypatch):
+    client = api_client(tmp_path, monkeypatch)
+    submission = {
+        "kind": "chat",
+        "payload": {
+            "request": {"capability": "reasoning", "mode": "fast"},
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    }
+    response = client.post("/jobs", json=submission)
+    assert response.status_code == 202
+    job_id = response.json()["id"]
+
+    runs_response = None
+    for _ in range(40):
+        runs_response = client.get(f"/jobs/{job_id}/runs")
+        if runs_response.json()["runs"]:
+            break
+        time.sleep(0.05)
+    assert runs_response.status_code == 200
+    attempts = runs_response.json()["runs"]
+    assert len(attempts) == 1
+    assert attempts[0]["attempt"] == 1
+    assert attempts[0]["job_id"] == job_id
+
+
+def test_gpu_lease_store_serializes_exclusive_leases(tmp_path):
+    """FIXES.md F-011: an exclusive lease held by one holder blocks a second exclusive
+    acquire until it is released, purely via the durable store -- no shared in-memory
+    object involved."""
+    store = GPULeaseStore(tmp_path / "gpu-leases.db")
+    first = store.try_acquire("owner-a", exclusive=True, ttl_seconds=60)
+    assert first is not None
+    assert store.try_acquire("owner-b", exclusive=True, ttl_seconds=60) is None
+    store.release(first.id)
+    second = store.try_acquire("owner-b", exclusive=True, ttl_seconds=60)
+    assert second is not None
+
+
+def test_gpu_lease_store_reaps_leases_from_dead_processes(tmp_path):
+    """A crashed holder must not wedge the GPU forever. An in-memory semaphore cannot
+    distinguish 'still running' from 'crashed'; this store checks the recorded PID."""
+    import sqlite3
+
+    store = GPULeaseStore(tmp_path / "gpu-leases.db")
+    dead_pid = 999_999_999  # astronomically unlikely to be a real running process
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "INSERT INTO gpu_leases(id,owner,exclusive,pid,acquired_at,expires_at) VALUES(?,?,?,?,?,?)",
+            ("orphan", "dead-owner", 1, dead_pid, time.time(), time.time() + 3600),
+        )
+    # A naive TTL check alone would not reap this -- it has an hour left. Only the
+    # liveness check does.
+    assert store.try_acquire("owner-b", exclusive=True, ttl_seconds=60) is not None
+
+
+def test_gpu_lease_store_reaps_expired_ttl(tmp_path):
+    store = GPULeaseStore(tmp_path / "gpu-leases.db")
+    lease = store.try_acquire("owner-a", exclusive=True, ttl_seconds=0.01)
+    assert lease is not None
+    time.sleep(0.05)
+    assert store.active() == []
+
+
+def test_arbiter_lease_is_durable_across_separate_arbiter_instances(tmp_path):
+    """The actual claim of FIXES.md F-011: two independent GPUArbiter objects (standing in
+    for two kernel processes) sharing only a state directory must still serialize an
+    exclusive lease. Two separate in-process asyncio.Semaphores could never do this on
+    their own -- proving the durable store, not the semaphore, is what makes this true."""
+    arbiter_a = GPUArbiter(max_heavy_jobs=1, state_dir=tmp_path, ttl_seconds=10)
+    arbiter_b = GPUArbiter(max_heavy_jobs=1, state_dir=tmp_path, ttl_seconds=10)
+    events: list[str] = []
+    second_acquired = asyncio.Event()
+
+    async def hold_from_b():
+        async with arbiter_b.lease("process-b", exclusive=True):
+            events.append("b-acquired")
+            second_acquired.set()
+
+    async def drive():
+        task = None
+        async with arbiter_a.lease("process-a", exclusive=True):
+            events.append("a-acquired")
+            task = asyncio.create_task(hold_from_b())
+            await asyncio.sleep(0.1)
+            assert not second_acquired.is_set(), "b acquired while a still held the lease"
+            events.append("a-releasing")
+            # exiting this `async with` block is what actually releases a's lease; b must
+            # not be able to proceed until that happens, which is why we await it below
+            # rather than inside this block.
+        await task
+        return events
+
+    result = asyncio.run(drive())
+    assert result.index("a-acquired") < result.index("a-releasing") < result.index("b-acquired")
+
+
+def test_migration_runner_applies_in_order_and_is_idempotent(tmp_path):
+    from sovereign_ai.kernel.migrations import Migration, MigrationRunner
+
+    db_path = tmp_path / "example.db"
+    migrations = [
+        Migration(1, "create_widgets", "CREATE TABLE IF NOT EXISTS widgets(id TEXT PRIMARY KEY);"),
+        Migration(2, "add_widget_name", "ALTER TABLE widgets ADD COLUMN name TEXT;"),
+    ]
+    runner = MigrationRunner(db_path, migrations)
+    assert runner.current_version() == 0
+    assert runner.apply_pending() == [1, 2]
+    assert runner.current_version() == 2
+    # Re-running is a no-op, not a re-application (ALTER TABLE ADD COLUMN twice would error).
+    assert runner.apply_pending() == []
+
+    import sqlite3
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("INSERT INTO widgets(id, name) VALUES('w1','hello')")
+        row = connection.execute("SELECT name FROM widgets WHERE id='w1'").fetchone()
+    assert row == ("hello",)
+
+
+def test_migration_runner_rejects_non_contiguous_or_duplicate_versions(tmp_path):
+    from sovereign_ai.kernel.migrations import Migration, MigrationRunner
+
+    with pytest.raises(ValueError, match="contiguous"):
+        MigrationRunner(tmp_path / "a.db", [Migration(1, "one", "SELECT 1;"), Migration(3, "three", "SELECT 1;")])
+    with pytest.raises(ValueError, match="duplicate"):
+        MigrationRunner(tmp_path / "b.db", [Migration(1, "one", "SELECT 1;"), Migration(1, "one-again", "SELECT 1;")])
+
+
+def test_backup_and_restore_round_trip(tmp_path):
+    from sovereign_ai.kernel.backup import backup_database, restore_database
+
+    runs = RunStore(tmp_path / "runs.db")
+    runs.create("job-1", 1, {"note": "before backup"})
+
+    snapshot = backup_database(runs.path, tmp_path / "backups")
+    assert snapshot.exists()
+
+    # Simulate damage to the live database after the backup was taken.
+    runs.create("job-1", 2, {"note": "after backup, should not survive restore"})
+    assert len(runs.list_for_job("job-1")) == 2
+
+    restore_database(snapshot, runs.path)
+    restored = RunStore(runs.path)
+    history = restored.list_for_job("job-1")
+    assert len(history) == 1
+    assert history[0].request == {"note": "before backup"}

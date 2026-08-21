@@ -11,8 +11,10 @@ from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from sovereign_ai.collaboration import IdentityAlreadyExists
+from sovereign_ai.kernel import job_executor
 from sovereign_ai.kernel.app import SovereignKernel
 from sovereign_ai.kernel.auth import SessionAuth, allowed_hosts
+from sovereign_ai.kernel.dispatcher import JobDispatcher, QueueFullError
 from sovereign_ai.kernel.jobs import JobStatus
 from sovereign_ai.kernel.types import ActionRequest, CapabilityRequest, RoutingMode
 from sovereign_ai.resources.telemetry import snapshot
@@ -91,23 +93,29 @@ def create_app(config_root: str | None = None) -> FastAPI:
     session = SessionAuth(kernel.config.state_dir / "session.token")
     system = kernel.config.system.get("system", {})
     hosts = allowed_hosts(system.get("bind", "127.0.0.1"), int(system.get("port", 7788)))
+    resources = kernel.config.system.get("resources", {})
+    dispatcher = JobDispatcher(
+        kernel.jobs,
+        kernel.runs,
+        executor=lambda job, run: job_executor.execute(kernel, job, run),
+        max_concurrency=int(resources.get("max_concurrent_jobs", 4)),
+        queue_max=int(resources.get("job_queue_max", 100)),
+    )
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
+        dispatcher.start()
         yield
-        tasks = list(application.state.job_tasks.values())
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        await dispatcher.shutdown()
 
     app = FastAPI(title="Local Sovereign AI Kernel", version="0.1.0", lifespan=lifespan)
     app.state.kernel = kernel
-    app.state.job_tasks = {}
+    app.state.dispatcher = dispatcher
     # Exposed for local tooling/tests that need to call authenticated endpoints
     # in-process; never rendered anywhere except the loopback-checked /ui response.
     app.state.session_token = session.token
     kernel.jobs.recover_interrupted()
+    kernel.runs.recover_interrupted()
 
     def _host_ok(value: str | None) -> bool:
         return bool(value) and value.split(",")[0].strip() in hosts
@@ -145,15 +153,6 @@ def create_app(config_root: str | None = None) -> FastAPI:
         if not session.verify(presented):
             raise HTTPException(status_code=401, detail="missing or invalid session token")
 
-    def assistant_content(result: dict[str, Any]) -> str:
-        payload = result.get("result") or {}
-        choices = payload.get("choices") or []
-        if choices:
-            content = (choices[0].get("message") or {}).get("content")
-            if isinstance(content, str) and content.strip():
-                return content.strip()
-        return "The model completed the job, but its backend returned no displayable text."
-
     def collaboration_human(identity_id: str):
         identity = kernel.collaboration.store.get_identity(identity_id)
         if identity is None:
@@ -165,67 +164,19 @@ def create_app(config_root: str | None = None) -> FastAPI:
             )
         return identity
 
-    async def execute_job(job_id: str, submission: JobSubmission) -> None:
-        kernel.jobs.mark_running(job_id)
-        try:
-            if submission.kind == "chat":
-                request = ChatRequest.model_validate(submission.payload)
-                result = await kernel.inference.chat(
-                    request.request, request.messages, request.model_overrides
-                )
-            elif submission.kind == "specialist":
-                request = SpecialistRequest.model_validate(submission.payload)
-                result = await kernel.specialists.invoke(
-                    request.request,
-                    request.operation,
-                    request.inputs,
-                    request.options,
-                    request.timeout_s,
-                )
-            else:
-                request = MediaRequest.model_validate(submission.payload)
-                result = await kernel.media.generate(
-                    request.request, request.settings, request.timeout_s
-                )
-            kernel.jobs.finish(job_id, "succeeded", result=result)
-            origin = submission.metadata.get("collaboration")
-            if origin:
-                try:
-                    kernel.collaboration.post_job_result(
-                        origin["room_id"],
-                        origin["agent_id"],
-                        origin["source_event_id"],
-                        job_id,
-                        assistant_content(result),
-                    )
-                except Exception as exc:
-                    kernel.events.append(
-                        stream_id=f"job:{job_id}",
-                        event_type="collaboration.reply_failed",
-                        payload={"error": f"{type(exc).__name__}: {exc}"},
-                    )
-        except asyncio.CancelledError:
-            kernel.jobs.finish(job_id, "cancelled", error="cancelled by user")
-            raise
-        except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
-            kernel.jobs.finish(job_id, "failed", error=error)
-            origin = submission.metadata.get("collaboration")
-            if origin:
-                try:
-                    kernel.collaboration.post_job_failure(
-                        origin["room_id"], origin["source_event_id"], job_id, error
-                    )
-                except Exception:
-                    pass
-        finally:
-            app.state.job_tasks.pop(job_id, None)
-
     def enqueue_job(submission: JobSubmission):
-        record = kernel.jobs.create(submission.kind, submission.payload, submission.metadata)
-        task = asyncio.create_task(execute_job(record.id, submission), name=f"soai-job-{record.id}")
-        app.state.job_tasks[record.id] = task
-        return record
+        """Create a durable Job and hand it to the bounded dispatcher (FIXES.md F-010).
+
+        Actual execution -- what "chat"/"specialist"/"media" means, and posting the
+        collaboration-room reply -- lives in kernel.job_executor, not here; this function
+        is purely admission. A full queue is a 503, not an unboundedly growing task list.
+        """
+        job = kernel.jobs.create(submission.kind, submission.payload, submission.metadata)
+        try:
+            dispatcher.submit(job)
+        except QueueFullError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return job
 
     @app.get("/ui", include_in_schema=False)
     async def ui() -> HTMLResponse:
@@ -267,7 +218,12 @@ def create_app(config_root: str | None = None) -> FastAPI:
             "ok": True,
             "inference_ready": any(engine_checks.values()),
             "engines": engine_checks,
-            "jobs": {"running": len(active_jobs), "queued": len(queued_jobs)},
+            "jobs": {
+                "running": len(active_jobs),
+                "queued": len(queued_jobs),
+                "dispatcher_active": dispatcher.active_count,
+                "dispatcher_queue_depth": dispatcher.queue_depth,
+            },
             "collaboration": kernel.collaboration.status(),
             "gpu_leases": [lease.__dict__ for lease in await kernel.gpu.active()],
             "paths": {
@@ -517,14 +473,20 @@ def create_app(config_root: str | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="job not found")
         return record.model_dump()
 
+    @app.get("/jobs/{job_id}/runs")
+    async def list_job_runs(job_id: str) -> dict[str, Any]:
+        """Every attempt made at this job (FIXES.md F-010) -- a retry is a new Run, not a
+        rewrite of the last one, so this is the actual attempt history."""
+        if kernel.jobs.get(job_id) is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        return {"runs": [run.model_dump() for run in kernel.runs.list_for_job(job_id)]}
+
     @app.delete("/jobs/{job_id}", dependencies=[Depends(require_session)])
     async def cancel_job(job_id: str) -> dict[str, Any]:
         record = kernel.jobs.request_cancel(job_id)
         if record is None:
             raise HTTPException(status_code=404, detail="job not found")
-        task = app.state.job_tasks.get(job_id)
-        if task and not task.done():
-            task.cancel()
+        dispatcher.cancel(job_id)
         return record.model_dump()
 
     return app
