@@ -16,6 +16,7 @@ from sovereign_ai.kernel.app import SovereignKernel
 from sovereign_ai.kernel.auth import SessionAuth, allowed_hosts
 from sovereign_ai.kernel.dispatcher import JobDispatcher, QueueFullError
 from sovereign_ai.kernel.jobs import JobStatus
+from sovereign_ai.kernel.trigger_scheduler import TriggerScheduler
 from sovereign_ai.kernel.types import ActionRequest, CapabilityRequest, RoutingMode
 from sovereign_ai.resources.telemetry import snapshot
 
@@ -140,6 +141,16 @@ class WorkflowDefinitionCreate(BaseModel):
     steps: list[WorkflowStepCreate]
 
 
+class RecurringTriggerCreate(BaseModel):
+    workflow_definition_id: str
+    interval_seconds: float
+    enabled: bool = True
+
+
+class RecurringTriggerEnabledUpdate(BaseModel):
+    enabled: bool
+
+
 def create_app(config_root: str | None = None) -> FastAPI:
     kernel = SovereignKernel.build(config_root)
     session = SessionAuth(kernel.config.state_dir / "session.token")
@@ -158,16 +169,23 @@ def create_app(config_root: str | None = None) -> FastAPI:
         max_concurrency=int(resources.get("max_concurrent_jobs", 4)),
         queue_max=int(resources.get("job_queue_max", 100)),
     )
+    trigger_scheduler = TriggerScheduler(
+        kernel.triggers, kernel.workflows, dispatcher.submit,
+        poll_interval_seconds=float(resources.get("trigger_poll_interval_seconds", 5.0)),
+    )
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         dispatcher.start()
+        trigger_scheduler.start()
         yield
+        await trigger_scheduler.shutdown()
         await dispatcher.shutdown()
 
     app = FastAPI(title="Local Sovereign AI Kernel", version="0.1.0", lifespan=lifespan)
     app.state.kernel = kernel
     app.state.dispatcher = dispatcher
+    app.state.trigger_scheduler = trigger_scheduler
     # Exposed for local tooling/tests that need to call authenticated endpoints
     # in-process; never rendered anywhere except the loopback-checked /ui response.
     app.state.session_token = session.token
@@ -750,5 +768,31 @@ def create_app(config_root: str | None = None) -> FastAPI:
                 i.model_dump() for i in kernel.workflow_instances.list_for_definition(definition_id)
             ]
         }
+
+    @app.post("/workflows/triggers", status_code=201, dependencies=[Depends(require_session)])
+    async def create_recurring_trigger(request: RecurringTriggerCreate) -> dict[str, Any]:
+        if kernel.workflow_definitions.get(request.workflow_definition_id) is None:
+            raise HTTPException(status_code=404, detail="workflow definition not found")
+        try:
+            return kernel.triggers.create(
+                request.workflow_definition_id, request.interval_seconds, enabled=request.enabled
+            ).model_dump()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/workflows/triggers")
+    async def list_recurring_triggers() -> dict[str, Any]:
+        return {"triggers": [t.model_dump() for t in kernel.triggers.list()]}
+
+    @app.put(
+        "/workflows/triggers/{trigger_id}/enabled", dependencies=[Depends(require_session)]
+    )
+    async def set_recurring_trigger_enabled(
+        trigger_id: str, request: RecurringTriggerEnabledUpdate
+    ) -> dict[str, Any]:
+        try:
+            return kernel.triggers.set_enabled(trigger_id, request.enabled).model_dump()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return app

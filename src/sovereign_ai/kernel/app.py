@@ -40,6 +40,7 @@ from .registry import CapabilityRegistry
 from .roster import RosterService
 from .runs import RunStore
 from .secrets import SecretStore
+from .triggers import RecurringTriggerStore
 from .workflow_service import WorkflowService
 from .workflows import WorkflowDefinitionStore, WorkflowInstanceStore
 
@@ -86,6 +87,7 @@ class SovereignKernel:
     workflow_definitions: WorkflowDefinitionStore
     workflow_instances: WorkflowInstanceStore
     workflows: WorkflowService
+    triggers: RecurringTriggerStore
 
     @classmethod
     def build(cls, config_root: str | None = None) -> SovereignKernel:
@@ -142,6 +144,7 @@ class SovereignKernel:
         workflow_definitions = WorkflowDefinitionStore(state / "workflow_definitions.db")
         workflow_instances = WorkflowInstanceStore(state / "workflow_instances.db")
         workflows = WorkflowService(workflow_definitions, workflow_instances, jobs)
+        triggers = RecurringTriggerStore(state / "recurring_triggers.db")
         return cls(
             config,
             registry,
@@ -183,4 +186,5 @@ class SovereignKernel:
             workflow_definitions,
             workflow_instances,
             workflows,
+            triggers,
         )

@@ -206,10 +206,15 @@ succeeding automatically creates and submits its now-ready downstream step's job
 the real dispatcher, verified end to end via a full HTTP round trip, not just unit-tested
 in isolation.
 
+Recurring/scheduled triggers are also implemented now (FIXES.md F-039):
+`RecurringTriggerStore` tracks an interval and next-due time per `WorkflowDefinition`;
+`TriggerScheduler` (mirroring `JobDispatcher`'s own background-task shape) polls for due
+triggers and calls the same `WorkflowService.start()` a manual
+`POST /workflows/definitions/{id}/start` uses — no separate execution path for scheduled
+vs. manual starts. Interval-only scheduling (no cron expressions or time-of-day rules).
+
 Still pending, genuinely unbuilt (not started, not just unwired):
 
-- recurring/scheduled triggers ("run this workflow every N seconds") that would start a
-  `WorkflowInstance` automatically — a separate subsystem from DAG execution itself
 - the skill-candidate evaluation/promotion pipeline (`SkillCandidate`/`SkillVersion`/
   `AgentEvaluation`)
 - `collaboration/store.py`'s full retrofit onto `MigrationRunner` (F-026) — the

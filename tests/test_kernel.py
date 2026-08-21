@@ -2502,3 +2502,156 @@ def test_workflow_http_start_creates_and_dispatches_the_first_step(tmp_path, mon
         assert instance["status"] == "failed"
         assert instance["step_states"]["a"]["status"] == "failed"
         assert instance["step_states"]["b"]["status"] == "pending"
+
+
+# --- Tier 5 continued: recurring workflow triggers ---------------------------------------
+
+
+def test_recurring_trigger_store_rejects_non_positive_interval(tmp_path):
+    from sovereign_ai.kernel.triggers import RecurringTriggerStore
+
+    store = RecurringTriggerStore(tmp_path / "triggers.db")
+    with pytest.raises(ValueError, match="positive"):
+        store.create("def-1", 0)
+    with pytest.raises(ValueError, match="positive"):
+        store.create("def-1", -5)
+
+
+def test_recurring_trigger_store_due_respects_schedule_and_enabled(tmp_path):
+    from sovereign_ai.kernel.triggers import RecurringTriggerStore
+
+    store = RecurringTriggerStore(tmp_path / "triggers.db")
+    trigger = store.create("def-1", 60)
+
+    assert store.due() == []  # next_run_at is 60s out; not due yet
+    assert [t.id for t in store.due(now=time.time() + 61)] == [trigger.id]
+
+    store.set_enabled(trigger.id, False)
+    assert store.due(now=time.time() + 61) == []
+
+
+def test_recurring_trigger_store_mark_ran_advances_next_run_at(tmp_path):
+    from sovereign_ai.kernel.triggers import RecurringTriggerStore
+
+    store = RecurringTriggerStore(tmp_path / "triggers.db")
+    trigger = store.create("def-1", 60)
+    now = time.time() + 61
+
+    updated = store.mark_ran(trigger.id, now=now)
+    assert updated.last_run_at == now
+    assert updated.next_run_at == now + 60
+    assert store.due(now=now) == []  # no longer due right after running
+
+
+def test_recurring_trigger_store_unknown_id_raises(tmp_path):
+    from sovereign_ai.kernel.triggers import RecurringTriggerStore
+
+    store = RecurringTriggerStore(tmp_path / "triggers.db")
+    with pytest.raises(ValueError, match="Unknown recurring trigger"):
+        store.mark_ran("does-not-exist")
+    with pytest.raises(ValueError, match="Unknown recurring trigger"):
+        store.set_enabled("does-not-exist", False)
+
+
+def test_trigger_scheduler_tick_starts_due_workflow_and_submits_jobs(tmp_path):
+    from sovereign_ai.kernel.jobs import JobStore
+    from sovereign_ai.kernel.trigger_scheduler import TriggerScheduler
+    from sovereign_ai.kernel.triggers import RecurringTriggerStore
+    from sovereign_ai.kernel.workflow_service import WorkflowService
+    from sovereign_ai.kernel.workflows import (
+        WorkflowDefinitionStore,
+        WorkflowInstanceStore,
+        WorkflowStep,
+    )
+
+    definitions = WorkflowDefinitionStore(tmp_path / "definitions.db")
+    instances = WorkflowInstanceStore(tmp_path / "instances.db")
+    jobs = JobStore(tmp_path / "jobs.db")
+    workflows = WorkflowService(definitions, instances, jobs)
+    triggers = RecurringTriggerStore(tmp_path / "triggers.db")
+
+    definition = definitions.create("scheduled", [WorkflowStep(id="a", job_kind="chat")])
+    hourly = triggers.create(definition.id, 3600)
+    due_soon = triggers.create(definition.id, 60)
+
+    submitted = []
+    scheduler = TriggerScheduler(triggers, workflows, submitted.append)
+    now = time.time()
+    assert scheduler.tick(now=now) == []  # neither is due yet
+
+    # Deterministic "time passing", not a real sleep: advance past due_soon's schedule
+    # but not hourly's.
+    later = now + 61
+    result = scheduler.tick(now=later)
+
+    assert len(result) == 1
+    assert submitted == result
+    assert triggers.get(due_soon.id).last_run_at == later
+    assert triggers.due(now=later) == []  # due_soon is no longer due right after running
+    assert triggers.get(hourly.id).last_run_at is None  # untouched
+
+
+def test_trigger_scheduler_tick_disables_trigger_for_missing_definition(tmp_path):
+    from sovereign_ai.kernel.jobs import JobStore
+    from sovereign_ai.kernel.trigger_scheduler import TriggerScheduler
+    from sovereign_ai.kernel.triggers import RecurringTriggerStore
+    from sovereign_ai.kernel.workflow_service import WorkflowService
+    from sovereign_ai.kernel.workflows import WorkflowDefinitionStore, WorkflowInstanceStore
+
+    definitions = WorkflowDefinitionStore(tmp_path / "definitions.db")
+    instances = WorkflowInstanceStore(tmp_path / "instances.db")
+    jobs = JobStore(tmp_path / "jobs.db")
+    workflows = WorkflowService(definitions, instances, jobs)
+    triggers = RecurringTriggerStore(tmp_path / "triggers.db")
+    trigger = triggers.create("does-not-exist", 60)
+
+    scheduler = TriggerScheduler(triggers, workflows, lambda job: None)
+    result = scheduler.tick(now=time.time() + 61)
+
+    assert result == []
+    assert triggers.get(trigger.id).enabled is False
+
+
+def test_recurring_trigger_http_lifecycle(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOVEREIGN_STATE_DIR", str(tmp_path / "state"))
+    app = create_app(str(ROOT / "configs"))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["Authorization"] = f"Bearer {app.state.session_token}"
+
+        definition = client.post(
+            "/workflows/definitions",
+            json={"name": "trig-wf", "steps": [{"id": "a", "job_kind": "chat"}]},
+        ).json()
+
+        missing_def = client.post(
+            "/workflows/triggers",
+            json={"workflow_definition_id": "does-not-exist", "interval_seconds": 60},
+        )
+        assert missing_def.status_code == 404
+
+        created = client.post(
+            "/workflows/triggers",
+            json={"workflow_definition_id": definition["id"], "interval_seconds": 0.05},
+        )
+        assert created.status_code == 201
+        trigger_id = created.json()["id"]
+        assert created.json()["enabled"] is True
+
+        listed = client.get("/workflows/triggers").json()["triggers"]
+        assert trigger_id in [t["id"] for t in listed]
+
+        disabled = client.put(f"/workflows/triggers/{trigger_id}/enabled", json={"enabled": False})
+        assert disabled.status_code == 200
+        assert disabled.json()["enabled"] is False
+
+        missing_toggle = client.put(
+            "/workflows/triggers/does-not-exist/enabled", json={"enabled": True}
+        )
+        assert missing_toggle.status_code == 404
+
+        # Directly drive one tick (rather than waiting on the real poll_interval_seconds)
+        # to prove the scheduler wired into this app's lifespan actually works, without a
+        # slow, wall-clock-dependent test: disabled must not fire even though its
+        # schedule is already due.
+        time.sleep(0.1)
+        assert app.state.trigger_scheduler.tick() == []

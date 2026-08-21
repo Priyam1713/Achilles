@@ -1798,6 +1798,74 @@ not fabrication.
   kind normally has; the roster/grant system (F-031, F-037) and the workflow system are
   currently independent of each other, not composed.
 
+### F-039 — Added: recurring workflow triggers, closing F-038's last open half
+
+- **Severity:** `minor` (a scheduler layered on an already-real DAG executor, not new
+  authority) · **Status:** `fixed`
+- **Motivating problem:** F-038 built genuine DAG execution but explicitly left
+  recurring/scheduled triggers open — "run this workflow every N seconds" had no
+  mechanism at all. `docs/IMPLEMENTATION_STATUS.md`'s own pending-item wording named both
+  halves together; only the DAG-execution half existed.
+- **Fix applied:**
+  - `kernel/triggers.py` — `RecurringTriggerStore`/`RecurringTriggerRecord`: which
+    `WorkflowDefinition` to start and how often, `enabled`, and `next_run_at`/
+    `last_run_at` bookkeeping. `create()` rejects a non-positive interval outright.
+    `due(now=...)` and `mark_ran(id, now=...)` both accept an explicit instant rather
+    than always reading the wall clock, precisely so schedule math can be tested
+    deterministically instead of relying on real `time.sleep()` calls to stand in for
+    the passage of time (see "Verification" below for the real bug that omission caused
+    in this fix's own first test draft).
+  - `kernel/trigger_scheduler.py` — `TriggerScheduler`, mirroring `JobDispatcher`'s own
+    `start()`/`shutdown()` background-`asyncio.Task` shape deliberately (same category of
+    thing: a long-lived loop owned by the API-layer app instance, not part of
+    `SovereignKernel`, so the kernel stays usable without a running event loop from
+    synchronous CLI commands). A trigger firing calls nothing but the *existing*
+    `WorkflowService.start()` — the identical call a human-initiated
+    `POST /workflows/definitions/{id}/start` makes — so no execution logic is
+    duplicated between the manual and scheduled paths. `tick()` is exposed separately
+    from the polling `_loop()` specifically so a caller (a test, or an operator wanting
+    an immediate check) can run exactly one poll without waiting on
+    `poll_interval_seconds`; a trigger whose `workflow_definition_id` no longer resolves
+    is disabled rather than retried forever, matching the "don't spin on a request that
+    can never succeed" reasoning `RosterService` already applies to an authority-ceiling
+    violation. A tick failure inside the background loop is logged and never stops
+    future polls (`except Exception: logger.exception(...)`, matching
+    `_advance_workflow_best_effort`'s "a bookkeeping failure must never take down the
+    caller" contract).
+  - `api/server.py` constructs one `TriggerScheduler` per app (reusing `dispatcher.submit`
+    exactly as `job_executor`'s workflow-advance hook does) and starts/stops it in the
+    same `lifespan` block as the job dispatcher, in the correct order (trigger scheduler
+    shuts down *before* the dispatcher, so a tick in flight during shutdown still has a
+    live dispatcher to submit into). New endpoints: `POST /workflows/triggers`,
+    `GET /workflows/triggers`, `PUT /workflows/triggers/{id}/enabled`.
+- **Verification:** 7 new tests. Store-level: non-positive interval rejected; `due()`
+  respects both schedule and the `enabled` flag; `mark_ran()` advances `next_run_at` by
+  exactly the configured interval; unknown ids raise for both mutating methods.
+  `TriggerScheduler.tick()`: a due trigger starts its workflow and hands the resulting
+  job to `submit_callback`, while a sibling trigger not yet due is left untouched in the
+  same tick; a trigger naming a nonexistent workflow definition is disabled rather than
+  erroring or retried. Then a full HTTP lifecycle test: create a definition, reject a
+  trigger for an unknown definition (404), create a real one, list it, disable it via the
+  toggle endpoint, confirm toggling an unknown trigger 404s, and confirm a disabled
+  trigger's `tick()` — driven directly via `app.state.trigger_scheduler.tick()`, not a
+  real wall-clock wait — correctly does not fire even though its schedule has elapsed.
+  **Caught real test flakiness while writing the first version of the scheduler test,
+  before it ever failed in CI:** an initial draft simulated "already due" with a
+  1-millisecond interval plus a short `time.sleep()`, which meant the trigger could
+  become due *again* by the time the test's own assertions ran, since real wall-clock
+  time kept advancing during test execution — an assertion failed non-deterministically
+  on the very first run. Fixed at the root rather than papering over it with a longer
+  sleep: added an explicit `now` override to `tick()` (threaded through to
+  `due()`/`mark_ran()`), so every trigger test asserts against a fixed instant with no
+  real waiting at all. Full suite **119 passed**, `ruff check src/ tests/ scripts/`
+  clean, re-run twice to confirm no residual flakiness.
+- **Honest limits:** interval-only scheduling (no cron expressions, no "run at this time
+  of day"); a trigger's fired workflow instance carries no `AgentProfile`/authority
+  context, same limitation F-038 already named for manually-started instances; no upper
+  bound on how many triggers can be due in one `tick()`, and no jitter/stagger between
+  them (a poll that finds many simultaneously due triggers starts all of their workflows
+  in the same tick, sequentially).
+
 ---
 
 ## Priority order
@@ -1883,21 +1951,28 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
     plus an end-to-end `NativeAgentLoop` test proving a real run now actually executes.
     `RosterService`'s approval pipeline is now load-bearing for execution, not just
     record-keeping.
-16. ~~**F-038**~~ — **fixed, DAG execution half only.** `WorkflowDefinition`
-    (immutable, versioned, cycle-validated) and `WorkflowInstance` are real, and
-    `job_executor.execute()`'s new completion hook makes it a genuine executor: a step
-    succeeding creates and submits its now-ready downstream step's job automatically,
-    verified through the real dispatcher end to end, not just in `WorkflowService`
-    isolation. Recurring/scheduled triggers remain unbuilt — a separate subsystem.
+16. ~~**F-038**~~ — **fixed, DAG execution half; F-039 closed the other half.**
+    `WorkflowDefinition` (immutable, versioned, cycle-validated) and `WorkflowInstance`
+    are real, and `job_executor.execute()`'s new completion hook makes it a genuine
+    executor: a step succeeding creates and submits its now-ready downstream step's job
+    automatically, verified through the real dispatcher end to end, not just in
+    `WorkflowService` isolation.
+17. ~~**F-039**~~ — **fixed.** `RecurringTriggerStore` + `TriggerScheduler` (mirroring
+    `JobDispatcher`'s own background-task shape) start a workflow on an interval by
+    calling nothing but the existing `WorkflowService.start()` — no duplicated execution
+    path. Caught and fixed real test flakiness in its own first draft (a
+    real-`time.sleep()`-based "already due" simulation raced against test-execution
+    overhead) by adding an overridable `now` parameter throughout, rather than papering
+    over it with a longer sleep.
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
 **F-013** (retrieval stack right-sizing, blocked on the same licence review); **F-022**
 (explicitly the user's values decision, not mine — already resolved for personal use via
 the local overlay, F-025). Every cleanup-tier item (F-006 through F-024) is now `fixed`.
-Tier 5's safety-critical core (F-031 through F-037) and DAG execution (F-038) are built;
-identity propagation is closed for `Run` and `ExecutionBroker`; an issued
-`CapabilityGrant` now genuinely authorizes execution end to end. Remaining Tier 5 pieces
-(recurring/scheduled workflow triggers, skill evaluation) and all of Tier 6 (harness
-tournament, desktop product, remote providers) remain unstarted — genuine new subsystem
-builds, not bounded defect fixes.
+Tier 5's safety-critical core (F-031 through F-037), DAG execution (F-038) and recurring
+triggers (F-039) are all built; identity propagation is closed for `Run` and
+`ExecutionBroker`; an issued `CapabilityGrant` now genuinely authorizes execution end to
+end. The one remaining Tier 5 piece is the skill-candidate evaluation/promotion
+pipeline; all of Tier 6 (harness tournament, desktop product, remote providers) remains
+unstarted — genuine new subsystem builds, not bounded defect fixes.
