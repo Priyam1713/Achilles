@@ -18,3 +18,7 @@ benchmarks/results/*.jsonl
 
 # Generated local infrastructure secrets
 infra/searxng/settings.yml
+
+# Personal model overlay (knowledge/research.md invariant 8): never shared, may name
+# non-OSI-licensed or unverified models an operator has personally reviewed and accepted.
+configs/models.local.yaml

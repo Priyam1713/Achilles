@@ -1,0 +1,149 @@
+# Deep-brain and fast-brain benchmark candidates.
+#
+# This file exists to answer F-005 and D-012: on this machine, does a dense 27B or a
+# sparse-active hybrid MoE make the better general brain? It is evidence-gathering
+# configuration, NOT a routing manifest. Nothing here is installed, promoted or routed by
+# being listed. Promotion happens in configs/models.yaml after a human reads the report.
+#
+# `model` and `draft` are resolved under $SOAI_MODEL_DIR. A candidate whose files are absent
+# is reported as `skipped`, never silently dropped.
+
+defaults:
+  # Prompt-processing and generation lengths. pp measures prefill (compute bound),
+  # tg measures decode (memory-bandwidth bound). tg is the number that decides whether an
+  # agent loop is usable.
+  n_prompt: 512
+  n_gen: 128
+  repetitions: 3
+  flash_attn: "on"   # quoted: bare `on` is a YAML boolean
+  cache_type_k: q8_0
+  cache_type_v: q8_0
+  n_ctx_fit: 16384
+  # VRAM headroom left for the desktop compositor and the kernel's own allocations.
+  # Sourced from configs/system.yaml:resources.reserve_vram_mb so this tool cannot drift
+  # from the scheduler's view of the same machine (see FIXES.md F-009).
+  fit_target_mb: null   # null => read reserve_vram_mb from system.yaml
+
+candidates:
+  # ---- Incumbent: dense 27B, hybrid linear attention, natively multimodal ----
+  - id: qwen38-27b-q4km
+    label: Qwen3.8-27B UD-Q4_K_M (incumbent)
+    family: dense
+    model: qwen38-27b/gguf/Qwen3.8-27B-UD-Q4_K_M.gguf
+    notes: >-
+      16.46 GB on a 12 GB card. llama-fit-params resolves this to -ngl 37 of 64 layers,
+      so roughly 42% of the weights are read from host RAM on every token.
+
+  - id: qwen38-27b-q4km-mtp
+    label: Qwen3.8-27B UD-Q4_K_M + MTP draft
+    family: dense
+    model: qwen38-27b/gguf/Qwen3.8-27B-UD-Q4_K_M.gguf
+    draft: qwen38-27b/gguf/MTP/mtp-Qwen3.8-27B-Q4_0.gguf
+    notes: >-
+      Speculative decoding is the standard remedy for a memory-bandwidth-bound decode loop.
+      The draft head is already downloaded and has never been measured.
+
+  # ---- Cheaper quantisations of the same model: halving offload is cheaper than
+  #      changing models, so test the lever before testing the alternative. ----
+  - id: qwen38-27b-q4ks
+    label: Qwen3.8-27B UD-Q4_K_S
+    family: dense
+    model: qwen38-27b/gguf/Qwen3.8-27B-UD-Q4_K_S.gguf
+    optional: true
+    notes: 15.36 GB. Not yet downloaded.
+
+  - id: qwen38-27b-iq4xs
+    label: Qwen3.8-27B UD-IQ4_XS
+    family: dense
+    model: qwen38-27b/gguf/Qwen3.8-27B-UD-IQ4_XS.gguf
+    optional: true
+    notes: 14.25 GB — roughly halves CPU offload versus UD-Q4_K_M. Not yet downloaded.
+
+  # ---- Challenger: sparse-active hybrid MoE (D-012) ----
+  # LICENCE GATE: NVIDIA Open Model License is not OSI-approved and Article 8 places an
+  # indemnification obligation on the licensee. A winning benchmark does NOT authorise
+  # adoption. See knowledge/research.md invariant 8 and D-012.
+  - id: nemotron35-lightning-q4-ncmoe
+    label: Nemotron-3.5-Lightning-30B-A3B Q4_0 (experts on CPU)
+    family: hybrid-moe
+    model: nemotron35-lightning-30b-a3b/gguf/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf
+    licence_gate: nvidia-open-model-license
+    # Sweep how many layers' experts are pushed to CPU. Attention and Mamba layers stay
+    # resident; only the sparsely-activated experts stream. This is the whole point.
+    n_cpu_moe: [0, 16, 32, 48]
+    notes: >-
+      18.90 GB total but ~3B active parameters per token (128 experts, 6 routed).
+      llama.cpp exposes -ncmoe at our already-pinned commit.
+
+  - id: nemotron35-lightning-q4-mtp
+    label: Nemotron-3.5-Lightning-30B-A3B Q4_0 + MTP (experts on CPU)
+    family: hybrid-moe
+    model: nemotron35-lightning-30b-a3b/gguf/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf
+    draft: nemotron35-lightning-30b-a3b/gguf/mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf
+    licence_gate: nvidia-open-model-license
+    n_cpu_moe: [32]
+    optional: true
+    notes: Run only after the plain -ncmoe sweep identifies the best offload point.
+
+  # ---- Unverified local artifacts (throughput reference only) ----
+  # These files were placed by hand under $SOAI_MODEL_DIR and were NOT resolved through
+  # scripts/fetch_brain_candidate.sh or any Hugging Face revision lock. Per the project's
+  # own evidence standard (knowledge/research.md) they are `unverified`: no confirmed
+  # upstream repo, no immutable revision, no license text bundled in the GGUF metadata.
+  # GGUF header inspection (llama-gguf) confirms both are `qwen35`-architecture models
+  # consistent with a Qwen3.8-27B derivative, but the header carries no source/license key,
+  # so provenance rests entirely on the filename and the user's own account of origin
+  # ("Qwen3.8-27B OBLITERATED", attributed to Pliny the Liberator's "Obliteratus" release).
+  #
+  # "Obliterated"/"abliterated" models have refusal directions removed from their
+  # activations so the model complies with requests the base model would decline. That is
+  # a deliberate, safety-relevant property, not a quality variant -- it is evaluated here
+  # for ONE reason only: architecture and total-parameter count are identical to the
+  # incumbent, so a throughput measurement is directly comparable and costs nothing extra
+  # to collect while other candidates are being benchmarked. A throughput number is not an
+  # endorsement and settles nothing about whether this belongs anywhere in the manifest,
+  # a default profile, or a system given to the community. See FIXES.md F-021: that is a
+  # values decision, not a benchmarking one, and it is the user's to make, not a default
+  # this file gets to set by merely listing the file.
+  #
+  # NEVER promoted, NEVER routed, NEVER included in an install profile from this file alone.
+  - id: qwen38-27b-obliterated-q6k
+    label: Qwen3.8-27B OBLITERATED Q6_K (unverified, throughput reference only)
+    family: dense
+    model: qwen38-27b-obliterated/gguf/Qwen3.8-27B-OBLITERATED-Q6_K.gguf
+    provenance: unverified-local
+    optional: true
+    notes: >-
+      22.43 GB. GGUF header: architecture=qwen35, no source/license metadata. Larger than
+      the official UD-Q6_K (21.98 GB) -- consistent with an unquantized-embedding or
+      slightly different quantization recipe, not confirmed against upstream.
+
+  - id: qwen38-27b-obliterated-iq4xs
+    label: Qwen3.8-27B OBLITERATED IQ4_XS (unverified, throughput reference only)
+    family: dense
+    model: qwen38-27b-obliterated/gguf/Qwen3.8-27B-OBLITERATED-IQ4_XS.gguf
+    provenance: unverified-local
+    optional: true
+    notes: >-
+      14.36 GB, close to the official UD-IQ4_XS (14.25 GB). Useful as a second, independent
+      data point for the "does IQ4_XS meaningfully improve throughput over Q4_K_M" question
+      in F-005, without waiting on an official-source download.
+
+  # ---- Fast brain, for reference scale ----
+  - id: qwen35-9b-q6k
+    label: Qwen3.5-9B Q6_K (resident fast brain)
+    family: dense
+    model: qwen35-9b/gguf/qwen35-9b-Q6_K.gguf
+    optional: true
+    notes: >-
+      Not yet converted — only the HF snapshot is present. Run prepare_llama_models.sh first.
+      Included so the fast/deep gap is measured rather than assumed.
+
+# Gates a candidate must clear before it is even proposed for promotion. Speed alone is
+# never sufficient; this mirrors the promotion scorecard in knowledge/research.md.
+promotion_gates:
+  min_tg_tokens_per_second: 10.0   # below this an interactive agent loop is not viable
+  max_vram_peak_mb: 11800          # must not evict the desktop on a 12227 MiB card
+  requires_quality_eval: true      # throughput is necessary, not sufficient
+  requires_licence_review: true    # invariant 8
+  auto_promote: false              # never

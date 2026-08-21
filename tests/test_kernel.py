@@ -1,11 +1,15 @@
 import asyncio
+import shutil
 from pathlib import Path
 
 import pytest
+from starlette.testclient import TestClient
 
 from sovereign_ai.api.server import create_app
 from sovereign_ai.kernel.app import SovereignKernel
+from sovereign_ai.kernel.config import ConfigBundle
 from sovereign_ai.kernel.jobs import JobStore
+from sovereign_ai.kernel.registry import CapabilityRegistry
 from sovereign_ai.kernel.types import ActionRequest, CapabilityRequest, RoutingMode, TrustLabel
 from sovereign_ai.transactions.manager import TransactionManager, TransactionStep
 
@@ -305,3 +309,148 @@ def test_api_exposes_status_and_durable_jobs(tmp_path, monkeypatch):
         "/collaboration/rooms/{room_id}/canvas",
         "/collaboration/rooms/{room_id}/verify",
     } <= paths
+
+def api_client(tmp_path, monkeypatch) -> TestClient:
+    monkeypatch.setenv("SOVEREIGN_STATE_DIR", str(tmp_path / "state"))
+    app = create_app(str(ROOT / "configs"))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    client.headers["Authorization"] = f"Bearer {app.state.session_token}"
+    return client
+
+
+def test_mutating_endpoints_require_session_token(tmp_path, monkeypatch):
+    """FIXES.md F-004: no mutation endpoint should be reachable without the session token."""
+    monkeypatch.setenv("SOVEREIGN_STATE_DIR", str(tmp_path / "state"))
+    app = create_app(str(ROOT / "configs"))
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    unauthenticated = client.post(
+        "/collaboration/rooms", json={"id": "no-auth", "name": "No Auth", "owner_id": "owner"}
+    )
+    assert unauthenticated.status_code == 401
+
+    wrong_token = client.post(
+        "/collaboration/rooms",
+        json={"id": "no-auth", "name": "No Auth", "owner_id": "owner"},
+        headers={"Authorization": "Bearer not-the-real-token"},
+    )
+    assert wrong_token.status_code == 401
+
+    authenticated = client.post(
+        "/collaboration/rooms",
+        json={"id": "auth-room", "name": "Auth Room", "owner_id": "owner"},
+        headers={"Authorization": f"Bearer {app.state.session_token}"},
+    )
+    assert authenticated.status_code == 201
+
+    # Read-only routes remain open; only mutation requires the token.
+    assert client.get("/collaboration/rooms").status_code == 200
+
+
+def test_loopback_only_middleware_rejects_foreign_host(tmp_path, monkeypatch):
+    """FIXES.md F-004/F-019: a Host header that does not match this installation must be
+    refused before it reaches any route, mutating or not."""
+    client = api_client(tmp_path, monkeypatch)
+    rebound = client.get("/health", headers={"Host": "attacker.example.com"})
+    assert rebound.status_code == 400
+
+    genuine = client.get("/health")
+    assert genuine.status_code == 200
+
+
+def test_create_collaboration_identity_is_not_upsert(tmp_path, monkeypatch):
+    """FIXES.md F-003: creation must fail closed on a duplicate id, not silently redefine
+    an existing identity's kind/trust/agent configuration."""
+    client = api_client(tmp_path, monkeypatch)
+    payload = {"id": "duplicate-visitor", "display_name": "Visitor", "kind": "human"}
+
+    first = client.post("/collaboration/identities", json=payload)
+    assert first.status_code == 201
+
+    second = client.post(
+        "/collaboration/identities",
+        json={**payload, "display_name": "Someone Else Entirely"},
+    )
+    assert second.status_code == 409
+
+    unchanged = client.get("/collaboration/identities").json()
+    names = {item["id"]: item["display_name"] for item in unchanged["identities"]}
+    assert names["duplicate-visitor"] == "Visitor"
+
+    updated = client.put(
+        "/collaboration/identities/duplicate-visitor",
+        json={"display_name": "Corrected Name", "kind": "human"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["display_name"] == "Corrected Name"
+
+
+def test_add_collaboration_member_requires_requester_to_already_belong(tmp_path, monkeypatch):
+    """FIXES.md F-002: adding a member must be authorized by an existing member, not open
+    to any caller who merely holds the session token."""
+    client = api_client(tmp_path, monkeypatch)
+    client.post(
+        "/collaboration/identities",
+        json={"id": "outsider", "display_name": "Outsider", "kind": "human"},
+    ).raise_for_status()
+    client.post(
+        "/collaboration/identities",
+        json={"id": "newcomer", "display_name": "Newcomer", "kind": "human"},
+    ).raise_for_status()
+
+    denied = client.post(
+        "/collaboration/rooms/commons/members/newcomer",
+        json={"requester_id": "outsider"},
+    )
+    assert denied.status_code == 403
+
+    allowed = client.post(
+        "/collaboration/rooms/commons/members/newcomer",
+        json={"requester_id": "owner"},
+    )
+    assert allowed.status_code == 204
+
+def test_local_model_overlay_merges_without_touching_the_shared_manifest(tmp_path):
+    """configs/models.local.yaml lets one operator route a model (e.g. one accepted under
+    a non-default licence for personal use only, per knowledge/research.md invariant 8)
+    without editing configs/models.yaml -- the file every community install shares."""
+    configs = tmp_path / "configs"
+    shutil.copytree(ROOT / "configs", configs)
+    # Never trust an incidental real overlay on the machine running this test; the test
+    # must be deterministic regardless of what one operator has personally accepted.
+    (configs / "models.local.yaml").unlink(missing_ok=True)
+
+    baseline = ConfigBundle(configs)
+    baseline_ids = {m["id"] for m in baseline.models["models"]}
+    assert "test-only-local-model" not in baseline_ids
+
+    (configs / "models.local.yaml").write_text(
+        """
+models:
+  - id: test-only-local-model
+    name: Test-Only Local Model
+    source: example/test-only-local-model
+    source_type: huggingface
+    verified_source: true
+    status: candidate
+    install_policy: local
+    capabilities: [reasoning]
+    preferred_engines: [llama_cpp]
+    quality_prior: 0.5
+""",
+        encoding="utf-8",
+    )
+    overlaid = ConfigBundle(configs)
+    overlaid_ids = {m["id"] for m in overlaid.models["models"]}
+    assert "test-only-local-model" in overlaid_ids
+    assert overlaid_ids - baseline_ids == {"test-only-local-model"}
+
+    registry = CapabilityRegistry(overlaid)
+    assert registry.validate() == []
+    assert "test-only-local-model" in [m.id for m in registry.models_for("reasoning")]
+
+    # No install profile references the local-only id, so a profile-based install can never
+    # pull it in -- routing to it requires an explicit capability request.
+    for profile in overlaid.install_profiles["profiles"].values():
+        assert "test-only-local-model" not in profile.get("models", [])
+

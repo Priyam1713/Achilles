@@ -8,10 +8,22 @@ import yaml
 
 
 class ConfigBundle:
+    """Loads the shared manifest, then merges an optional gitignored local overlay.
+
+    ``configs/models.local.yaml`` lets one operator add models to their own machine --
+    something licensed outside the community-shippable set (see
+    ``configs/models.local.yaml.example`` and ``knowledge/research.md`` invariant 8), a
+    model still under personal evaluation, or simply a checkpoint nobody else has -- without
+    touching ``configs/models.yaml``, the file every community install shares. A local model
+    id can shadow a manifest one; it cannot appear in ``install-profiles.yaml``, so it is
+    never pulled in by a profile-based install, only reached by explicit local routing.
+    """
+
     def __init__(self, root: str | Path | None = None):
         self.root = Path(root or os.getenv("SOVEREIGN_CONFIG_ROOT", "./configs")).resolve()
         self.system = self._load("system.yaml")
         self.models = self._load("models.yaml")
+        self._merge_local_models()
         self.engines = self._load("engines.yaml")
         self.policies = self._load("policies.yaml")
         self.install_profiles = self._load("install-profiles.yaml")
@@ -23,6 +35,20 @@ class ConfigBundle:
             raise FileNotFoundError(f"Missing configuration: {path}")
         with path.open("r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
+
+    def _merge_local_models(self) -> None:
+        path = self.root / "models.local.yaml"
+        if not path.exists():
+            return
+        with path.open("r", encoding="utf-8") as f:
+            local = yaml.safe_load(f) or {}
+        local_models = local.get("models") or []
+        if not local_models:
+            return
+        by_id = {model["id"]: model for model in self.models.get("models", [])}
+        for model in local_models:
+            by_id[model["id"]] = model
+        self.models["models"] = list(by_id.values())
 
     def _path(self, key: str, default: str, env_name: str) -> Path:
         """Resolve a configured data path without tying it to the process cwd.

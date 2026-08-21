@@ -38,12 +38,27 @@ No model, harness, sandbox, inference engine or UI owns the architecture. The ke
 
 ## One-go installation
 
-> **Pre-build gate:** do not run the heavyweight `workstation` bootstrap yet. The final audit
-> found mutable Git/package/container inputs and a port collision with an existing router on
-> `127.0.0.1:8080`. Complete decision D-011 in
-> [knowledge/research.md](knowledge/research.md) first: source baseline, immutable install
-> manifest, service ownership/ports, migrations, local authentication and bounded job/run
-> recovery. Then perform the smaller `core` physical baseline before expanding the profile.
+> **Pre-build gate:** do not run the heavyweight `workstation` bootstrap yet. Complete
+> decision D-011 in [knowledge/research.md](knowledge/research.md) first: migrations, local
+> authentication and bounded job/run recovery. Then perform the smaller `core` physical
+> baseline before expanding the profile.
+>
+> Two of the original gate's findings are now closed. Upstream runtime inputs are pinned to
+> immutable commits in `configs/runtime-sources.env`. The port collision was **resolved in
+> commit `b1a5b29`**, which moved this installation's llama.cpp router from `8080` to `18080`
+> and added a service-identity probe so startup refuses to adopt a foreign listener. The
+> other local router on `127.0.0.1:8080` is still running and is left strictly alone.
+>
+> Verify before every install rather than trusting this paragraph:
+>
+> ```powershell
+> uv run python scripts/verify_host.py --check-ports
+> ```
+>
+> That check enumerates **both** the Windows host and the WSL2 namespace. Checking only the
+> host is not a weaker check, it is the wrong one: WSL2 forwards connections to services bound
+> inside the distro but does not publish their listening sockets in the Windows TCP table, so
+> a host-only scan reports a busy port as free. See `docs/FIXES.md` F-019.
 
 From PowerShell in the repository root. The recommended `workstation` profile is
 matched to this RTX 5070 Ti Laptop GPU; heavy artifacts are stored on WSL ext4,
@@ -108,3 +123,5 @@ The selected browser, Windows UI, human-takeover and desktop-shell design is in
 `docs/AUTOMATION.md`.
 The dated reasoning, evaluated upstreams, rejected alternatives, and recheck triggers live
 in [knowledge/research.md](knowledge/research.md).
+Confirmed defects, their evidence, and the order in which they are being fixed live in
+[docs/FIXES.md](docs/FIXES.md).

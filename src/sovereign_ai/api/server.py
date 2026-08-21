@@ -5,11 +5,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 
+from sovereign_ai.collaboration import IdentityAlreadyExists
 from sovereign_ai.kernel.app import SovereignKernel
+from sovereign_ai.kernel.auth import SessionAuth, allowed_hosts
 from sovereign_ai.kernel.jobs import JobStatus
 from sovereign_ai.kernel.types import ActionRequest, CapabilityRequest, RoutingMode
 from sovereign_ai.resources.telemetry import snapshot
@@ -73,8 +76,21 @@ class CollaborationCanvasUpdate(BaseModel):
     content: str
 
 
+class CollaborationMembershipCreate(BaseModel):
+    requester_id: str = "owner"
+
+
+class CollaborationIdentityUpdate(BaseModel):
+    display_name: str
+    kind: Literal["human", "agent"] = "human"
+    agent: dict[str, Any] | None = None
+
+
 def create_app(config_root: str | None = None) -> FastAPI:
     kernel = SovereignKernel.build(config_root)
+    session = SessionAuth(kernel.config.state_dir / "session.token")
+    system = kernel.config.system.get("system", {})
+    hosts = allowed_hosts(system.get("bind", "127.0.0.1"), int(system.get("port", 7788)))
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -88,7 +104,46 @@ def create_app(config_root: str | None = None) -> FastAPI:
     app = FastAPI(title="Local Sovereign AI Kernel", version="0.1.0", lifespan=lifespan)
     app.state.kernel = kernel
     app.state.job_tasks = {}
+    # Exposed for local tooling/tests that need to call authenticated endpoints
+    # in-process; never rendered anywhere except the loopback-checked /ui response.
+    app.state.session_token = session.token
     kernel.jobs.recover_interrupted()
+
+    def _host_ok(value: str | None) -> bool:
+        return bool(value) and value.split(",")[0].strip() in hosts
+
+    class LoopbackOnlyMiddleware(BaseHTTPMiddleware):
+        """Reject any request whose Host/Origin does not match this installation.
+
+        This is a DNS-rebinding guard (FIXES.md F-004): a page served from an attacker
+        domain whose DNS resolves to 127.0.0.1 can make a victim's browser send requests
+        that *look* same-origin, but it cannot forge the Host header a legitimate loopback
+        client sends. Applies to every request, including unauthenticated GETs, because the
+        session token itself is served from ``/ui`` and must not leak to a rebound origin.
+        """
+
+        async def dispatch(self, request: Request, call_next):
+            if not _host_ok(request.headers.get("host")):
+                return HTMLResponse("Host not allowed", status_code=400)
+            origin = request.headers.get("origin")
+            if origin is not None:
+                origin_host = origin.split("://", 1)[-1]
+                if not _host_ok(origin_host):
+                    return HTMLResponse("Origin not allowed", status_code=400)
+            return await call_next(request)
+
+    app.add_middleware(LoopbackOnlyMiddleware)
+
+    async def require_session(authorization: str | None = Header(default=None)) -> None:
+        """Bearer-token guard applied to every mutating (POST/PUT/DELETE) route.
+
+        FIXES.md F-004: previously no mutation endpoint required any credential at all.
+        """
+        presented = None
+        if authorization and authorization.lower().startswith("bearer "):
+            presented = authorization[7:].strip()
+        if not session.verify(presented):
+            raise HTTPException(status_code=401, detail="missing or invalid session token")
 
     def assistant_content(result: dict[str, Any]) -> str:
         payload = result.get("result") or {}
@@ -173,11 +228,19 @@ def create_app(config_root: str | None = None) -> FastAPI:
         return record
 
     @app.get("/ui", include_in_schema=False)
-    async def ui():
-        path = Path("web/index.html").resolve()
+    async def ui() -> HTMLResponse:
+        # Resolved relative to the repository root, not the process CWD (FIXES.md F-015):
+        # this file lives at src/sovereign_ai/api/server.py, four directories under root.
+        repo_root = Path(__file__).resolve().parents[3]
+        path = repo_root / "web" / "index.html"
         if not path.exists():
             raise HTTPException(status_code=404, detail="UI not found")
-        return FileResponse(path)
+        html = path.read_text(encoding="utf-8")
+        # The LoopbackOnlyMiddleware above already proved this request's Host/Origin belong
+        # to this installation before this handler runs, so it is safe to hand the page the
+        # token it needs to call mutating endpoints. See FIXES.md F-004.
+        html = html.replace("%%SOAI_SESSION_TOKEN%%", session.token)
+        return HTMLResponse(html)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -218,22 +281,22 @@ def create_app(config_root: str | None = None) -> FastAPI:
     async def capabilities() -> dict[str, Any]:
         return {"capabilities": kernel.registry.capabilities()}
 
-    @app.post("/route")
+    @app.post("/route", dependencies=[Depends(require_session)])
     async def route(req: CapabilityRequest) -> dict[str, Any]:
         return kernel.scheduler.route(req).model_dump()
 
-    @app.post("/policy/evaluate")
+    @app.post("/policy/evaluate", dependencies=[Depends(require_session)])
     async def policy(req: ActionRequest) -> dict[str, Any]:
         return kernel.policy.evaluate(req).model_dump()
 
-    @app.post("/chat")
+    @app.post("/chat", dependencies=[Depends(require_session)])
     async def chat(req: ChatRequest) -> dict[str, Any]:
         try:
             return await kernel.inference.chat(req.request, req.messages, req.model_overrides)
         except Exception as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    @app.post("/specialist/invoke")
+    @app.post("/specialist/invoke", dependencies=[Depends(require_session)])
     async def specialist_invoke(req: SpecialistRequest) -> dict[str, Any]:
         try:
             return await kernel.specialists.invoke(
@@ -242,14 +305,14 @@ def create_app(config_root: str | None = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    @app.post("/media/generate")
+    @app.post("/media/generate", dependencies=[Depends(require_session)])
     async def media_generate(req: MediaRequest) -> dict[str, Any]:
         try:
             return await kernel.media.generate(req.request, req.settings, req.timeout_s)
         except Exception as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    @app.post("/jobs", status_code=202)
+    @app.post("/jobs", status_code=202, dependencies=[Depends(require_session)])
     async def submit_job(submission: JobSubmission) -> dict[str, Any]:
         return enqueue_job(submission).model_dump()
 
@@ -263,7 +326,11 @@ def create_app(config_root: str | None = None) -> FastAPI:
             "identities": [item.model_dump() for item in kernel.collaboration.identities()]
         }
 
-    @app.post("/collaboration/identities", status_code=201)
+    @app.post(
+        "/collaboration/identities",
+        status_code=201,
+        dependencies=[Depends(require_session)],
+    )
     async def create_collaboration_identity(
         request: CollaborationIdentityCreate,
     ) -> dict[str, Any]:
@@ -278,14 +345,45 @@ def create_app(config_root: str | None = None) -> FastAPI:
             return kernel.collaboration.create_identity(
                 request.id, request.display_name, request.kind, trust, request.agent
             ).model_dump()
+        except IdentityAlreadyExists as exc:
+            # FIXES.md F-003: creation is exclusive, not upsert. A caller cannot silently
+            # redefine an existing identity's kind, trust or agent routing.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put(
+        "/collaboration/identities/{identity_id}",
+        dependencies=[Depends(require_session)],
+    )
+    async def update_collaboration_identity(
+        identity_id: str, request: CollaborationIdentityUpdate
+    ) -> dict[str, Any]:
+        """Authorized update path for an existing identity (FIXES.md F-003).
+
+        Separate from creation so a session-authenticated caller can correct a display name
+        or agent routing without being able to claim someone else's unused id, and so an
+        unauthenticated caller can create exactly once but never silently overwrite.
+        """
+        try:
+            if request.kind == "agent" and request.agent:
+                capability = request.agent.get("capability")
+                mode = request.agent.get("mode")
+                if capability not in kernel.registry.capabilities():
+                    raise ValueError(f"Unknown agent capability: {capability}")
+                RoutingMode(mode)
+            trust = "untrusted_model_output" if request.kind == "agent" else "untrusted_collaboration"
+            return kernel.collaboration.update_identity(
+                identity_id, request.display_name, request.kind, trust, request.agent
+            ).model_dump()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/collaboration/rooms")
     async def collaboration_rooms() -> dict[str, Any]:
         return {"rooms": kernel.collaboration.rooms()}
 
-    @app.post("/collaboration/rooms", status_code=201)
+    @app.post("/collaboration/rooms", status_code=201, dependencies=[Depends(require_session)])
     async def create_collaboration_room(request: CollaborationRoomCreate) -> dict[str, Any]:
         collaboration_human(request.owner_id)
         try:
@@ -295,10 +393,25 @@ def create_app(config_root: str | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/collaboration/rooms/{room_id}/members/{identity_id}", status_code=204)
-    async def add_collaboration_member(room_id: str, identity_id: str) -> None:
+    @app.post(
+        "/collaboration/rooms/{room_id}/members/{identity_id}",
+        status_code=204,
+        dependencies=[Depends(require_session)],
+    )
+    async def add_collaboration_member(
+        room_id: str, identity_id: str, request: CollaborationMembershipCreate
+    ) -> None:
+        # FIXES.md F-002: this endpoint previously had no caller check at all. The
+        # requester must be an authenticated human identity who already belongs to the
+        # room; membership is the only authorization the collaboration plane has, so
+        # granting it must not itself be unauthorized.
+        collaboration_human(request.requester_id)
         try:
-            kernel.collaboration.add_member(room_id, identity_id)
+            kernel.collaboration.add_member(
+                room_id, identity_id, requester_id=request.requester_id
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -313,7 +426,7 @@ def create_app(config_root: str | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/collaboration/rooms/{room_id}/messages", status_code=202)
+    @app.post("/collaboration/rooms/{room_id}/messages", status_code=202, dependencies=[Depends(require_session)])
     async def post_collaboration_message(
         room_id: str, request: CollaborationMessageCreate
     ) -> dict[str, Any]:
@@ -357,7 +470,7 @@ def create_app(config_root: str | None = None) -> FastAPI:
             jobs.append(enqueue_job(submission).model_dump())
         return {"event": event.model_dump(), "jobs": jobs}
 
-    @app.post("/collaboration/rooms/{room_id}/reactions", status_code=201)
+    @app.post("/collaboration/rooms/{room_id}/reactions", status_code=201, dependencies=[Depends(require_session)])
     async def add_collaboration_reaction(
         room_id: str, request: CollaborationReactionCreate
     ) -> dict[str, Any]:
@@ -375,7 +488,7 @@ def create_app(config_root: str | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="room not found")
         return kernel.collaboration.canvas(room_id)
 
-    @app.put("/collaboration/rooms/{room_id}/canvas")
+    @app.put("/collaboration/rooms/{room_id}/canvas", dependencies=[Depends(require_session)])
     async def update_collaboration_canvas(
         room_id: str, request: CollaborationCanvasUpdate
     ) -> dict[str, Any]:
@@ -404,7 +517,7 @@ def create_app(config_root: str | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="job not found")
         return record.model_dump()
 
-    @app.delete("/jobs/{job_id}")
+    @app.delete("/jobs/{job_id}", dependencies=[Depends(require_session)])
     async def cancel_job(job_id: str) -> dict[str, Any]:
         record = kernel.jobs.request_cancel(job_id)
         if record is None:

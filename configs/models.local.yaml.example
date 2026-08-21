@@ -1,0 +1,72 @@
+# Personal model overlay — copy this file to `configs/models.local.yaml` to use it.
+#
+# `configs/models.local.yaml` (note: NOT `.example`) is gitignored and merged into the
+# shared manifest at kernel startup by ConfigBundle._merge_local_models(). It exists so one
+# operator can route a model on their own machine WITHOUT touching configs/models.yaml —
+# the file every community install of this project shares.
+#
+# Use this for a model that:
+#   - carries a license this project's own bar (knowledge/research.md invariant 8) does not
+#     clear for a shared default — e.g. a non-OSI vendor license with unusual terms you have
+#     personally reviewed and accepted for your own use;
+#   - is still under personal quality evaluation and you don't want it influencing anyone
+#     else's install;
+#   - is simply yours: a fine-tune, a checkpoint nobody else has, a local experiment.
+#
+# RULES, not suggestions:
+#   1. A local model id can shadow (override) a manifest model id, but install-profiles.yaml
+#      never references local-only ids, so `Install.ps1 -Profile core|workstation|full` can
+#      never pull one in. Routing to it is only possible by explicit capability request.
+#   2. `verified_source: true` still means what it means everywhere else in this project:
+#      the source was actually checked, not merely typed. Verify it before setting it.
+#   3. Put the REAL reasoning for accepting a non-default license in `license_note`, not just
+#      "ok". If you ever hand this repository to someone else, `models.local.yaml` does not
+#      travel with it (it's gitignored) — but the decision trail should still make sense to
+#      you six months from now.
+#   4. `status: candidate` (not `final`) is the right default for anything not yet
+#      quality-evaluated: candidates only route in `mode: deep`, never fast/smart, so an
+#      unevaluated personal model can't silently win a routing decision it hasn't earned.
+#
+# Worked example below — the actual entry used on this machine as of 2026-08-21, after
+# measuring an 8.3x generation-speed win over the dense Qwen3.8-27B incumbent at essentially
+# the same VRAM cost (docs/FIXES.md F-012) and accepting the NVIDIA Open Model License's
+# Article 8 indemnification clause for personal use only (never for a shared profile).
+
+models:
+  - id: nemotron35-lightning-30b-a3b
+    name: NVIDIA Nemotron 3.5 Lightning 30B-A3B
+    source: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+    source_type: huggingface
+    verified_source: true
+    status: candidate
+    install_policy: local
+    capabilities:
+      - reasoning
+      - coding
+      - planning
+      - synthesis
+      - verification
+    preferred_engines:
+      - llama_cpp
+    quality_prior: 0.75
+    resident_priority: 0
+    estimated_vram_mb: 9438
+    can_cpu_offload: true
+    exclusive_gpu: true
+    commercial_allowed: true
+    license_note: >-
+      NVIDIA Open Model License. Not OSI-approved; Article 8 requires the licensee to
+      indemnify NVIDIA against third-party claims arising from the model, its derivatives,
+      or its outputs. Accepted for PERSONAL/LOCAL use only on 2026-08-21. Never to be added
+      to configs/models.yaml or any shared install profile. See docs/FIXES.md F-012/F-022
+      and knowledge/research.md invariant 8 and D-012.
+    notes: >-
+      Sparse-active hybrid MoE (nemotron_h architecture; 128 experts, 6 active, ~3B active
+      of 30B total). Measured 2026-08-21 on this machine: 52.79 tok/s generation at 9438 MiB
+      peak VRAM with `-ncmoe 32` -- 8.3x the dense Qwen3.8-27B incumbent's 6.36 tok/s at
+      essentially the same VRAM footprint. Quality on real coding/planning tasks is NOT yet
+      evaluated; quality_prior above is a deliberately conservative placeholder, not a
+      benchmarked claim. Requires the runtime's already-generated llama-server preset
+      (state/llama-models.ini) to carry a matching [nemotron35-lightning-30b-a3b] section
+      with `n-cpu-moe = 32` -- no engine alias is needed since the model id matches the
+      preset section name exactly.

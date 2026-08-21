@@ -1,4 +1,4 @@
 from .service import CollaborationService
-from .store import CollaborationStore
+from .store import CollaborationStore, IdentityAlreadyExists
 
-__all__ = ["CollaborationService", "CollaborationStore"]
+__all__ = ["CollaborationService", "CollaborationStore", "IdentityAlreadyExists"]

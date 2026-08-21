@@ -2,6 +2,10 @@
 
 This file exists to prevent the architecture from being mistaken for capabilities that have not yet been exercised on the target workstation.
 
+Known defects in what *has* been built — with evidence, severity and fix order — are tracked
+separately in [FIXES.md](FIXES.md). This file says what exists; that one says what is wrong
+with it.
+
 ## Implemented and locally tested in this artifact
 
 - configuration/model/capability registry validation
@@ -43,9 +47,16 @@ planned Tauri desktop product.
 The final pre-build audit also found that the folder has no Git baseline, mutation endpoints
 have no local session authentication, SQLite stores have no general migration runner, job
 submission creates unbounded in-process tasks, and startup accepts any process listening on a
-configured port. Port 8080 is already used by another local router on this workstation. These
-are the first implementation gates; the heavyweight bootstrap must not overwrite or stop that
-service implicitly.
+configured port. The Git baseline now exists. The remaining items are tracked as F-004, F-010
+and the migration gate in [FIXES.md](FIXES.md).
+
+The audit's port-collision finding was **real and has been fixed**. Another local model
+router (a uvicorn gateway from a separate project) does listen on `127.0.0.1:8080`. Commit
+`b1a5b29` moved this installation's llama.cpp router to `18080` and added a service-identity
+probe to `scripts/start.ps1`, so startup will not adopt a listener it did not create. The
+foreign router is untouched. Port ownership is now verified by
+`scripts/verify_host.py --check-ports`, which scans both the Windows host and the WSL2
+namespace. See `docs/FIXES.md` F-018 and F-019.
 
 The source-level test suite passes in the build environment.
 

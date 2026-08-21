@@ -104,10 +104,29 @@ class CollaborationService:
         trust: str,
         agent: dict[str, Any] | None = None,
     ) -> IdentityRecord:
+        """Public creation. Non-upserting (FIXES.md F-003): raises on an existing id rather
+        than silently redefining it, so a caller cannot repost an agent's own id to change
+        its routing configuration or flip it to a different kind."""
         identity_id = self._validate_id(identity_id, "identity id")
         if kind == "agent" and not agent:
             raise ValueError("Agent identities require an agent configuration")
-        return self.store.upsert_identity(identity_id, display_name, kind, trust, agent)
+        return self.store.create_identity_exclusive(identity_id, display_name, kind, trust, agent)
+
+    def update_identity(
+        self,
+        identity_id: str,
+        display_name: str,
+        kind: str,
+        trust: str,
+        agent: dict[str, Any] | None = None,
+    ) -> IdentityRecord:
+        """Authorized update path for an existing identity. Separate from creation so the
+        two operations can carry different authorization rules as the roster/D-008 identity
+        model matures."""
+        identity_id = self._validate_id(identity_id, "identity id")
+        if kind == "agent" and not agent:
+            raise ValueError("Agent identities require an agent configuration")
+        return self.store.update_identity(identity_id, display_name, kind, trust, agent)
 
     def create_room(
         self, room_id: str, name: str, purpose: str, owner_id: str = "owner"
@@ -120,11 +139,21 @@ class CollaborationService:
         self.store.add_member(room_id, "kernel")
         return room
 
-    def add_member(self, room_id: str, identity_id: str) -> None:
+    def add_member(self, room_id: str, identity_id: str, *, requester_id: str) -> None:
+        """Add a member to a room.
+
+        FIXES.md F-002: this was previously reachable with no caller check at all -- any
+        request could add any identity, including an agent identity, to any room, which
+        routes around the only authorization membership provides. ``requester_id`` must
+        already be a member of the room (or the kernel identity); the API layer is
+        responsible for first proving that requester is an authenticated human.
+        """
         if self.store.get_room(room_id) is None:
             raise ValueError(f"Unknown room: {room_id}")
         if self.store.get_identity(identity_id) is None:
             raise ValueError(f"Unknown identity: {identity_id}")
+        if requester_id != "kernel" and not self.store.is_member(room_id, requester_id):
+            raise PermissionError(f"{requester_id} is not a member of room {room_id}")
         self.store.add_member(room_id, identity_id)
 
     def events(self, room_id: str, limit: int = 100) -> list[CollaborationEvent]:

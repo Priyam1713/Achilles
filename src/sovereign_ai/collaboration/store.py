@@ -14,6 +14,12 @@ from .models import CollaborationEvent, IdentityRecord, RoomRecord
 GENESIS_HASH = "0" * 64
 
 
+class IdentityAlreadyExists(ValueError):
+    """Raised by create_identity_exclusive so the API layer can return 409 without
+    string-matching an error message."""
+
+
+
 class CollaborationStore:
     """SQLite-backed rooms with an append-only, per-room tamper-evident event chain."""
 
@@ -154,6 +160,13 @@ class CollaborationStore:
         trust: str,
         agent: dict[str, Any] | None = None,
     ) -> IdentityRecord:
+        """Insert-or-replace. Reserved for trusted, idempotent config loading (bootstrap).
+
+        NOT exposed to the public API (FIXES.md F-003): a caller must not be able to
+        silently redefine an existing identity's kind, trust or agent routing by posting
+        the same id again. Public creation uses ``create_identity_exclusive``; authorized
+        updates use ``update_identity``.
+        """
         created_at_ns = time.time_ns()
         with self._connect() as connection:
             connection.execute(
@@ -171,6 +184,71 @@ class CollaborationStore:
                     created_at_ns,
                 ),
             )
+        identity = self.get_identity(identity_id)
+        assert identity is not None
+        return identity
+
+    def create_identity_exclusive(
+        self,
+        identity_id: str,
+        display_name: str,
+        kind: str,
+        trust: str,
+        agent: dict[str, Any] | None = None,
+    ) -> IdentityRecord:
+        """Insert only. Raises ``ValueError`` if the id already exists.
+
+        This is what the public ``POST /collaboration/identities`` endpoint calls.
+        """
+        if self.get_identity(identity_id) is not None:
+            raise IdentityAlreadyExists(f"Identity already exists: {identity_id}")
+        created_at_ns = time.time_ns()
+        with self._connect() as connection:
+            try:
+                connection.execute(
+                    """INSERT INTO collaboration_identities
+                       (id,display_name,kind,trust,agent_json,created_at_ns)
+                       VALUES(?,?,?,?,?,?)""",
+                    (
+                        identity_id,
+                        display_name,
+                        kind,
+                        trust,
+                        json.dumps(agent, sort_keys=True) if agent else None,
+                        created_at_ns,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                # A concurrent creator won the race between our existence check and insert.
+                raise IdentityAlreadyExists(f"Identity already exists: {identity_id}") from exc
+        identity = self.get_identity(identity_id)
+        assert identity is not None
+        return identity
+
+    def update_identity(
+        self,
+        identity_id: str,
+        display_name: str,
+        kind: str,
+        trust: str,
+        agent: dict[str, Any] | None = None,
+    ) -> IdentityRecord:
+        """Update only. Raises ``ValueError`` if the id does not already exist."""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """UPDATE collaboration_identities
+                   SET display_name=?, kind=?, trust=?, agent_json=?
+                   WHERE id=?""",
+                (
+                    display_name,
+                    kind,
+                    trust,
+                    json.dumps(agent, sort_keys=True) if agent else None,
+                    identity_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Unknown identity: {identity_id}")
         identity = self.get_identity(identity_id)
         assert identity is not None
         return identity

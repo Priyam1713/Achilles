@@ -1,6 +1,6 @@
 # Living research and architecture ledger
 
-> Last consolidated: **2026-08-19**  
+> Last consolidated: **2026-08-21**  
 > Target: Windows host + Ubuntu 24.04/WSL2, RTX 5070 Ti Laptop GPU (12 GB VRAM),
 > 32 GB host RAM  
 > Architecture truth: [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)  
@@ -69,6 +69,13 @@ These are the decisions new research must fit rather than silently overthrow.
    memory, gateway, sandbox, and collaboration implementations can be changed independently.
 7. **This workstation's measurements win.** Source/license checks, exact-machine quality,
    latency, VRAM/RAM, failure recovery, and security tests decide promotion.
+8. **The system is open source, end to end, and is meant to be given away.** Every component
+   in the critical path must be self-hostable and openly licensed. Closed-source software,
+   subscription-gated services, and hosted commercial inference APIs are not candidates —
+   not as defaults, not as fallbacks. The audience is people who cannot or will not rely on
+   a subscription, and the deliverable is something they can run on their own hardware and
+   adapt. A component that is best-in-class but proprietary does not qualify. "Open weights"
+   is not the same as open source, and the distinction is a gate, not a footnote.
 
 ## Current architecture snapshot
 
@@ -389,6 +396,103 @@ provisioned by the installer after its mutable-source behavior is corrected.
 7. Continue with persistent agency, scoped memory, automation and desktop vertical slices in
    the previously recorded order.
 
+## Research wave 5 — the open-source mandate, hybrid MoE, and the experience plane
+
+Consolidated on **2026-08-21**, two days after the initial ledger. Two things changed: the
+project acquired an explicit open-source-only mission (baseline invariant 8), and the model
+landscape moved underneath the manifest. This wave records both, plus the first real
+inspection of the experience-layer upstreams.
+
+### Truth correction
+
+The 2026-08-19 ledger is not wrong, but it is already **incomplete in one load-bearing way**:
+it evaluated harnesses, memory, sandboxes and collaboration exhaustively, and evaluated the
+*model architecture question* only through the Qwen family. In the intervening days the
+relevant axis turned out not to be "which vendor" but "**dense versus hybrid-MoE with low
+active parameter count**", which is the variable that actually decides whether a quality-tier
+model is usable on 12 GB of VRAM. See `docs/FIXES.md` F-005 and F-012.
+
+Second correction: `docs/SOURCES.md` and this ledger both treated licensing as a per-model
+metadata field. Under invariant 8 it is a **gate applied before capability is considered**,
+and it applies to runtimes and applications as well as weights.
+
+### The licensing gate, stated concretely
+
+| Tier | Meaning | Status |
+| --- | --- | --- |
+| OSI-approved (Apache-2.0, MIT, BSD, CC-BY) | Unrestricted for our purposes and for downstream community use. | `adopted` without further review |
+| Open weights, non-OSI vendor license (NVIDIA Open Model License, Llama Community, Gemma) | Redistributable and commercially usable, but carries vendor-specific terms. | requires explicit review and a recorded decision **per model** |
+| Non-commercial / research-only | Usable by an individual, not shippable as a community default. | `declined` for default profiles; opt-in only, clearly labelled |
+| Closed source, hosted API, subscription-gated | — | `declined` unconditionally |
+
+**NVIDIA Open Model License:** `primary-verified` that it grants a perpetual, worldwide,
+non-exclusive, royalty-free licence including derivative models and makes no ownership claim
+on outputs. Also `primary-verified` that it is **not OSI-approved**, and that Article 8 places
+an indemnification obligation on the licensee for third-party claims arising from use of the
+model, derivatives or outputs. That indemnity is unusual relative to OSI licences and is the
+specific clause to resolve before shipping Nemotron weights in a default profile.
+
+### Model layer — hybrid MoE is the architecture that fits this machine
+
+| Finding | Evidence | Decision | Reason and boundary |
+| --- | --- | --- | --- |
+| [Nemotron 3.5 Lightning 30B-A3B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) and [Nemotron 3 Nano 30B-A3B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16) | `primary-verified` — `config.json` read directly: `model_type: nemotron_h`, 52 layers, `n_routed_experts: 128`, `num_experts_per_tok: 6`, `hybrid_override_pattern` with ~6 attention layers | high-priority `trial` as deep-brain candidate, **pending licence review** | ~3B active of 30B total. A dense 27B reads its whole weight set per token; this reads a fraction. On a 12 GB card that is the difference between offload being fatal and offload being cheap. |
+| `llama.cpp` already supports it | `primary-verified` — `LLM_ARCH_NEMOTRON_H_MOE` in `src/llama-arch.cpp`, and `-ncmoe` / `--n-cpu-moe` / `--spec-draft-n-cpu-moe` in `common/arg.cpp`, **at our already-pinned commit `dc72703`** | `adopted` capability | No runtime change, no new pin, no new build. The expert-offload flag we need is already compiled into the router we already selected. |
+| Official [`ggml-org` GGUF](https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF) | `primary-verified` — Q4_0 at 18.90 GB plus a 1.16 GB MTP draft head | `trial` artifact | First-party GGUF from the llama.cpp org, with the speculative-decoding sidecar in the same repo. |
+| 1B-class retrieval models | `primary-verified` — `nvidia/Nemotron-3-Embed-1B-BF16` 2.30 GB; `nvidia/llama-nemotron-rerank-vl-1b-v2-fp8` 2.40 GB and vision-language capable | high-priority `trial`, **pending licence review** | Replaces ~59 GB of 8B embed/rerank models with ~5 GB, and collapses the separate text and multimodal rerank slots into one model. See F-013. |
+| `nvidia/parakeet-tdt-0.6b-v3` | `primary-verified`, **CC-BY-4.0** | `trial` ASR candidate | Notable because it is the one high-traffic NVIDIA speech model on a genuinely OSI-compatible licence, so it passes the gate without review. |
+| Speculative-decoding sidecar formats | `primary-verified` — `llama.cpp` `spec-type` accepts `draft-mtp`, `draft-eagle3`, `draft-dflash`, `draft-dspark`; NVIDIA publishes `-DSpark` and `-DFlash` variants | `watch` | Broadens the draft-model options beyond MTP. Relevant to F-005: speculative decoding is precisely the technique that helps a memory-bound generation loop. |
+
+**The generalisable lesson, independent of vendor:** on 12 GB VRAM, prefer *sparse-active
+hybrid* architectures (Mamba/linear attention + MoE) over dense models of similar total size.
+Total parameters set disk and RAM cost; **active** parameters set token latency. The manifest
+currently optimises the wrong one. If the Nemotron licence review fails, this lesson stands and
+we re-scan for an Apache-2.0 or MIT model with the same shape rather than reverting to dense.
+
+### Experience layer — the part we said we wanted and had not inspected
+
+| Upstream | Evidence | Decision | Boundary and correction |
+| --- | --- | --- | --- |
+| [block/buzz](https://github.com/block/buzz) | `primary-verified` — README inspected 2026-08-21 | `reference` for interaction design; **`declined` as backend**, confirming `D-010` | Tauri + React desktop, Rust `buzz-relay` on Axum — but the runtime is **Nostr (NIP-01/42/34) over PostgreSQL + Redis + S3/MinIO**. Agents are "members, not bots" with their own keys and audit trail, which is a genuinely good idea we should adopt *semantically*. Importing the stack would give us a second identity system, a second event log and three new services. The extraction spike remains the correct move. |
+| [CopilotKit/openbot](https://github.com/CopilotKit/openbot) | `primary-verified` — README inspected 2026-08-21 | `reference` only; **`declined` as a dependency** under invariant 8 | Its governance design is close to ours and worth studying: a gateway that resolves the target, evaluates **CEL-based policy**, "writes audit entries first, then executes or refuses with rule explanations", and gives each bot a container with its own browser profile, its own `/workspace` volume and optional gVisor. That is `CapabilityGrant` + `WorkspaceLease` + verification, independently arrived at. **Disqualified as a dependency:** it requires a CopilotKit Intelligence project (hosted) for durable threads, and ships no local model support — only OpenAI/Anthropic/Google credentials. MIT, alpha. |
+| [AG-UI protocol](https://github.com/ag-ui-protocol/ag-ui) | `primary-verified` — README inspected 2026-08-21 | `trial` at the experience seam | MIT, ~16 event types, transport-agnostic (SSE/WebSocket/webhook), SDKs in 8 languages. It standardises *agent → frontend* streaming, state sync and human-in-the-loop — the seam between our kernel and any UI. Adopting it would let a community member swap our desktop for their own without touching the kernel. It is a **rendering/streaming contract, not an authority boundary**; the same rule we applied to MCP applies here. |
+| [block/goose](https://github.com/block/goose) | `primary-verified` — README inspected 2026-08-21 | high-priority `trial` as the first `AgentLoop` adapter | Apache-2.0, Rust, **governed by the Agentic AI Foundation at the Linux Foundation** since 2026-04-07. Desktop + CLI + API, 70+ MCP extensions, explicit Ollama/local-provider support. Vendor-neutral governance materially lowers the capture risk that `D-001` exists to prevent — this is the harness least likely to be pulled out from under a community project. Same Block lineage as Buzz, and Buzz ships a `buzz-acp` harness bridge, so the two compose. |
+| OpenCode, OpenHands, Cline, Aider | `unverified` at primary source in this wave — landscape reporting only | `watch`, candidates for the harness tournament | Reported as the most-starred open coding agent (OpenCode), the strongest sandboxed/CI runner (OpenHands), and Git-native editing (Aider), all with local-model support. **Do not treat these characterisations as verified.** They enter the tournament in experiment 11; they do not enter the architecture. |
+
+### Memory layer — recheck
+
+Reported LongMemEval standings put Hindsight ≈ 91%, Zep ≈ 64%, Mem0 ≈ 49%, with a product
+called OMEGA claiming ≈ 95% fully-local. **All of these are `unverified` here**: the numbers
+come from vendor and aggregator comparison pages, several of which are selling one of the
+entrants. `D-002` already requires shadow-mode evaluation against our own data before any
+memory provider is promoted, and this wave changes nothing about that — it only adds
+[cognee](https://github.com/topoteretes/cognee) (Apache-2.0, self-hosted, no paid tier) and
+[Letta](https://github.com/letta-ai/letta) to the shadow-mode candidate list alongside
+Hindsight. The relevant near-term work is F-008, which is ours, not a vendor's.
+
+### Execution layer — recheck
+
+`libkrun` is confirmed as the embeddable KVM library behind microsandbox and Podman's VM mode,
+which gives the `D-004` BoxLite/micro-VM trial a second implementation path if WSL2 KVM proves
+unreliable. gVisor remains the middle tier between hardened containers and true micro-VMs. No
+change to the OpenShell-preferred, Docker-fallback decision.
+
+### What changed because of wave 5
+
+1. **Licence became a gate, not metadata** (baseline invariant 8). Applies to weights,
+   runtimes and applications alike.
+2. **The deep-brain question reopened.** Not "Qwen versus someone else" but "dense versus
+   sparse-active hybrid". `D-012`.
+3. **The retrieval stack is the biggest resource win available**, and it is available now.
+   `D-013`.
+4. **The experience plane gained a protocol seam.** AG-UI decouples our kernel from any
+   particular UI, which is what makes "customise it for your hardware, the rest stays the
+   same" actually true for a community. `D-014`.
+5. **Goose is the first harness worth adapting**, primarily because of who governs it.
+   `D-015`.
+6. **OpenBot validated our governance design and failed our licence gate** — the most useful
+   possible outcome for a `reference`.
+
 ## Decision records
 
 ### D-001 — The sovereign kernel, not DeepSeek Harness, is the foundation
@@ -509,13 +613,149 @@ provisioned by the installer after its mutable-source behavior is corrected.
 - **Date:** 2026-08-19
 - **Status:** `adopted` after the final pre-build audit.
 - **Reason:** A 290 GB install is the wrong first irreversible experiment while upstream
-  runtime inputs are mutable, source has no version-control baseline, the local API is
-  unauthenticated and the configured inference port belongs to another router.
+  runtime inputs are mutable, source has no version-control baseline and the local API is
+  unauthenticated.
+- **Amended 2026-08-21:** The Git baseline and immutable runtime pins now exist, and the
+  port-collision clause is **resolved rather than withdrawn**. The finding was correct: a
+  separate local model router does listen on `127.0.0.1:8080`. Commit `b1a5b29` moved our
+  llama.cpp router to `18080` and added a service-identity probe, so the foreign router is
+  left alone. An earlier attempt to retire this clause on 2026-08-21 claimed the port was
+  free; that claim came from a Windows-host-only scan, which cannot see WSL2-bound sockets
+  (`docs/FIXES.md` F-001, F-019). The remaining blockers are local authentication, migrations
+  and bounded job/run recovery.
 - **Consequence:** first work is the small, testable baseline/pinning/service/auth/migration/job
   slice above. Then run the core physical build and measure it before expanding to the
   workstation profile. Existing local services are preserved unless explicitly adopted.
 - **Revisit trigger:** none for the invariant; exact mechanisms may change, but heavy installs
   and privileged surfaces always require provenance, ownership, recovery and authentication.
+
+### D-012 — Active parameters, not total parameters, decide the deep brain
+
+- **Date:** 2026-08-21
+- **Status:** `adopted` principle; specific model `trial` pending licence review.
+- **Reason:** Token generation on this machine is memory-bandwidth bound, not compute bound.
+  A dense 27B at Q4 must read ~16 GB per token and cannot fit 12 GB, so ~40% streams from
+  host RAM at roughly an eighth of VRAM bandwidth. A 30B-A3B hybrid MoE reads roughly 3B
+  parameters' worth per token and keeps its few attention layers resident. Total parameters
+  set disk and RAM cost; active parameters set latency. The manifest optimised the former.
+- **Consequence:** The deep-brain slot is now contested. `Qwen3.8-27B UD-Q4_K_M` and
+  `Nemotron-3.5-Lightning-30B-A3B Q4_0 + MTP under -ncmoe` are benchmarked head to head on
+  identical tasks before either is treated as final. Quantisation variants
+  (`UD-Q4_K_S`, `UD-IQ4_XS`) are part of the same sweep, since halving CPU offload is a
+  cheaper lever than changing models.
+- **Safety boundary:** Nemotron ships under a non-OSI vendor licence with an indemnification
+  clause. A winning benchmark does not authorise adoption; the licence review under invariant
+  8 is a separate and blocking gate.
+- **Revisit trigger:** If the licence review fails, the principle survives the model — re-scan
+  for a permissively licensed sparse-active hybrid rather than defaulting back to dense.
+- **Measured 2026-08-21 (fast-brain reference):** `docs/FIXES.md` F-005. `Qwen3.8-27B
+  UD-Q4_K_M` generates at **6.36 tok/s** (37/64 layers resident, 9398 MiB peak) — below the
+  10 tok/s interactive viability gate. `Qwen3.5-9B Q6_K`, converted locally the same
+  session, generates at **49.57 tok/s**, fully resident (6962 MiB peak), no licence review
+  needed.
+- **Measured 2026-08-21 (Nemotron challenger):** `docs/FIXES.md` F-012. Downloaded and
+  SHA-256-verified against a locked revision, then swept `-ncmoe` on `llama-bench`.
+  **At `@ncmoe32`: 52.79 tok/s at 9438 MiB peak VRAM — 8.3x the dense 27B's generation
+  speed at essentially the same VRAM footprint (9438 vs 9398 MiB), from a larger model with
+  a presumptively higher quality ceiling, and slightly ahead of even the 9B fast brain.**
+  This is the strongest available confirmation of the principle on real hardware. It does
+  **not** settle the deep-brain question by itself: quality on real coding/planning tasks is
+  unmeasured for all three candidates, and the NVIDIA Open Model License's Article 8
+  indemnification clause remains an unresolved, blocking gate under invariant 8 — a winning
+  benchmark does not authorise adoption. Prefill throughput trades off sharply against
+  `-ncmoe` (2633.84 tok/s at `@ncmoe0` versus ~520-625 tok/s once experts are forced to
+  CPU), so even the operating point within the Nemotron family needs a mixed-workload
+  benchmark, not a single number, before being treated as a default.
+
+### D-013 — Retrieval is the highest-frequency path and must be sized accordingly
+
+- **Date:** 2026-08-21
+- **Status:** `adopted` principle; specific models `trial` pending licence review.
+- **Reason:** The manifest spends ~59 GB on four 8B embed/rerank models, each of which must
+  contend for the same 12 GB of VRAM as the brain it is serving. Retrieval runs on nearly
+  every turn; the brain does not. Verified 1B-class alternatives are ~2.3 GB each, and the
+  vision-language reranker covers the text and multimodal slots with one model.
+- **Consequence:** Benchmark 1B-class embed/rerank against the 8B incumbents on a local
+  retrieval set drawn from our own corpus. Leaderboard position is a prior, not evidence —
+  the same rule that governs every other promotion here.
+- **Safety boundary:** Same licence gate as `D-012`. If it fails, re-scan for permissively
+  licensed 1B-class retrieval models; the sizing lesson is vendor-independent.
+- **Revisit trigger:** Measured recall or rerank quality loss large enough to change task
+  outcomes, not merely benchmark deltas.
+
+### D-014 — Adopt a protocol seam between the kernel and any user interface
+
+- **Date:** 2026-08-21
+- **Status:** `adopted` seam; AG-UI `trial` as the implementation.
+- **Reason:** The mission is a system other people run on their own hardware and adapt.
+  That only works if the UI is genuinely replaceable, and it is only genuinely replaceable if
+  the contract between kernel and frontend is a published protocol rather than our internal
+  types. AG-UI is MIT, transport-agnostic, has multi-language SDKs, and standardises exactly
+  the hard parts: streaming, state synchronisation and human-in-the-loop interrupts.
+- **Consequence:** Kernel views and commands are exposed over a typed seam that AG-UI can be
+  spoken across. Our Tauri desktop becomes one client among possible others rather than the
+  privileged one. A community member can put their own frontend on the same kernel.
+- **Safety boundary:** AG-UI is a **rendering and streaming contract, not an authority
+  boundary** — the identical rule already applied to MCP in `D-009`. Nothing arriving over it
+  authorises a mutation. Approvals resolve against kernel records, never against a UI event.
+- **Revisit trigger:** If AG-UI's event model cannot express approvals, delegations and
+  verification receipts without lossy translation, keep the seam and replace the protocol.
+
+### D-015 — Goose is the first agent-loop adapter, chosen on governance as much as capability
+
+- **Date:** 2026-08-21
+- **Status:** `trial` as the first concrete `AgentLoop`.
+- **Reason:** `D-001` exists to stop harness churn from moving our root of trust. The strongest
+  available defence against that is a harness that no single vendor can withdraw or relicense.
+  Goose is Apache-2.0 and governed by the Agentic AI Foundation at the Linux Foundation, runs
+  local models, speaks MCP, and shares lineage with Buzz — whose ACP bridge already
+  demonstrates the composition we want.
+- **Consequence:** Implement `AgentLoop` against Goose first, and use that work to discover
+  the *minimum* required loop contract. Do not widen the interface to accommodate one harness;
+  advertise optional interrupt/checkpoint/resume capabilities instead, per the wave-3 sequence.
+- **Safety boundary:** Subordinate like every other loop. The kernel issues the `run_id`,
+  grants, leases and final state transition. Anything Goose reports is untrusted evidence
+  until a verifier says otherwise.
+- **Revisit trigger:** The harness tournament (experiment 11) may produce a better performer.
+  Governance neutrality is a tiebreaker, not an exemption from measurement.
+
+### D-016 — Nemotron accepted for personal use only, behind a new local-overlay seam
+
+- **Date:** 2026-08-21
+- **Status:** `adopted`. Personal-machine scope only; explicitly **not** extended to
+  `configs/models.yaml` or any shared install profile.
+- **Reason:** `D-012`'s benchmark landed decisively: `Nemotron-3.5-Lightning-30B-A3B`
+  `@ncmoe32` measures 52.79 tok/s at 9438 MiB peak VRAM — 8.3x the dense Qwen3.8-27B
+  incumbent's 6.36 tok/s at essentially the same VRAM footprint (`docs/FIXES.md` F-012).
+  The NVIDIA Open Model License remains non-OSI-approved with an Article 8 indemnification
+  clause that invariant 8 treats as a blocking gate for anything shipped to the community.
+  Presented with the throughput result and the specific clause, the user chose: accept the
+  license for their own personal/local use, never as a community default.
+- **Consequence:** This is the first real use of a distinction the project needed but had
+  not yet built — a model an operator personally reviews and accepts is not the same thing
+  as a model this project recommends to everyone. `ConfigBundle` gained
+  `configs/models.local.yaml`: a gitignored overlay, documented and templated in
+  `configs/models.local.yaml.example`, merged into the registry after `models.yaml` loads.
+  A local model id can shadow a manifest one; no install profile can ever reference a
+  local-only id, so a profile-based install can never pull one in regardless of what any
+  one operator has personally accepted. `docs/FIXES.md` F-025.
+- **What was actually wired, same session, not just decided:** `state/llama-models.ini`
+  gained a `[nemotron35-lightning-30b-a3b]` preset section (`n-cpu-moe = 32`, the
+  best-measured sweep point); `configs/models.local.yaml` carries the `ModelSpec` with
+  `status: candidate` (routes only under `mode: deep`) and a `license_note` recording this
+  decision in full; a live `POST /models/load` → `POST /v1/chat/completions` →
+  `POST /models/unload` round trip through the actual router confirmed correct end-to-end
+  routing, distinct from and not to be confused with the properly warmed-up
+  `llama-bench` throughput measurement.
+- **Safety boundary:** `status: candidate` is not decorative — it is the mechanism that
+  keeps an unevaluated personal model from silently outranking the evaluated manifest
+  incumbent in ordinary routing. Quality on real coding/planning tasks remains completely
+  unmeasured; nothing here treats throughput as a proxy for it.
+- **Revisit trigger:** A real quality evaluation could change the routing weight, but never
+  the license scope — that requires either a new decision by the user or a different
+  license entirely. If invariant 8 is ever loosened to accept indemnification clauses for
+  shared defaults, that is itself a decision this ledger would need to record, not an
+  automatic consequence of this one.
 
 ## Recommended experiment order
 
@@ -644,7 +884,40 @@ Checked on 2026-08-19 unless noted otherwise:
 - [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
 - [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B)
 
+Added 2026-08-21 (wave 5):
+
+- [nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16)
+- [nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16)
+- [ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF](https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF)
+- [nvidia/Nemotron-3-Embed-1B-BF16](https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16)
+- [nvidia/llama-nemotron-rerank-vl-1b-v2-fp8](https://huggingface.co/nvidia/llama-nemotron-rerank-vl-1b-v2-fp8)
+- [nvidia/parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
+- [NVIDIA Open Model License Agreement](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/)
+- [ag-ui-protocol/ag-ui](https://github.com/ag-ui-protocol/ag-ui)
+- [block/goose](https://github.com/block/goose)
+- [CopilotKit/openbot](https://github.com/CopilotKit/openbot)
+- [topoteretes/cognee](https://github.com/topoteretes/cognee)
+- [letta-ai/letta](https://github.com/letta-ai/letta)
+
 ## Change history
+
+### 2026-08-21 — Wave 5: open-source mandate, hybrid MoE, experience plane
+
+- Added baseline invariant 8: the system is open source end to end and is meant to be given
+  away. Licence became a gate applied before capability, covering weights, runtimes and
+  applications alike.
+- Reopened the deep-brain decision on the dense-versus-sparse-active axis after verifying
+  that `nemotron_h` hybrid MoE is already supported by our pinned llama.cpp commit, together
+  with the `-ncmoe` expert-offload flag.
+- Recorded the retrieval stack as the largest available resource win: ~59 GB of 8B embed and
+  rerank models against ~5 GB of verified 1B-class alternatives.
+- Inspected Buzz, OpenBot, AG-UI and Goose at primary source. Confirmed `D-010` (Buzz is a
+  design reference, not a backend), declined OpenBot as a dependency under invariant 8 while
+  adopting its decide-before/record-after gateway pattern as a reference, adopted a protocol
+  seam between kernel and UI, and selected Goose as the first agent-loop adapter on
+  governance grounds.
+- Opened `docs/FIXES.md` as the standing defect and correction ledger, with seventeen findings
+  from the 2026-08-21 audit and a stated priority order.
 
 ### 2026-08-19 — Initial ledger
 
