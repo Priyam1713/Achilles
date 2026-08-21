@@ -84,6 +84,22 @@ class CollaborationStore:
                     ON collaboration_events(parent_event_id, seq);
                 """
             )
+            # FIXES.md Tier 5: link an identity to the durable AgentProfile that owns its
+            # role/routing/memory-scope/authority-ceiling. This store predates
+            # MigrationRunner (F-026) and was never retrofitted onto it -- retrofitting a
+            # hash-chain-critical store is real, separate surgery, not bundled into this
+            # column add. `ALTER TABLE ADD COLUMN` is not naturally idempotent like
+            # `CREATE TABLE IF NOT EXISTS`, so check first.
+            existing_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(collaboration_identities)"
+                ).fetchall()
+            }
+            if "agent_profile_id" not in existing_columns:
+                connection.execute(
+                    "ALTER TABLE collaboration_identities ADD COLUMN agent_profile_id TEXT"
+                )
             # One-time adoption for databases created before room heads existed.
             # Once present, anchors are only advanced transactionally by append_event.
             connection.execute(
@@ -103,12 +119,14 @@ class CollaborationStore:
 
     @staticmethod
     def _identity(row: sqlite3.Row) -> IdentityRecord:
+        keys = row.keys()
         return IdentityRecord(
             id=row["id"],
             display_name=row["display_name"],
             kind=row["kind"],
             trust=row["trust"],
             agent=json.loads(row["agent_json"]) if row["agent_json"] else None,
+            agent_profile_id=row["agent_profile_id"] if "agent_profile_id" in keys else None,
             created_at_ns=row["created_at_ns"],
         )
 
@@ -159,6 +177,7 @@ class CollaborationStore:
         kind: str,
         trust: str,
         agent: dict[str, Any] | None = None,
+        agent_profile_id: str | None = None,
     ) -> IdentityRecord:
         """Insert-or-replace. Reserved for trusted, idempotent config loading (bootstrap).
 
@@ -171,16 +190,18 @@ class CollaborationStore:
         with self._connect() as connection:
             connection.execute(
                 """INSERT INTO collaboration_identities
-                   (id,display_name,kind,trust,agent_json,created_at_ns)
-                   VALUES(?,?,?,?,?,?)
+                   (id,display_name,kind,trust,agent_json,agent_profile_id,created_at_ns)
+                   VALUES(?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,
-                   kind=excluded.kind,trust=excluded.trust,agent_json=excluded.agent_json""",
+                   kind=excluded.kind,trust=excluded.trust,agent_json=excluded.agent_json,
+                   agent_profile_id=excluded.agent_profile_id""",
                 (
                     identity_id,
                     display_name,
                     kind,
                     trust,
                     json.dumps(agent, sort_keys=True) if agent else None,
+                    agent_profile_id,
                     created_at_ns,
                 ),
             )
@@ -195,6 +216,7 @@ class CollaborationStore:
         kind: str,
         trust: str,
         agent: dict[str, Any] | None = None,
+        agent_profile_id: str | None = None,
     ) -> IdentityRecord:
         """Insert only. Raises ``ValueError`` if the id already exists.
 
@@ -207,14 +229,15 @@ class CollaborationStore:
             try:
                 connection.execute(
                     """INSERT INTO collaboration_identities
-                       (id,display_name,kind,trust,agent_json,created_at_ns)
-                       VALUES(?,?,?,?,?,?)""",
+                       (id,display_name,kind,trust,agent_json,agent_profile_id,created_at_ns)
+                       VALUES(?,?,?,?,?,?,?)""",
                     (
                         identity_id,
                         display_name,
                         kind,
                         trust,
                         json.dumps(agent, sort_keys=True) if agent else None,
+                        agent_profile_id,
                         created_at_ns,
                     ),
                 )
@@ -233,7 +256,12 @@ class CollaborationStore:
         trust: str,
         agent: dict[str, Any] | None = None,
     ) -> IdentityRecord:
-        """Update only. Raises ``ValueError`` if the id does not already exist."""
+        """Update only. Raises ``ValueError`` if the id does not already exist.
+
+        Deliberately does not touch `agent_profile_id` -- this method's existing callers
+        update kind/trust/routing and must not have an unrelated field silently cleared out
+        from under them. Use `link_agent_profile` to set or clear that link explicitly.
+        """
         with self._connect() as connection:
             cursor = connection.execute(
                 """UPDATE collaboration_identities
@@ -246,6 +274,21 @@ class CollaborationStore:
                     json.dumps(agent, sort_keys=True) if agent else None,
                     identity_id,
                 ),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Unknown identity: {identity_id}")
+        identity = self.get_identity(identity_id)
+        assert identity is not None
+        return identity
+
+    def link_agent_profile(self, identity_id: str, agent_profile_id: str | None) -> IdentityRecord:
+        """Set (or, passing None, clear) which `AgentProfile` this identity is a room
+        address for. Separate from `update_identity` so ordinary routing/trust updates
+        can never accidentally clear an existing link (see that method's docstring)."""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE collaboration_identities SET agent_profile_id=? WHERE id=?",
+                (agent_profile_id, identity_id),
             )
             if cursor.rowcount == 0:
                 raise ValueError(f"Unknown identity: {identity_id}")

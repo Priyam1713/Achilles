@@ -1265,6 +1265,151 @@ not fabrication.
   called explicitly after `memory.put()` — nothing calls it automatically yet, so existing
   memories written before this fix are lexical-only until re-indexed.
 
+### F-031 — Added: the persistent-agency roster domain (`AgentProfile`, `Delegation`,
+  `CapabilityGrant`, `ApprovalRequest`, `WorkspaceLease`)
+
+- **Severity:** `major` (Tier 5 — a new subsystem, not a bounded defect) · **Status:**
+  `fixed` for the scope described below; several named pieces remain open, see "Explicitly
+  out of scope."
+- **Motivating problem:** `docs/ARCHITECTURE.md`'s "Persistent agency and the roster
+  domain" and `knowledge/research.md`'s `D-008` decision and object-boundary table
+  described `AgentProfile`, `Delegation`, `CapabilityGrant`, `ApprovalRequest` and
+  `WorkspaceLease` in detail, but none existed as code. Concretely, `PolicyEngine.evaluate()`'s
+  `approval_required` flag was a stateless boolean returned to a caller and forgotten the
+  moment the HTTP response was sent — nothing durable ever recorded that an action was
+  waiting on a human, nothing could show it to one, and nothing could resolve it later. An
+  agent had no durable identity independent of a collaboration room address, and there was
+  no mechanism for one agent to delegate scoped, expiring, approvable work to another
+  without either bypassing policy or having no record of having asked.
+- **Scope decision, made explicitly rather than by default:** this session paused before
+  building any of Tier 5 specifically to check in on it, because it is safety/authority
+  architecture (what an agent may delegate to another agent without a human present), not
+  ordinary application logic — see the "Left open" note this replaces, earlier in this
+  document. Given the go-ahead, built the foundational, safety-critical core of
+  `knowledge/research.md`'s "minimal implementation sequence" (steps 1, 3 and part of 6):
+  `AgentProfile`, `Delegation`, `CapabilityGrant`, `ApprovalRequest`, `WorkspaceLease`, and
+  the `RosterService` that coordinates them through the *existing*, unmodified
+  `PolicyEngine`. Mailbox/presence projections (step 2), enforceable memory scope ACLs
+  (step 4), workflow DAGs and the skill-candidate evaluation/promotion pipeline (steps 6's
+  remainder and 7) are real, separate pieces of work not attempted here — see "Explicitly
+  out of scope."
+- **Fix applied:**
+  - `kernel/agent_profiles.py` — `AgentProfileStore`/`AgentProfileRecord`: a durable
+    logical coworker (id, role, routing preferences, memory scopes, budgets, an
+    **authority ceiling** — the most a run acting for this profile could ever be granted).
+    Non-upserting creation (mirrors `CollaborationStore`'s F-003 shape) so a profile's
+    ceiling can never be silently widened by reposting its id.
+  - `kernel/approvals.py` — `ApprovalRequestStore`/`ApprovalRequestRecord`: the durable
+    record `PolicyEngine.evaluate()`'s `approval_required` never had. Structured decision,
+    risk, evidence, expiry and resolver; `resolve()` is exactly-once and refuses an
+    expired request rather than letting it be rubber-stamped after the fact.
+  - `kernel/capability_grants.py` — `CapabilityGrantStore`/`CapabilityGrantRecord`: the
+    *only* object that actually authorizes anything — expiring, narrow
+    subject/action/scope, always revocable, always provenance-tagged with who granted it
+    and (when applicable) which `ApprovalRequest` produced it.
+  - `kernel/delegations.py` — `DelegationStore`/`DelegationRecord`: the parent-child work
+    contract. Proposing one never issues a grant by itself; `RosterService` runs every
+    requested grant through the same `PolicyEngine.evaluate()` every other action in this
+    kernel goes through.
+  - `resources/workspace_leases.py` — `WorkspaceLeaseStore`/`WorkspaceLeaseRecord`, mirrors
+    `GPULeaseStore` (F-011)'s TTL/`try_acquire`/`release`/`reap_stale` shape with one
+    deliberate difference: a workspace lease's holder is a logical `Run`, not an OS
+    process the kernel can `psutil.pid_exists()`-check, so staleness here is TTL-only —
+    documented as a real, honest limit rather than reusing a liveness check that would not
+    mean anything for this store. Layers *on top of* the existing
+    `execution.workspaces.WorkspaceRegistry` allow-list, never replaces it: acquiring a
+    lease still requires the root to already be registry-approved.
+  - `kernel/roster.py` — `RosterService`: `propose_delegation()` rejects a requested grant
+    outside the delegating profile's authority ceiling before spending a policy evaluation
+    on it; for each remaining grant, calls the real `PolicyEngine.evaluate()` (an
+    under-specified `mutates_state`/`uses_credentials` defaults to `True` — the
+    conservative reading, matching this project's fail-closed stance) and either issues a
+    `CapabilityGrant` immediately (not `approval_required`) or creates an
+    `ApprovalRequest` and leaves the delegation `awaiting_approval`. `resolve_approval()`
+    is the other half: approving issues the grant and, once every requested grant for that
+    delegation is active, creates the delegation's `Job`; denying rejects the whole
+    delegation, not a partial grant. Deliberately does not touch the `JobDispatcher`
+    (constructed per FastAPI app, not part of `SovereignKernel`) — it creates the durable
+    `Job` row and returns it; the API layer submits it, exactly like `enqueue_job` already
+    does for every other job, so `RosterService` stays synchronous and unit-testable
+    without a running event loop.
+  - Collaboration identities gained an optional `agent_profile_id` link
+    (`collaboration/models.py`, `store.py`, `service.py`) — "a channel address that
+    references a profile, not a second identity database." Added via an idempotent
+    `PRAGMA table_info` + `ALTER TABLE` check in `_init_db()` rather than a full
+    `MigrationRunner` retrofit of `collaboration/store.py`: that store is hash-chain
+    integrity-critical and predates `MigrationRunner` (F-026); retrofitting it is real,
+    separate surgery, honestly left as a follow-up rather than bundled into a column add.
+    A new `link_agent_profile()` method sets/clears the link; `update_identity()`
+    deliberately does not accept the field at all, so an ordinary routing/trust update can
+    never silently wipe out an existing link.
+  - `kernel/app.py` wires all five new stores plus `RosterService` into `SovereignKernel`.
+    `api/server.py` adds `POST/GET /roster/profiles`, `PUT /roster/profiles/{id}/status`,
+    `POST /roster/delegations`, `GET /roster/delegations{,/​{id}}`, `GET /roster/approvals`,
+    `POST /roster/approvals/{id}/resolve`, `GET /roster/grants`, and
+    `POST/DELETE /workspaces/leases{,/​{id}}` — every mutation behind the existing
+    `require_session` guard, following the file's established request-model /
+    thin-handler / exception-translation shape.
+- **Verification:** 18 new tests. Store-level: `AgentProfileStore` (create, duplicate
+  rejection, ceiling check), `ApprovalRequestStore` (create/resolve/exactly-once/expiry),
+  `CapabilityGrantStore` (issue/is_active/scope-does-not-leak/revoke/TTL expiry),
+  `WorkspaceLeaseStore` (exclusive-write conflict, multiple concurrent readers allowed,
+  TTL reaping). `RosterService`, against a fake `PolicyEngine` config for determinism:
+  a ceiling violation raises before any policy call; a grant not requiring approval is
+  issued immediately and its job is created and returned; a grant requiring approval
+  leaves the delegation `awaiting_approval` with no job and a real pending
+  `ApprovalRequest`; resolving it approved issues the grant, creates the job, and updates
+  the delegation; resolving it denied rejects the delegation with no job. Then, wired into
+  the real kernel (`SovereignKernel.build`, real `configs/policies.yaml`, no fakes): three
+  full HTTP round trips through `TestClient` (which — learned the hard way in F-027 —
+  must be used as `with TestClient(...)` or the dispatcher's lifespan never starts) —
+  (1) a delegation whose only requested grant real policy allows without approval reaches
+  `approved`, dispatches a real `Job`, and the grant is visible via `GET /roster/grants`;
+  (2) a delegation requesting `execute` (untrusted-collaboration trust plus an execute
+  action forces `PolicyEngine`'s approval gate regardless of the underlying risk rule —
+  this is the actual safety property the domain exists for) reaches `awaiting_approval`
+  with no job, and resolving the resulting `ApprovalRequest` produces the job and updates
+  the delegation to `approved`; (3) a workspace lease is refused (403) on a root the
+  `WorkspaceRegistry` never approved, granted (201) on one that is, refused again (409)
+  for a conflicting concurrent writer, and re-grantable after release. Also confirmed a
+  collaboration identity can be created with a profile link, that an unrelated
+  `update_identity` call does not clear it, and that `link_agent_profile(None)` clears it
+  explicitly. **Caught and fixed three real bugs while writing these tests, not after:**
+  (1) `RosterService`'s authority-ceiling check compared a bare action name (`"execute"`)
+  against ceiling entries formatted `"action:scope"` (`"execute:workspace"`) — always
+  false, so every delegation would have been rejected regardless of its actual ceiling;
+  fixed to compare the same `"{action}:{scope}"` key on both sides. (2)
+  `DelegationRecord.requested_grants` was typed `list[dict[str, str]]`, which pydantic
+  rejected the moment a real caller passed `"mutates_state": false` (a bool, not a str) —
+  loosened to `list[dict[str, Any]]`. (3) found during a final self-review pass, not by a
+  failing test: a delegation requesting two grants where one is issued immediately (no
+  approval needed) and the other is later denied left the first grant active —
+  contradicting this same entry's own claim that "a delegation with any denied requested
+  grant does not partially proceed." Added a `delegation_id` column to
+  `capability_grants` (migration version 2) and `CapabilityGrantStore.revoke_for_delegation()`,
+  called from `resolve_approval`'s denial branch, so a denial revokes every grant already
+  issued for that specific delegation — matched by `delegation_id`, not by re-deriving
+  action/scope, so an unrelated grant sharing the same action/scope is never touched. A
+  new test (`test_roster_service_denial_revokes_grants_already_issued_by_the_same_delegation`)
+  proves it: the ungated grant is confirmed active before the denial, then confirmed
+  revoked after it. Full suite **74 passed**, `ruff check src/ tests/ scripts/` clean.
+- **Explicitly out of scope / honest limits:** mailbox/presence projections over the event
+  journal (research.md step 2) are not built — there is no read model deriving an agent's
+  inbox/outbox or presence from events yet. Enforceable memory scope/visibility filters
+  (step 4) are not built — `AgentProfile.memory_scopes` is a real field with nothing yet
+  reading it to restrict what `MemoryStore`/`ContextBuilder` return. Versioned workflow
+  DAGs and recurring triggers (step 6's DAG half) and `SkillCandidate`/`SkillVersion`/
+  `AgentEvaluation` (step 7) are not built at all. `WorkspaceLeaseStore` exists and is
+  tested in isolation and via its own HTTP endpoint, but is not yet wired as an enforced
+  gate inside `ExecutionBroker`'s existing write path — deliberately: making every
+  execution call require an active lease would change behavior every existing
+  execution/`NativeAgentLoop` test currently depends on, and that compatibility decision
+  deserves its own review rather than riding in on this domain's first pass.
+  `collaboration/store.py`'s full retrofit onto `MigrationRunner` (rather than the
+  targeted `ALTER TABLE` used here) remains open, as does propagating `AgentProfile`
+  identity through `NativeAgentLoop`/`job_executor` so a `Run` actually records which
+  profile it acted for.
+
 ---
 
 ## Priority order
@@ -1309,16 +1454,21 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
    agent-loop adapter, `Run` records, GPU lease durability — several made stale by this
    same session's other fixes) were corrected while fixing the underlying process that let
    them go stale in the first place.
+9. ~~**F-031**~~ — **fixed, scoped.** The persistent-agency roster domain's safety-critical
+   core is built and tested: `AgentProfile`, `Delegation`, `CapabilityGrant`,
+   `ApprovalRequest`, `WorkspaceLease`, `RosterService`, the full HTTP surface, and the
+   collaboration-identity link — all wired through the *existing*, unmodified
+   `PolicyEngine`, not a parallel authority path. Explicitly not built in this pass:
+   mailbox/presence projections, enforceable memory scope ACLs, workflow DAGs,
+   skill-candidate evaluation/promotion, and wiring `WorkspaceLease` as an enforced gate
+   inside `ExecutionBroker` (see F-031's "Explicitly out of scope").
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
 **F-013** (retrieval stack right-sizing, blocked on the same licence review); **F-022**
 (explicitly the user's values decision, not mine — already resolved for personal use via
 the local overlay, F-025). Every cleanup-tier item (F-006 through F-024) is now `fixed`.
-Tier 5 (persistent-agency domain
-objects: `AgentProfile`, `Delegation`, `CapabilityGrant`, `ApprovalRequest`, durable
-workspace leases, workflow DAGs) and Tier 6 (harness tournament, desktop product, remote
-providers) remain unstarted — both are new subsystem builds, not bounded defect fixes, and
-Tier 5 in particular is safety/authority-relevant architecture (what an agent may delegate
-to another agent without a human present) that this project's own values warrant a design
-check-in on before code gets written, not a unilateral build.
+Tier 5's safety-critical core (F-031) is built; its remaining pieces (mailbox/presence,
+memory ACLs, workflow DAGs, skill evaluation) and all of Tier 6 (harness tournament,
+desktop product, remote providers) remain unstarted — genuine new subsystem builds, not
+bounded defect fixes.

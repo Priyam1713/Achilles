@@ -103,6 +103,7 @@ class CollaborationService:
         kind: str,
         trust: str,
         agent: dict[str, Any] | None = None,
+        agent_profile_id: str | None = None,
     ) -> IdentityRecord:
         """Public creation. Non-upserting (FIXES.md F-003): raises on an existing id rather
         than silently redefining it, so a caller cannot repost an agent's own id to change
@@ -110,7 +111,14 @@ class CollaborationService:
         identity_id = self._validate_id(identity_id, "identity id")
         if kind == "agent" and not agent:
             raise ValueError("Agent identities require an agent configuration")
-        return self.store.create_identity_exclusive(identity_id, display_name, kind, trust, agent)
+        return self.store.create_identity_exclusive(
+            identity_id, display_name, kind, trust, agent, agent_profile_id
+        )
+
+    def link_agent_profile(self, identity_id: str, agent_profile_id: str | None) -> IdentityRecord:
+        if self.store.get_identity(identity_id) is None:
+            raise ValueError(f"Unknown identity: {identity_id}")
+        return self.store.link_agent_profile(identity_id, agent_profile_id)
 
     def update_identity(
         self,

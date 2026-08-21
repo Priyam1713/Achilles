@@ -18,19 +18,25 @@ from sovereign_ai.memory.vector import LocalVectorStore
 from sovereign_ai.resources.arbiter import GPUArbiter
 from sovereign_ai.resources.residency import ResidencyCoordinator
 from sovereign_ai.resources.scheduler import ResourceScheduler
+from sovereign_ai.resources.workspace_leases import WorkspaceLeaseStore
 from sovereign_ai.specialists import SpecialistBroker, SpecialistSupervisor
 from sovereign_ai.tools.registry import ToolRegistry
 from sovereign_ai.transactions.manager import TransactionManager
 from sovereign_ai.verification.engine import VerificationEngine
 from sovereign_ai.watchers.bus import EventBus
 
+from .agent_profiles import AgentProfileStore
+from .approvals import ApprovalRequestStore
 from .benchmarks import BenchmarkStore
+from .capability_grants import CapabilityGrantStore
 from .checkpoints import CheckpointStore
 from .config import ConfigBundle
+from .delegations import DelegationStore
 from .events import EventStore
 from .jobs import JobStore
 from .policy import PolicyEngine
 from .registry import CapabilityRegistry
+from .roster import RosterService
 from .runs import RunStore
 from .secrets import SecretStore
 
@@ -67,6 +73,12 @@ class SovereignKernel:
     memory_graph: MemoryGraph
     residency: ResidencyCoordinator
     collaboration: CollaborationService
+    agent_profiles: AgentProfileStore
+    delegations: DelegationStore
+    capability_grants: CapabilityGrantStore
+    approvals: ApprovalRequestStore
+    workspace_leases: WorkspaceLeaseStore
+    roster: RosterService
 
     @classmethod
     def build(cls, config_root: str | None = None) -> SovereignKernel:
@@ -113,6 +125,12 @@ class SovereignKernel:
         collaboration = CollaborationService(
             CollaborationStore(state / "collaboration.db"), config.collaboration
         )
+        agent_profiles = AgentProfileStore(state / "agent_profiles.db")
+        delegations = DelegationStore(state / "delegations.db")
+        capability_grants = CapabilityGrantStore(state / "capability_grants.db")
+        approvals = ApprovalRequestStore(state / "approvals.db")
+        workspace_leases = WorkspaceLeaseStore(state / "workspace_leases.db")
+        roster = RosterService(agent_profiles, delegations, capability_grants, approvals, jobs, policy)
         return cls(
             config,
             registry,
@@ -144,4 +162,10 @@ class SovereignKernel:
             memory_graph,
             residency,
             collaboration,
+            agent_profiles,
+            delegations,
+            capability_grants,
+            approvals,
+            workspace_leases,
+            roster,
         )

@@ -2,6 +2,7 @@ import asyncio
 import shutil
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from starlette.testclient import TestClient
@@ -1218,3 +1219,438 @@ def test_memory_indexer_supersedes_purges_old_vector(tmp_path):
     asyncio.run(drive())
     hits = store.search_vector([1.0, 0.0], limit=5)
     assert [h["id"] for h in hits] == ["mem-new"]
+
+
+# --- Tier 5: persistent-agency domain -------------------------------------------------
+
+
+def test_agent_profile_store_create_get_list_and_ceiling(tmp_path):
+    from sovereign_ai.kernel.agent_profiles import AgentProfileAlreadyExists, AgentProfileStore
+
+    store = AgentProfileStore(tmp_path / "profiles.db")
+    profile = store.create(
+        "swift", "Swift", "fast-orchestrator", authority_ceiling=["execute:workspace"]
+    )
+    assert profile.status == "active"
+    assert store.get("swift") == profile
+    assert [p.id for p in store.list()] == ["swift"]
+    assert store.has_ceiling("swift", "execute:workspace")
+    assert not store.has_ceiling("swift", "delete:host")
+    assert not store.has_ceiling("unknown-profile", "execute:workspace")
+
+    with pytest.raises(AgentProfileAlreadyExists):
+        store.create("swift", "Swift Duplicate", "role")
+
+    retired = store.set_status("swift", "retired")
+    assert retired.status == "retired"
+
+
+def test_approval_request_store_lifecycle(tmp_path):
+    from sovereign_ai.kernel.approvals import ApprovalRequestStore
+
+    store = ApprovalRequestStore(tmp_path / "approvals.db")
+    req = store.create("swift", "execute", "host", "high", "needs a human")
+    assert req.status == "pending"
+    assert [r.id for r in store.list_pending()] == [req.id]
+
+    resolved = store.resolve(req.id, "owner", True, "looks fine")
+    assert resolved.status == "approved"
+    assert resolved.resolver_id == "owner"
+    assert store.list_pending() == []
+
+    with pytest.raises(ValueError, match="already"):
+        store.resolve(req.id, "owner", True, "again")
+
+    with pytest.raises(ValueError, match="Unknown"):
+        store.resolve("does-not-exist", "owner", True, "n/a")
+
+
+def test_approval_request_store_expires_and_cannot_be_resolved_after(tmp_path):
+    from sovereign_ai.kernel.approvals import ApprovalRequestStore
+
+    store = ApprovalRequestStore(tmp_path / "approvals.db")
+    req = store.create("swift", "execute", "host", "high", "stale test", ttl_seconds=-1)
+    assert store.list_pending() == []  # expire_stale() runs inside list_pending()
+
+    with pytest.raises(ValueError, match="expired"):
+        store.resolve(req.id, "owner", True, "too late")
+
+
+def test_capability_grant_store_issue_is_active_and_revoke(tmp_path):
+    from sovereign_ai.kernel.capability_grants import CapabilityGrantStore
+
+    store = CapabilityGrantStore(tmp_path / "grants.db")
+    assert not store.is_active("swift", "execute", "workspace")
+
+    grant = store.issue("swift", "execute", "workspace", "policy", ttl_seconds=3600)
+    assert store.is_active("swift", "execute", "workspace")
+    assert not store.is_active("swift", "execute", "host"), "scope must not leak across grants"
+    assert [g.id for g in store.active_for_subject("swift")] == [grant.id]
+
+    store.revoke(grant.id)
+    assert not store.is_active("swift", "execute", "workspace")
+
+
+def test_capability_grant_store_expires_by_ttl(tmp_path):
+    from sovereign_ai.kernel.capability_grants import CapabilityGrantStore
+
+    store = CapabilityGrantStore(tmp_path / "grants.db")
+    store.issue("swift", "execute", "workspace", "policy", ttl_seconds=-1)
+    assert not store.is_active("swift", "execute", "workspace")
+
+
+def test_workspace_lease_store_exclusive_write_conflict(tmp_path):
+    from sovereign_ai.resources.workspace_leases import WorkspaceLeaseStore
+
+    store = WorkspaceLeaseStore(tmp_path / "leases.db")
+    write_lease = store.try_acquire("/repo", "run-1", writable=True, ttl_seconds=60)
+    assert write_lease is not None
+    assert store.is_leased(write_lease.id, "run-1")
+
+    # A second writable lease on the same root must not be granted while one is held.
+    assert store.try_acquire("/repo", "run-2", writable=True, ttl_seconds=60) is None
+    # Nor may a read-only lease be granted while a write lease is active.
+    assert store.try_acquire("/repo", "run-2", writable=False, ttl_seconds=60) is None
+
+    store.release(write_lease.id)
+    assert store.try_acquire("/repo", "run-2", writable=True, ttl_seconds=60) is not None
+
+
+def test_workspace_lease_store_multiple_readers_allowed(tmp_path):
+    from sovereign_ai.resources.workspace_leases import WorkspaceLeaseStore
+
+    store = WorkspaceLeaseStore(tmp_path / "leases.db")
+    first = store.try_acquire("/repo", "run-1", writable=False, ttl_seconds=60)
+    second = store.try_acquire("/repo", "run-2", writable=False, ttl_seconds=60)
+    assert first is not None
+    assert second is not None
+
+
+def test_workspace_lease_store_reaps_expired(tmp_path):
+    from sovereign_ai.resources.workspace_leases import WorkspaceLeaseStore
+
+    store = WorkspaceLeaseStore(tmp_path / "leases.db")
+    store.try_acquire("/repo", "run-1", writable=True, ttl_seconds=-1)
+    assert store.active() == []
+
+
+class _FakeConfig:
+    """Minimal stand-in for ConfigBundle, just enough for PolicyEngine.__init__."""
+
+    policies: ClassVar[dict] = {
+        "defaults": {"fail_closed": True},
+        "risk_rules": [
+            {"match": {"action": "read", "scope": "workspace"}, "risk": "low", "approval": False},
+            {"match": {"action": "execute", "scope": "workspace"}, "risk": "medium", "approval": False},
+        ],
+    }
+
+
+def test_roster_service_rejects_grant_outside_authority_ceiling(tmp_path):
+    from sovereign_ai.kernel.agent_profiles import AgentProfileStore
+    from sovereign_ai.kernel.approvals import ApprovalRequestStore
+    from sovereign_ai.kernel.capability_grants import CapabilityGrantStore
+    from sovereign_ai.kernel.delegations import DelegationStore
+    from sovereign_ai.kernel.jobs import JobStore
+    from sovereign_ai.kernel.policy import PolicyEngine
+    from sovereign_ai.kernel.roster import RosterService
+
+    profiles = AgentProfileStore(tmp_path / "profiles.db")
+    profiles.create("swift", "Swift", "role", authority_ceiling=["execute:workspace"])
+    roster = RosterService(
+        profiles,
+        DelegationStore(tmp_path / "delegations.db"),
+        CapabilityGrantStore(tmp_path / "grants.db"),
+        ApprovalRequestStore(tmp_path / "approvals.db"),
+        JobStore(tmp_path / "jobs.db"),
+        PolicyEngine(_FakeConfig()),
+    )
+    with pytest.raises(PermissionError, match="authority ceiling"):
+        roster.propose_delegation(
+            "swift", "delete the host", [{"action": "delete", "scope": "host"}]
+        )
+
+
+def _roster_with_fake_policy(tmp_path):
+    from sovereign_ai.kernel.agent_profiles import AgentProfileStore
+    from sovereign_ai.kernel.approvals import ApprovalRequestStore
+    from sovereign_ai.kernel.capability_grants import CapabilityGrantStore
+    from sovereign_ai.kernel.delegations import DelegationStore
+    from sovereign_ai.kernel.jobs import JobStore
+    from sovereign_ai.kernel.policy import PolicyEngine
+    from sovereign_ai.kernel.roster import RosterService
+
+    profiles = AgentProfileStore(tmp_path / "profiles.db")
+    profiles.create(
+        "swift", "Swift", "role", authority_ceiling=["read:workspace", "execute:workspace"]
+    )
+    roster = RosterService(
+        profiles,
+        DelegationStore(tmp_path / "delegations.db"),
+        CapabilityGrantStore(tmp_path / "grants.db"),
+        ApprovalRequestStore(tmp_path / "approvals.db"),
+        JobStore(tmp_path / "jobs.db"),
+        PolicyEngine(_FakeConfig()),
+    )
+    return roster
+
+
+def test_roster_service_grants_immediately_when_policy_does_not_require_approval(tmp_path):
+    roster = _roster_with_fake_policy(tmp_path)
+    delegation, job = roster.propose_delegation(
+        "swift",
+        "read the repo",
+        [{"action": "read", "scope": "workspace", "mutates_state": False, "uses_credentials": False}],
+    )
+    assert delegation.status == "approved"
+    assert job is not None
+    assert job.request["delegation_id"] == delegation.id
+    assert roster.grants.is_active("swift", "read", "workspace")
+
+
+def test_roster_service_awaits_approval_when_policy_requires_it(tmp_path):
+    """FIXES.md Tier 5: this is the safety property the whole domain exists for -- an
+    agent-to-agent delegation requesting `execute` must not silently become authority.
+    Untrusted-collaboration trust plus an execute action forces PolicyEngine's
+    approval_required gate regardless of the (permissive, in this fake config) risk rule
+    for execute:workspace."""
+    roster = _roster_with_fake_policy(tmp_path)
+    delegation, job = roster.propose_delegation(
+        "swift", "run a command", [{"action": "execute", "scope": "workspace"}]
+    )
+    assert delegation.status == "awaiting_approval"
+    assert job is None
+    assert not roster.grants.is_active("swift", "execute", "workspace")
+
+    pending = roster.approvals.list_pending()
+    assert len(pending) == 1
+    assert pending[0].subject_id == "swift"
+    assert pending[0].evidence["delegation_id"] == delegation.id
+
+    approval, resolved_job = roster.resolve_approval(pending[0].id, "owner", True, "approved by owner")
+    assert approval.status == "approved"
+    assert resolved_job is not None
+    assert resolved_job.request["delegation_id"] == delegation.id
+    assert roster.grants.is_active("swift", "execute", "workspace")
+    assert roster.delegations.get(delegation.id).status == "approved"
+
+
+def test_roster_service_denial_rejects_delegation_without_a_job(tmp_path):
+    roster = _roster_with_fake_policy(tmp_path)
+    delegation, job = roster.propose_delegation(
+        "swift", "run a command", [{"action": "execute", "scope": "workspace"}]
+    )
+    assert job is None
+
+    pending = roster.approvals.list_pending()
+    approval, resolved_job = roster.resolve_approval(pending[0].id, "owner", False, "too risky")
+    assert approval.status == "denied"
+    assert resolved_job is None
+    assert not roster.grants.is_active("swift", "execute", "workspace")
+    assert roster.delegations.get(delegation.id).status == "rejected"
+
+
+def test_roster_service_denial_revokes_grants_already_issued_by_the_same_delegation(tmp_path):
+    """A delegation requesting two grants -- one policy allows immediately, one it holds
+    for approval -- must not partially proceed if the approval is denied. The already-
+    issued grant is tagged with this delegation's id specifically so revocation is precise
+    (an unrelated grant sharing the same action/scope must never be touched by this)."""
+    roster = _roster_with_fake_policy(tmp_path)
+    delegation, job = roster.propose_delegation(
+        "swift",
+        "read then execute",
+        [
+            {"action": "read", "scope": "workspace", "mutates_state": False, "uses_credentials": False},
+            {"action": "execute", "scope": "workspace"},
+        ],
+    )
+    assert job is None
+    assert delegation.status == "awaiting_approval"
+    assert roster.grants.is_active("swift", "read", "workspace"), "the ungated grant should issue immediately"
+
+    pending = roster.approvals.list_pending()
+    assert len(pending) == 1
+    roster.resolve_approval(pending[0].id, "owner", False, "denying the execute half")
+
+    assert not roster.grants.is_active("swift", "read", "workspace"), (
+        "denial must revoke grants already issued for this same delegation's other actions"
+    )
+    assert not roster.grants.is_active("swift", "execute", "workspace")
+    assert roster.delegations.get(delegation.id).status == "rejected"
+
+
+def test_roster_wired_into_kernel(tmp_path, monkeypatch):
+    """Proves this is really assembled by SovereignKernel.build, not just importable."""
+    k = kernel(tmp_path, monkeypatch)
+    profile = k.roster.create_profile("swift", "Swift", "role", authority_ceiling=["read:workspace"])
+    assert k.agent_profiles.get("swift") == profile
+
+
+def test_collaboration_identity_can_link_and_preserve_agent_profile(tmp_path, monkeypatch):
+    """FIXES.md Tier 5: a collaboration identity is a room address that references an
+    AgentProfile, not a second identity database. update_identity must never silently
+    clear the link (it doesn't accept the field at all) -- only link_agent_profile does."""
+    k = kernel(tmp_path, monkeypatch)
+    k.roster.create_profile("swift", "Swift", "role")
+    identity = k.collaboration.create_identity(
+        "swift-bot", "Swift Bot", "agent", "trusted_local",
+        agent={"capability": "orchestration_fast", "mode": "fast"},
+        agent_profile_id="swift",
+    )
+    assert identity.agent_profile_id == "swift"
+
+    updated = k.collaboration.update_identity(
+        "swift-bot", "Swift Bot Renamed", "agent", "trusted_local",
+        agent={"capability": "orchestration_fast", "mode": "fast"},
+    )
+    assert updated.agent_profile_id == "swift", "unrelated update must not clear the link"
+
+    unlinked = k.collaboration.link_agent_profile("swift-bot", None)
+    assert unlinked.agent_profile_id is None
+
+
+def test_roster_http_delegation_immediately_granted_dispatches_a_job(tmp_path, monkeypatch):
+    """End-to-end through the real API/dispatcher, real configs/policies.yaml (not the
+    fake policy used by the unit tests above): create a profile, propose a delegation
+    whose only requested grant is allowed without approval, and confirm a real Job gets
+    created, dispatched and reaches a terminal status."""
+    monkeypatch.setenv("SOVEREIGN_STATE_DIR", str(tmp_path / "state"))
+    app = create_app(str(ROOT / "configs"))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["Authorization"] = f"Bearer {app.state.session_token}"
+
+        profile = client.post(
+            "/roster/profiles",
+            json={
+                "id": "swift-agent",
+                "display_name": "Swift",
+                "role": "fast-orchestrator",
+                "authority_ceiling": ["read:workspace"],
+            },
+        )
+        assert profile.status_code == 201
+
+        response = client.post(
+            "/roster/delegations",
+            json={
+                "parent_subject_id": "swift-agent",
+                "objective": "read the repo",
+                "requested_grants": [
+                    {
+                        "action": "read", "scope": "workspace",
+                        "mutates_state": False, "uses_credentials": False,
+                    }
+                ],
+                "job_kind": "chat",
+                "inputs": {
+                    "request": {"capability": "reasoning", "mode": "fast"},
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            },
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["delegation"]["status"] == "approved"
+        assert body["job"] is not None
+        job_id = body["job"]["id"]
+
+        grants = client.get("/roster/grants", params={"subject_id": "swift-agent"}).json()
+        assert any(g["action"] == "read" and g["scope"] == "workspace" for g in grants["grants"])
+
+        job = None
+        for _ in range(40):
+            job = client.get(f"/jobs/{job_id}").json()
+            if job["status"] != "queued":
+                break
+            time.sleep(0.05)
+        assert job["status"] in ("running", "succeeded", "failed")
+
+
+def test_roster_http_delegation_requiring_approval_then_resolved(tmp_path, monkeypatch):
+    """Same end-to-end path, but for a requested grant real policy makes conditional on
+    approval (execute, untrusted-collaboration trust, mutates_state defaulted True) --
+    proves the whole ApprovalRequest round trip over HTTP, not just RosterService
+    in-process."""
+    monkeypatch.setenv("SOVEREIGN_STATE_DIR", str(tmp_path / "state"))
+    app = create_app(str(ROOT / "configs"))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["Authorization"] = f"Bearer {app.state.session_token}"
+
+        client.post(
+            "/roster/profiles",
+            json={
+                "id": "forge-agent", "display_name": "Forge", "role": "coder",
+                "authority_ceiling": ["execute:workspace"],
+            },
+        )
+
+        response = client.post(
+            "/roster/delegations",
+            json={
+                "parent_subject_id": "forge-agent",
+                "objective": "run the test suite",
+                "requested_grants": [{"action": "execute", "scope": "workspace"}],
+            },
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["delegation"]["status"] == "awaiting_approval"
+        assert body["job"] is None
+        delegation_id = body["delegation"]["id"]
+
+        pending = client.get("/roster/approvals").json()["approvals"]
+        approval = next(a for a in pending if a["evidence"]["delegation_id"] == delegation_id)
+
+        resolved = client.post(
+            f"/roster/approvals/{approval['id']}/resolve",
+            json={"resolver_id": "owner", "approved": True, "reason": "reviewed, looks safe"},
+        )
+        assert resolved.status_code == 200
+        resolved_body = resolved.json()
+        assert resolved_body["approval"]["status"] == "approved"
+        assert resolved_body["job"] is not None
+
+        delegation = client.get(f"/roster/delegations/{delegation_id}").json()
+        assert delegation["status"] == "approved"
+        assert delegation["child_job_id"] == resolved_body["job"]["id"]
+
+
+def test_workspace_lease_http_layers_on_the_existing_registry(tmp_path, monkeypatch):
+    """FIXES.md Tier 5: a lease must not be acquirable on a root the existing
+    WorkspaceRegistry never approved -- the registry stays the permanent allow-list, the
+    lease only adds a narrower, run-scoped, time-bounded question on top of it."""
+    monkeypatch.setenv("SOVEREIGN_STATE_DIR", str(tmp_path / "state"))
+    approved = tmp_path / "approved-workspace"
+    approved.mkdir()
+    unapproved = tmp_path / "unapproved-workspace"
+    unapproved.mkdir()
+
+    app = create_app(str(ROOT / "configs"))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["Authorization"] = f"Bearer {app.state.session_token}"
+        app.state.kernel.workspaces.add(str(approved), writable=True)
+
+        denied = client.post(
+            "/workspaces/leases",
+            json={"path": str(unapproved), "subject_id": "run-1"},
+        )
+        assert denied.status_code == 403
+
+        granted = client.post(
+            "/workspaces/leases", json={"path": str(approved), "subject_id": "run-1"}
+        )
+        assert granted.status_code == 201
+        lease_id = granted.json()["id"]
+
+        conflict = client.post(
+            "/workspaces/leases", json={"path": str(approved), "subject_id": "run-2"}
+        )
+        assert conflict.status_code == 409
+
+        release = client.delete(f"/workspaces/leases/{lease_id}")
+        assert release.status_code == 200
+
+        reacquired = client.post(
+            "/workspaces/leases", json={"path": str(approved), "subject_id": "run-2"}
+        )
+        assert reacquired.status_code == 201

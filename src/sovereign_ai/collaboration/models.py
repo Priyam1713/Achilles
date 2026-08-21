@@ -8,11 +8,19 @@ IdentityKind = Literal["human", "agent", "system"]
 
 
 class IdentityRecord(BaseModel):
+    """A collaboration identity is a room address, not a second identity database
+    (docs/ARCHITECTURE.md, "Persistent agency and the roster domain"). `agent_profile_id`
+    is the optional link to the durable `AgentProfile` that actually owns this identity's
+    role, routing preferences, memory scopes, budgets and authority ceiling -- an identity
+    with no linked profile (the common case today) is still fully functional; it just has
+    no roster-domain authority ceiling to check against."""
+
     id: str
     display_name: str
     kind: IdentityKind
     trust: str
     agent: dict[str, Any] | None = None
+    agent_profile_id: str | None = None
     created_at_ns: int
 
 

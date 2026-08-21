@@ -43,6 +43,9 @@ with it.
 - official-source release radar with explicit installed/developer-preview/announced lifecycles
 - native collaboration rooms, logical identities, membership, threads, reactions and canvases
 - mention-to-durable-job dispatch with threaded agent results and hash-chain verification
+- persistent-agency roster domain: durable `AgentProfile`, `Delegation`, `CapabilityGrant`,
+  `ApprovalRequest` and `WorkspaceLease`, coordinated through the existing `PolicyEngine`
+  (FIXES.md F-031) — see "Persistent agency" below for what's still open in this domain
 
 The current control UI is a browser-served single-page bootstrap/control surface, not the
 planned Tauri desktop product.
@@ -118,22 +121,47 @@ Two items formerly listed here are done:
   kernel-side `AgentLoop` contract it would plug into already exists and is exercised by
   the native implementation.
 
-Most of the persistent-agency domain is still architectural, not yet implemented. Current
-collaboration `IdentityRecord` objects remain lightweight room addresses, not complete agent
-profiles. Two of the objects once listed as pending here are now built: a `Run` record now
-exists beneath every `Job` (`kernel/runs.py`, FIXES.md F-010) as a true durable attempt
-log — the request, result, error and timing of every attempt, retrying without rewriting
-history — and the GPU lease is a durable, cross-process `GPULeaseStore` with TTL-based
-staleness recovery (`resources/gpu_leases.py`, FIXES.md F-011), not process-local. Still
-pending:
+The persistent-agency domain's safety-critical core is now implemented (FIXES.md F-031):
+`AgentProfile` (`kernel/agent_profiles.py`) is a durable logical coworker with an authority
+*ceiling* — the most a run acting for it could ever be granted, never authority by itself.
+`Delegation` (`kernel/delegations.py`), `CapabilityGrant` (`kernel/capability_grants.py`)
+and `ApprovalRequest` (`kernel/approvals.py`) exist as real, tested stores, coordinated by
+`kernel/roster.py`'s `RosterService`: proposing a delegation never grants authority by
+itself — every requested grant is run through the same, unmodified `PolicyEngine.evaluate()`
+every other action in this kernel goes through, and becomes an active grant only when
+policy allows it outright or a human resolves the `ApprovalRequest` policy required.
+`WorkspaceLease` (`resources/workspace_leases.py`) mirrors the GPU lease's TTL-based
+design, layered on top of the existing `WorkspaceRegistry` allow-list rather than
+replacing it. Collaboration `IdentityRecord`s can now optionally link to an `AgentProfile`
+via `agent_profile_id` — a channel address that references a profile, not a second
+identity database — though most identities today still have no link, which is fully
+supported (an unlinked identity just has no roster-domain authority ceiling to check).
 
-- `AgentProfile` plus profile-linked collaboration identities and scoped memberships
+A `Run` record exists beneath every `Job` (`kernel/runs.py`, FIXES.md F-010) as a true
+durable attempt log — the request, result, error and timing of every attempt, retrying
+without rewriting history — and the GPU lease is a durable, cross-process `GPULeaseStore`
+with TTL-based staleness recovery (`resources/gpu_leases.py`, FIXES.md F-011), not
+process-local.
+
+Still pending, genuinely unbuilt (not started, not just unwired):
+
 - addressed mailbox/presence projections over the event journal
-- structured `Delegation`, `CapabilityGrant` and `ApprovalRequest` records
-- durable expiring *workspace* leases specifically (the GPU lease above is done; workspace
-  leases are a separate, still-unbuilt resource type)
+- enforceable memory scope/visibility filters — `AgentProfile.memory_scopes` is a real
+  field; nothing yet reads it to restrict what `MemoryStore`/`ContextBuilder` return
 - versioned workflow DAGs and recurring triggers that create ordinary jobs
-- scoped memory access enforcement and the skill-candidate evaluation/promotion pipeline
+- the skill-candidate evaluation/promotion pipeline (`SkillCandidate`/`SkillVersion`/
+  `AgentEvaluation`)
+- wiring `WorkspaceLease` as an *enforced* gate inside `ExecutionBroker`'s existing write
+  path (the store and its own HTTP endpoint are real and tested; nothing in the execution
+  path requires an active lease yet — a deliberate scope boundary, not an oversight, since
+  making every execution call require one would change behavior every existing
+  execution/`NativeAgentLoop` test currently depends on)
+- propagating `AgentProfile` identity through `NativeAgentLoop`/`job_executor` so a `Run`
+  actually records which profile it acted for
+- `collaboration/store.py`'s full retrofit onto `MigrationRunner` (F-026) — the
+  `agent_profile_id` column was added via a targeted, idempotent `ALTER TABLE` instead,
+  since that store is hash-chain integrity-critical and a full retrofit is real, separate
+  surgery
 
 These should be implemented as migrations and kernel services before adding Hermes Bot Mode,
 A2A ingress or a roster UI, so no compatibility surface becomes the authoritative store.

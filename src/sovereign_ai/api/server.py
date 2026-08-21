@@ -88,6 +88,46 @@ class CollaborationIdentityUpdate(BaseModel):
     agent: dict[str, Any] | None = None
 
 
+class AgentProfileCreate(BaseModel):
+    id: str
+    display_name: str
+    role: str
+    routing_preferences: dict[str, Any] = Field(default_factory=dict)
+    memory_scopes: list[str] = Field(default_factory=list)
+    budgets: dict[str, Any] = Field(default_factory=dict)
+    authority_ceiling: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentProfileStatusUpdate(BaseModel):
+    status: Literal["active", "retired"]
+
+
+class DelegationCreate(BaseModel):
+    parent_subject_id: str
+    objective: str
+    requested_grants: list[dict[str, Any]]
+    job_kind: Literal["chat", "specialist", "media", "agent"] = "agent"
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    expected_artifacts: list[str] = Field(default_factory=list)
+    acceptance_tests: list[str] = Field(default_factory=list)
+    deadline: float | None = None
+    budget: dict[str, Any] = Field(default_factory=dict)
+
+
+class ApprovalResolve(BaseModel):
+    resolver_id: str
+    approved: bool
+    reason: str
+
+
+class WorkspaceLeaseCreate(BaseModel):
+    path: str
+    subject_id: str
+    writable: bool = True
+    ttl_seconds: float = 3600.0
+
+
 def create_app(config_root: str | None = None) -> FastAPI:
     kernel = SovereignKernel.build(config_root)
     session = SessionAuth(kernel.config.state_dir / "session.token")
@@ -488,5 +528,133 @@ def create_app(config_root: str | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="job not found")
         dispatcher.cancel(job_id)
         return record.model_dump()
+
+    # --- Tier 5: persistent-agency (roster) domain -----------------------------------
+    # docs/ARCHITECTURE.md, "Persistent agency and the roster domain". Proposing a
+    # delegation never grants authority by itself -- every requested grant goes through
+    # the same PolicyEngine every other action in this kernel goes through, and only
+    # becomes active once policy allows it outright or a human resolves the
+    # ApprovalRequest policy required. See kernel/roster.py.
+
+    def _submit_if_present(job) -> dict[str, Any] | None:
+        """RosterService creates a Job but never submits it (kernel/roster.py's own
+        docstring explains why: the dispatcher is an API-layer concern). Mirrors
+        enqueue_job's admission semantics for the one job a roster call may produce."""
+        if job is None:
+            return None
+        try:
+            dispatcher.submit(job)
+        except QueueFullError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return job.model_dump()
+
+    @app.post("/roster/profiles", status_code=201, dependencies=[Depends(require_session)])
+    async def create_agent_profile(request: AgentProfileCreate) -> dict[str, Any]:
+        from sovereign_ai.kernel.agent_profiles import AgentProfileAlreadyExists
+
+        try:
+            return kernel.roster.create_profile(
+                request.id, request.display_name, request.role,
+                routing_preferences=request.routing_preferences,
+                memory_scopes=request.memory_scopes, budgets=request.budgets,
+                authority_ceiling=request.authority_ceiling, metadata=request.metadata,
+            ).model_dump()
+        except AgentProfileAlreadyExists as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/roster/profiles")
+    async def list_agent_profiles() -> dict[str, Any]:
+        return {"profiles": [p.model_dump() for p in kernel.agent_profiles.list()]}
+
+    @app.get("/roster/profiles/{profile_id}")
+    async def get_agent_profile(profile_id: str) -> dict[str, Any]:
+        profile = kernel.agent_profiles.get(profile_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="agent profile not found")
+        return profile.model_dump()
+
+    @app.put(
+        "/roster/profiles/{profile_id}/status", dependencies=[Depends(require_session)]
+    )
+    async def set_agent_profile_status(
+        profile_id: str, request: AgentProfileStatusUpdate
+    ) -> dict[str, Any]:
+        try:
+            return kernel.agent_profiles.set_status(profile_id, request.status).model_dump()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/roster/delegations", status_code=201, dependencies=[Depends(require_session)])
+    async def propose_delegation(request: DelegationCreate) -> dict[str, Any]:
+        try:
+            delegation, job = kernel.roster.propose_delegation(
+                request.parent_subject_id, request.objective, request.requested_grants,
+                job_kind=request.job_kind, inputs=request.inputs,
+                expected_artifacts=request.expected_artifacts,
+                acceptance_tests=request.acceptance_tests, deadline=request.deadline,
+                budget=request.budget,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return {"delegation": delegation.model_dump(), "job": _submit_if_present(job)}
+
+    @app.get("/roster/delegations/{delegation_id}")
+    async def get_delegation(delegation_id: str) -> dict[str, Any]:
+        delegation = kernel.delegations.get(delegation_id)
+        if delegation is None:
+            raise HTTPException(status_code=404, detail="delegation not found")
+        return delegation.model_dump()
+
+    @app.get("/roster/delegations")
+    async def list_delegations(parent_subject_id: str) -> dict[str, Any]:
+        return {
+            "delegations": [
+                d.model_dump() for d in kernel.delegations.list_for_subject(parent_subject_id)
+            ]
+        }
+
+    @app.get("/roster/approvals")
+    async def list_pending_approvals() -> dict[str, Any]:
+        return {"approvals": [a.model_dump() for a in kernel.approvals.list_pending()]}
+
+    @app.post(
+        "/roster/approvals/{approval_id}/resolve", dependencies=[Depends(require_session)]
+    )
+    async def resolve_approval(approval_id: str, request: ApprovalResolve) -> dict[str, Any]:
+        try:
+            approval, job = kernel.roster.resolve_approval(
+                approval_id, request.resolver_id, request.approved, request.reason
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"approval": approval.model_dump(), "job": _submit_if_present(job)}
+
+    @app.get("/roster/grants")
+    async def list_active_grants(subject_id: str) -> dict[str, Any]:
+        return {
+            "grants": [g.model_dump() for g in kernel.capability_grants.active_for_subject(subject_id)]
+        }
+
+    @app.post("/workspaces/leases", status_code=201, dependencies=[Depends(require_session)])
+    async def acquire_workspace_lease(request: WorkspaceLeaseCreate) -> dict[str, Any]:
+        """A lease layers on top of the existing WorkspaceRegistry allow-list, never
+        replaces it (FIXES.md Tier 5): the root must already be approved before a
+        run-scoped, time-bounded lease can be acquired on it."""
+        try:
+            kernel.workspaces.require(Path(request.path), require_write=request.writable)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        lease = kernel.workspace_leases.try_acquire(
+            request.path, request.subject_id, request.writable, request.ttl_seconds
+        )
+        if lease is None:
+            raise HTTPException(
+                status_code=409, detail=f"workspace lease already held on {request.path}"
+            )
+        return lease.model_dump()
+
+    @app.delete("/workspaces/leases/{lease_id}", dependencies=[Depends(require_session)])
+    async def release_workspace_lease(lease_id: str) -> None:
+        kernel.workspace_leases.release(lease_id)
 
     return app
