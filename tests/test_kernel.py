@@ -606,29 +606,43 @@ def test_dispatcher_queue_full_fails_closed(tmp_path):
 
 
 def test_job_submission_uses_bounded_dispatcher_and_exposes_run_history(tmp_path, monkeypatch):
-    client = api_client(tmp_path, monkeypatch)
-    submission = {
-        "kind": "chat",
-        "payload": {
-            "request": {"capability": "reasoning", "mode": "fast"},
-            "messages": [{"role": "user", "content": "hi"}],
-        },
-    }
-    response = client.post("/jobs", json=submission)
-    assert response.status_code == 202
-    job_id = response.json()["id"]
+    """`with TestClient(...)` matters here, not just style: a bare `TestClient(app)` never
+    runs the FastAPI lifespan, so `dispatcher.start()` never fires and no worker ever
+    consumes the queue. A Run row is created synchronously at submission time regardless
+    (that alone doesn't prove a worker exists), so this test also waits for the job to
+    reach a terminal status -- proof a worker actually picked it up and ran the executor,
+    not merely that admission succeeded. There is no real inference backend in this test
+    environment, so the terminal status is `failed`; that is expected and is not what is
+    being asserted."""
+    monkeypatch.setenv("SOVEREIGN_STATE_DIR", str(tmp_path / "state"))
+    app = create_app(str(ROOT / "configs"))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["Authorization"] = f"Bearer {app.state.session_token}"
+        submission = {
+            "kind": "chat",
+            "payload": {
+                "request": {"capability": "reasoning", "mode": "fast"},
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        }
+        response = client.post("/jobs", json=submission)
+        assert response.status_code == 202
+        job_id = response.json()["id"]
 
-    runs_response = None
-    for _ in range(40):
+        job = None
+        for _ in range(40):
+            job = client.get(f"/jobs/{job_id}").json()
+            if job["status"] != "queued":
+                break
+            time.sleep(0.05)
+        assert job["status"] in ("running", "succeeded", "failed")
+
         runs_response = client.get(f"/jobs/{job_id}/runs")
-        if runs_response.json()["runs"]:
-            break
-        time.sleep(0.05)
-    assert runs_response.status_code == 200
-    attempts = runs_response.json()["runs"]
-    assert len(attempts) == 1
-    assert attempts[0]["attempt"] == 1
-    assert attempts[0]["job_id"] == job_id
+        assert runs_response.status_code == 200
+        attempts = runs_response.json()["runs"]
+        assert len(attempts) == 1
+        assert attempts[0]["attempt"] == 1
+        assert attempts[0]["job_id"] == job_id
 
 
 def test_gpu_lease_store_serializes_exclusive_leases(tmp_path):
@@ -752,3 +766,185 @@ def test_backup_and_restore_round_trip(tmp_path):
     history = restored.list_for_job("job-1")
     assert len(history) == 1
     assert history[0].request == {"note": "before backup"}
+
+
+class _FakeInference:
+    """Scripted inference broker for NativeAgentLoop tests: returns each of `replies` in
+    order as the model's message content, without needing a live backend."""
+
+    def __init__(self, replies: list[str]):
+        self._replies = list(replies)
+        self.calls = 0
+
+    async def chat(self, request, messages, model_overrides=None):
+        self.calls += 1
+        content = self._replies.pop(0) if self._replies else '{"tool": "done", "summary": "out of script"}'
+        return {"result": {"choices": [{"message": {"content": content}}]}}
+
+
+def test_native_agent_loop_reads_a_file_then_finishes(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("the answer is 42", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+
+    fake = _FakeInference(
+        [
+            f'{{"tool": "read_file", "args": {{"path": "{(workspace / "notes.txt").as_posix()}"}}}}',
+            '{"tool": "done", "summary": "the answer is 42"}',
+        ]
+    )
+    loop = NativeAgentLoop(fake, k.execution, k.workspaces, k.events)
+    state = {"run_id": "test-run-1", "task": "find the answer", "workspace": str(workspace)}
+
+    async def drive():
+        steps = []
+        while True:
+            step = await loop.next_step(state)
+            steps.append(step)
+            if step.done:
+                return steps
+
+    steps = asyncio.run(drive())
+    assert fake.calls == 2
+    assert steps[0].kind == "observation"
+    assert "42" in steps[0].payload["observation"]["content"]
+    assert steps[-1].kind == "done"
+    assert steps[-1].payload["summary"] == "the answer is 42"
+
+    # Every step is independently auditable, not just trusted because the loop finished.
+    events = list(k.events.read_stream("agent-loop:test-run-1"))
+    assert [e["event_type"] for e in events] == ["agent.step.tool_call", "agent.step.done"]
+    assert all(e["trust"] == "untrusted_model_output" for e in events)
+
+
+def test_native_agent_loop_denies_unapproved_mutation(tmp_path, monkeypatch):
+    """FIXES.md's own security stance, exercised through the loop: untrusted model output
+    cannot authorize a mutating action without explicit approval."""
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+
+    fake = _FakeInference(
+        [
+            '{"tool": "run_command", "args": {"argv": ["rm", "-rf", "everything"], "mutates_state": true}}',
+            '{"tool": "done", "summary": "gave up after denial"}',
+        ]
+    )
+    loop = NativeAgentLoop(fake, k.execution, k.workspaces, k.events)
+    state = {
+        "run_id": "test-run-2",
+        "task": "delete everything",
+        "workspace": str(workspace),
+        "approved": False,
+    }
+
+    async def drive():
+        first = await loop.next_step(state)
+        second = await loop.next_step(state)
+        return first, second
+
+    first, second = asyncio.run(drive())
+    assert first.kind == "observation"
+    assert "denied" in first.payload["observation"]["error"].lower()
+    assert second.kind == "done"
+
+
+def test_native_agent_loop_respects_step_budget(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=False)
+
+    # The model never calls "done" -- the loop's own budget must stop it regardless.
+    fake = _FakeInference([f'{{"tool": "list_directory", "args": {{"path": "{workspace.as_posix()}"}}}}'] * 20)
+    loop = NativeAgentLoop(fake, k.execution, k.workspaces, k.events)
+    state = {"run_id": "test-run-3", "task": "loop forever", "workspace": str(workspace), "max_steps": 3}
+
+    async def drive():
+        steps = []
+        while True:
+            step = await loop.next_step(state)
+            steps.append(step)
+            if step.done:
+                return steps
+
+    steps = asyncio.run(drive())
+    # max_steps=3 real attempts, then one budget_exhausted marker step.
+    assert len(steps) == 4
+    assert [s.kind for s in steps[:3]] == ["observation"] * 3
+    assert steps[-1].kind == "budget_exhausted"
+    assert steps[-1].payload["steps_taken"] == 3
+
+
+def test_native_agent_loop_handles_unparsable_reply_without_crashing(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=False)
+
+    fake = _FakeInference(["Sure! I'll help with that.", '{"tool": "done", "summary": "recovered"}'])
+    loop = NativeAgentLoop(fake, k.execution, k.workspaces, k.events)
+    state = {"run_id": "test-run-4", "task": "anything", "workspace": str(workspace)}
+
+    async def drive():
+        first = await loop.next_step(state)
+        second = await loop.next_step(state)
+        return first, second
+
+    first, second = asyncio.run(drive())
+    assert first.kind == "unparsable"
+    assert not first.done
+    assert second.kind == "done"
+
+
+def test_agent_job_end_to_end_through_dispatcher(tmp_path, monkeypatch):
+    """The full path: POST /jobs {kind: agent} -> dispatcher -> job_executor._run_agent_loop
+    -> NativeAgentLoop, using the kernel's real (fake-inference-swapped) loop registration.
+
+    Uses `with TestClient(...) as client` deliberately: a bare `TestClient(app)` never runs
+    the FastAPI `lifespan`, so `dispatcher.start()` never fires and no worker ever consumes
+    the queue -- a job would sit at `queued` forever. Discovered by this test the first time
+    it was written with a bare client, which is exactly why it exists.
+    """
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    monkeypatch.setenv("SOVEREIGN_STATE_DIR", str(tmp_path / "state"))
+    app = create_app(str(ROOT / "configs"))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["Authorization"] = f"Bearer {app.state.session_token}"
+        kernel_obj = app.state.kernel
+        workspace = tmp_path / "agent-ws"
+        workspace.mkdir()
+        kernel_obj.workspaces.add(workspace, writable=False)
+        fake = _FakeInference(['{"tool": "done", "summary": "task complete"}'])
+        kernel_obj.agent_loops.register(
+            "native", NativeAgentLoop(fake, kernel_obj.execution, kernel_obj.workspaces, kernel_obj.events)
+        )
+
+        submission = {
+            "kind": "agent",
+            "payload": {"task": "say hello", "workspace": str(workspace), "max_steps": 5},
+        }
+        response = client.post("/jobs", json=submission)
+        assert response.status_code == 202
+        job_id = response.json()["id"]
+
+        job = None
+        for _ in range(40):
+            job = client.get(f"/jobs/{job_id}").json()
+            if job["status"] in ("succeeded", "failed"):
+                break
+            time.sleep(0.05)
+        assert job["status"] == "succeeded"
+        assert job["result"]["final"]["summary"] == "task complete"

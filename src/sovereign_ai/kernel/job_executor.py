@@ -33,6 +33,15 @@ class MediaPayload(BaseModel):
     timeout_s: float | None = None
 
 
+class AgentPayload(BaseModel):
+    task: str
+    workspace: str | None = None
+    capability: str = "coding"
+    mode: str = "smart"
+    max_steps: int = 10
+    approved: bool = False
+
+
 def _assistant_content(result: dict[str, Any]) -> str:
     payload = result.get("result") or {}
     choices = payload.get("choices") or []
@@ -66,11 +75,13 @@ async def execute(kernel: SovereignKernel, job: JobRecord, run: RunRecord) -> di
                 specialist_payload.options,
                 specialist_payload.timeout_s,
             )
-        else:
+        elif job.kind == "media":
             media_payload = MediaPayload.model_validate(job.request)
             result = await kernel.media.generate(
                 media_payload.request, media_payload.settings, media_payload.timeout_s
             )
+        else:
+            result = await _run_agent_loop(kernel, job, run)
     except Exception as exc:
         # The dispatcher records the Job/Run failure itself from this re-raised exception;
         # this side effect only needs to notify the room that asked, and must not swallow
@@ -92,6 +103,36 @@ async def execute(kernel: SovereignKernel, job: JobRecord, run: RunRecord) -> di
                 payload={"error": f"{type(exc).__name__}: {exc}"},
             )
     return result
+
+
+async def _run_agent_loop(kernel: SovereignKernel, job: JobRecord, run: RunRecord) -> dict[str, Any]:
+    """Drive `kernel.agent_loops.get("native")` (or another registered loop, via
+    `job.request["loop"]`) to completion for one job attempt.
+
+    One `Run` = one full attempt of the task, from first step to `done`/budget-exhausted/
+    error. Every individual step is already recorded as a kernel event by the loop itself
+    (see `agents/native_loop.py`); this only needs to accumulate the step history into the
+    Run's own result so `GET /jobs/{id}/runs` shows a complete picture without a second
+    round trip to the event store.
+    """
+    payload = AgentPayload.model_validate(job.request)
+    loop_name = job.request.get("loop", "native")
+    loop = kernel.agent_loops.get(loop_name)
+    state: dict[str, Any] = {
+        "run_id": run.id,
+        "task": payload.task,
+        "workspace": payload.workspace,
+        "capability": payload.capability,
+        "mode": payload.mode,
+        "max_steps": payload.max_steps,
+        "approved": payload.approved,
+    }
+    steps: list[dict[str, Any]] = []
+    while True:
+        step = await loop.next_step(state)
+        steps.append({"kind": step.kind, "payload": step.payload, "notes": step.notes})
+        if step.done:
+            return {"steps": steps, "final": step.payload}
 
 
 async def post_failure(kernel: SovereignKernel, job: JobRecord, error: str) -> None:

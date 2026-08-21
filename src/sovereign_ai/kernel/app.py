@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sovereign_ai.agents.native_loop import NativeAgentLoop
 from sovereign_ai.agents.registry import AgentLoopRegistry
 from sovereign_ai.collaboration import CollaborationService, CollaborationStore
 from sovereign_ai.computer.controller import ComputerController
@@ -94,6 +95,9 @@ class SovereignKernel:
         context = ContextBuilder(memory)
         verification = VerificationEngine()
         agent_loops = AgentLoopRegistry()
+        agent_loops.register(
+            "native", NativeAgentLoop(inference, execution, workspaces, events)
+        )
         computer = ComputerController()
         transactions = TransactionManager(state / "transactions")
         event_bus = EventBus()

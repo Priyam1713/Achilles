@@ -703,8 +703,9 @@ change to the OpenShell-preferred, Docker-fallback decision.
 
 ### D-015 — Goose is the first agent-loop adapter, chosen on governance as much as capability
 
-- **Date:** 2026-08-21
-- **Status:** `trial` as the first concrete `AgentLoop`.
+- **Date:** 2026-08-19; **amended 2026-08-21** (`docs/FIXES.md` F-027)
+- **Status:** `trial` as an external `AgentLoop`. **Superseded as "the first concrete
+  `AgentLoop`"** by a native reference implementation — see amendment below.
 - **Reason:** `D-001` exists to stop harness churn from moving our root of trust. The strongest
   available defence against that is a harness that no single vendor can withdraw or relicense.
   Goose is Apache-2.0 and governed by the Agentic AI Foundation at the Linux Foundation, runs
@@ -716,7 +717,18 @@ change to the OpenShell-preferred, Docker-fallback decision.
 - **Safety boundary:** Subordinate like every other loop. The kernel issues the `run_id`,
   grants, leases and final state transition. Anything Goose reports is untrusted evidence
   until a verifier says otherwise.
-- **Revisit trigger:** The harness tournament (experiment 11) may produce a better performer.
+- **Amended 2026-08-21:** Goose requires a Rust/Cargo toolchain, absent on the target
+  workstation; building it from source was a multi-hour, failure-prone detour disproportionate
+  to what "one working agent loop" needs right now. `agents/native_loop.py`
+  (`NativeAgentLoop`) is now the first working `AgentLoop`: a deterministic JSON tool-call
+  protocol, policy-gated tool execution reusing the existing `ExecutionBroker`/
+  `WorkspaceRegistry`, and an append-only event per step. This is a better fit for `D-001`
+  than the original plan, not a compromise of it — a self-authored, fully auditable
+  reference loop is the correct thing to compare external harnesses against, including Goose,
+  in the harness tournament (experiment 11), rather than adopting the first external harness
+  as the only thing that can drive the kernel.
+- **Revisit trigger:** The harness tournament (experiment 11) may produce a better performer
+  than the native loop, Goose included, once a Rust toolchain is available to build it.
   Governance neutrality is a tiebreaker, not an exemption from measurement.
 
 ### D-016 — Nemotron accepted for personal use only, behind a new local-overlay seam

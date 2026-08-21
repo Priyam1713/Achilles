@@ -41,7 +41,7 @@ class ChatRequest(BaseModel):
 
 
 class JobSubmission(BaseModel):
-    kind: Literal["chat", "specialist", "media"]
+    kind: Literal["chat", "specialist", "media", "agent"]
     payload: dict[str, Any]
     metadata: dict[str, Any] = Field(default_factory=dict)
 

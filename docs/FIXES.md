@@ -830,6 +830,71 @@ not fabrication.
   erased by restoring the earlier snapshot, proving restore actually reverts state rather
   than merely not-erroring. Full suite: **38 passed**, `ruff check src/ tests/` clean.
 
+### F-027 — Added: a working native `AgentLoop` — the kernel routed chat, it could not yet act
+
+- **Severity:** `major` (closes the largest gap between "kernel with routing" and "usable
+  coding agent") · **Status:** `fixed`
+- **Motivating problem:** `agents/base.py` defined the `AgentLoop` contract and
+  `agents/registry.py` could hold implementations, but nothing implemented it and nothing
+  drove it. The kernel could route a single chat completion; it could not plan, call a
+  tool, observe the result, and continue — the actual definition of an agent, and the
+  substance of the roadmap's Tier 2 item 4.
+- **Scope decision, made explicitly rather than by default:** `D-015` picked Goose
+  (external, Rust, Linux-Foundation-governed) as the first harness. Building it requires a
+  Rust/Cargo toolchain, which this machine does not have (`cargo`/`rustc` both `MISSING`),
+  plus cloning and building a real production CLI — a multi-hour, failure-prone detour
+  disproportionate to what "first working agent loop" actually needs. Building a native
+  reference loop first, with Goose and others compared against it later in the harness
+  tournament (`research.md` experiment 11, already sequenced there), is not a downgrade —
+  it is more consistent with `D-001` ("no harness is the root of trust") than making one
+  external, unauditable Rust binary the *only* thing that can ever drive this kernel.
+- **Fix applied:** `agents/native_loop.py` — `NativeAgentLoop`. A deterministic JSON
+  tool-call protocol (`{"tool": "...", "args": {...}}` / `{"tool": "done", "summary": "..."}`)
+  a small local model can reliably produce, deliberately not dependent on a specific
+  backend's native function-calling support. Three tools, each routed through existing
+  kernel machinery rather than reimplementing authority checks: `read_file`/
+  `list_directory` gated by `WorkspaceRegistry.require()` (a path outside a registered
+  workspace is denied, exactly as everywhere else in this project); `run_command` routed
+  through the **existing** `ExecutionBroker.run_approved()`, so a proposed mutating action
+  is evaluated by the real fail-closed `PolicyEngine` with `trust=untrusted_model_output`
+  and is denied without explicit approval — `docs/SECURITY.md`'s "untrusted model output
+  cannot authorize mutation" now has a concrete enforcement point for agent tool calls, not
+  just for direct API calls. Every step (tool call, denial, parse failure, completion) is
+  recorded as an append-only kernel event, so a run is auditable after the fact rather than
+  merely trusted because it finished. A hard step budget (`max_steps`, capped at 25)
+  prevents a runaway loop.
+  - New `JobKind` value `"agent"`; `jobs.py` and the API's separate `JobSubmission` model
+    both updated (missing the second one first caused a live 422 — see verification).
+  - `job_executor._run_agent_loop()` drives `kernel.agent_loops.get("native")` to
+    completion for one `Run` attempt, accumulating every step into the Run's result so
+    `GET /jobs/{id}/runs` shows the full trajectory without a second round trip to events.
+  - `kernel/app.py` registers `NativeAgentLoop` under the name `"native"` at kernel build
+    time, wired with the kernel's real `inference`/`execution`/`workspaces`/`events`.
+- **Verification:** six new tests in `tests/test_kernel.py`, using a scripted fake
+  inference broker but the kernel's **real** `ExecutionBroker`/`WorkspaceRegistry`/
+  `EventStore`/`PolicyEngine` — proving actual enforcement, not a mocked call: reading a
+  file inside a registered workspace succeeds and the content reaches the model's next
+  turn; a proposed `run_command` mutation with no approval is genuinely denied by policy,
+  not merely skipped; the step budget stops the loop at exactly the configured count; an
+  unparsable reply produces an observation instead of crashing the loop; and a full
+  `POST /jobs {kind: agent}` → dispatcher → executor → `NativeAgentLoop` → `done` round
+  trip through the real HTTP API reaches `succeeded` with the expected summary.
+  - **Caught while writing the last test:** `TestClient(app)` constructed without
+    `with ... as client` never runs FastAPI's `lifespan`, so `dispatcher.start()` never
+    fires and no worker ever consumes the queue — a job would sit at `queued` forever. This
+    also silently weakened the F-010 dispatcher test written earlier the same session,
+    which only proved a `Run` row gets *created* (synchronous, happens at submission time
+    regardless of any worker existing), not that it gets *executed*. Both tests now use
+    `with TestClient(...)`, and the earlier one now asserts the job reaches a terminal
+    status, not just that a Run row exists.
+  - Full suite: **43 passed**, `ruff check src/ tests/` clean.
+- **Explicitly out of scope / honest limits:** no real tool-calling grammar constraint on
+  the model's output (relies on prompt instruction plus lenient JSON-span extraction, not a
+  guaranteed-valid-JSON sampler); no sub-agent delegation; no checkpoint/resume mid-loop
+  (a cancelled run's partial history is visible via `GET /jobs/{id}/runs` but a retry starts
+  the task over, not from where it left off); quality on real coding tasks is unmeasured —
+  this closes the "can the kernel act at all" gap, not the "is it good at acting" question.
+
 ---
 
 ## Priority order

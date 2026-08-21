@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-JobKind = Literal["chat", "specialist", "media"]
+JobKind = Literal["chat", "specialist", "media", "agent"]
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled", "interrupted"]
 
 
