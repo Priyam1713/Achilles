@@ -948,3 +948,72 @@ def test_agent_job_end_to_end_through_dispatcher(tmp_path, monkeypatch):
             time.sleep(0.05)
         assert job["status"] == "succeeded"
         assert job["result"]["final"]["summary"] == "task complete"
+
+
+def test_quality_eval_task_checkers_are_actually_discriminating():
+    """The checkers in scripts/quality_eval_tasks.py are what makes this a graded eval
+    rather than a vibe check -- they must correctly pass a genuinely correct answer and
+    fail a genuinely wrong one, independent of any live model."""
+    from quality_eval_tasks import TASKS
+
+    by_id = {t.id: t for t in TASKS}
+
+    correct_palindrome = "```python\ndef is_palindrome(s: str) -> bool:\n    cleaned = ''.join(c.lower() for c in s if c.isalnum())\n    return cleaned == cleaned[::-1]\n```"
+    passed, _ = by_id["coding-palindrome"].check(correct_palindrome)
+    assert passed
+    wrong_palindrome = "```python\ndef is_palindrome(s: str) -> bool:\n    return True\n```"
+    passed, _ = by_id["coding-palindrome"].check(wrong_palindrome)
+    assert not passed
+
+    correct_fix = "```python\ndef sum_range(a: int, b: int) -> int:\n    total = 0\n    for i in range(a, b + 1):\n        total += i\n    return total\n```"
+    passed, _ = by_id["coding-fix-off-by-one"].check(correct_fix)
+    assert passed
+    still_buggy = "```python\ndef sum_range(a: int, b: int) -> int:\n    total = 0\n    for i in range(a, b):\n        total += i\n    return total\n```"
+    passed, _ = by_id["coding-fix-off-by-one"].check(still_buggy)
+    assert not passed
+
+    task = by_id["reasoning-multi-step"]
+    passed, detail = task.check(f"Working shown here.\nFinal answer: {(84 - 3) * 12 * 0.85:.0f}")
+    assert passed, detail
+    passed, _ = task.check("Working shown here.\nFinal answer: 999999")
+    assert not passed
+
+    bullets_task = by_id["instruction-following-bullets"]
+    passed, _ = bullets_task.check("- one\n- two\n- three")
+    assert passed
+    passed, _ = bullets_task.check("- one\n- two")
+    assert not passed
+    passed, _ = bullets_task.check("Here are some points:\n- one\n- two\n- three\n- four")
+    assert not passed
+
+
+def test_quality_eval_task_suite_covers_multiple_categories():
+    from quality_eval_tasks import TASKS
+
+    categories = {t.category for t in TASKS}
+    assert {"coding", "reasoning", "instruction_following"} <= categories
+    assert len({t.id for t in TASKS}) == len(TASKS), "task ids must be unique"
+
+
+def test_extract_message_content_falls_back_to_reasoning_content():
+    """FIXES.md F-028: a thinking-mode model whose generation was cut off by max_tokens
+    before it finished reasoning leaves `content` empty but `reasoning_content` populated.
+    Treating that as 'no output' is the actual bug that was found live; this locks the fix."""
+    from sovereign_ai.inference.content import extract_message_content
+
+    with_content = {"choices": [{"message": {"content": "25", "reasoning_content": "..."}}]}
+    assert extract_message_content(with_content) == "25"
+
+    cut_off_mid_thought = {
+        "choices": [{"message": {"content": "", "reasoning_content": "Let me think... 12+13="}}]
+    }
+    assert extract_message_content(cut_off_mid_thought) == "Let me think... 12+13="
+
+    truly_empty = {"choices": [{"message": {"content": "", "reasoning_content": ""}}]}
+    assert extract_message_content(truly_empty) == ""
+
+    no_choices = {"choices": []}
+    assert extract_message_content(no_choices) == ""
+
+    no_reasoning_field_at_all = {"choices": [{"message": {"content": "plain answer"}}]}
+    assert extract_message_content(no_reasoning_field_at_all) == "plain answer"

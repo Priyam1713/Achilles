@@ -7,6 +7,7 @@ from typing import Any
 from sovereign_ai.execution.broker import ExecutionBroker
 from sovereign_ai.execution.workspaces import WorkspaceRegistry
 from sovereign_ai.inference.broker import InferenceBroker
+from sovereign_ai.inference.content import extract_message_content
 from sovereign_ai.kernel.events import EventStore
 from sovereign_ai.kernel.types import CapabilityRequest, RoutingMode, TrustLabel
 
@@ -135,13 +136,7 @@ class NativeAgentLoop(AgentLoop):
 
     @staticmethod
     def _extract_content(result: dict[str, Any]) -> str:
-        payload = result.get("result") or {}
-        choices = payload.get("choices") or []
-        if choices:
-            content = (choices[0].get("message") or {}).get("content")
-            if isinstance(content, str):
-                return content
-        return ""
+        return extract_message_content(result.get("result") or {})
 
     @staticmethod
     def _parse_action(content: str) -> dict[str, Any] | None:

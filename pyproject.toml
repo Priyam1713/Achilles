@@ -35,7 +35,7 @@ sovereign = "sovereign_ai.cli:app"
 packages = ["src/sovereign_ai"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "scripts"]
 asyncio_mode = "auto"
 
 [tool.ruff]

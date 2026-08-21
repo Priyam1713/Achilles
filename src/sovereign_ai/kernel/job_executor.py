@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
+from sovereign_ai.inference.content import extract_message_content
 from sovereign_ai.kernel.types import CapabilityRequest
 
 from .jobs import JobRecord
@@ -43,13 +44,8 @@ class AgentPayload(BaseModel):
 
 
 def _assistant_content(result: dict[str, Any]) -> str:
-    payload = result.get("result") or {}
-    choices = payload.get("choices") or []
-    if choices:
-        content = (choices[0].get("message") or {}).get("content")
-        if isinstance(content, str) and content.strip():
-            return content.strip()
-    return "The model completed the job, but its backend returned no displayable text."
+    content = extract_message_content(result.get("result") or {})
+    return content or "The model completed the job, but its backend returned no displayable text."
 
 
 async def execute(kernel: SovereignKernel, job: JobRecord, run: RunRecord) -> dict[str, Any]:
