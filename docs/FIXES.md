@@ -567,18 +567,39 @@ not fabrication.
 
 ### F-014 — Manifest breadth is unused and unaffordable
 
-- **Severity:** `major` · **Status:** `open`
-- **Evidence:** The `full` profile resolves to ~290 GB of checkpoints (from
-  `state/audit-workstation/source-audit.json`), plus 14 isolated torch/CUDA environments at
-  roughly 4–6 GB each. `IMPLEMENTATION_STATUS.md` concedes most specialist families have no
-  working adapter.
-- **Impact:** ~350–380 GB and a multi-hour-to-multi-day install with high partial-failure
-  probability, for specialists a single user on one laptop will overwhelmingly never invoke. The
-  `full` profile installs a protein language model on a machine with no biology workload. This
-  violates the project's own north star: *"a component earns its place only if it improves
-  capability, quality, reliability, security, or efficiency on this exact machine."*
-- **Fix:** Ship `core` minus the science specialists as the default (~110 GB). Every model beyond
-  that earns its slot with a measured invocation, not a capability slot in a YAML file.
+- **Severity:** `major` · **Status:** `fixed`
+- **Evidence:** The `workstation` profile — the one `scripts/bootstrap.ps1`/`Install.ps1`
+  actually **defaulted to** — resolved to 289.5 GB across 25 models (recomputed from
+  `state/audit-workstation/source-audit.json`; the original finding cited this same number
+  but mislabelled it as the `full` profile). `full` adds niche protein/materials/Earth-
+  observation/formal-proof specialists on top of that. `IMPLEMENTATION_STATUS.md` concedes
+  most specialist families have no working adapter.
+- **Impact:** ~290 GB and a multi-hour install with real partial-failure probability, as the
+  **default** a fresh install got with no flag at all — for specialists a single user on
+  one laptop will overwhelmingly never invoke. This violated the project's own north star:
+  *"a component earns its place only if it improves capability, quality, reliability,
+  security, or efficiency on this exact machine."*
+- **Fix applied:** Recomputed real per-profile sizes from the resolved audit data rather
+  than estimating. `core` was **already** the right size (110.9 GB) — the actual defect was
+  that `-Profile` defaulted to `workstation` everywhere: `scripts/bootstrap.ps1`,
+  `Install.ps1`, and — found while fixing this — the same stale `"workstation"` default in
+  `scripts/prewarm_specialists.py`, `scripts/sync_models.py`, `scripts/verify_sources.py`
+  and `scripts/install_specialists.sh` (`scripts/verify_storage.sh` too). All now default
+  to `core`. Separately, `ui-tars-1.5-7b` (33.19 GB — the single largest model that *was* in
+  `core`, larger even than the 27B deep brain) moved to `workstation`: it is the only model
+  serving `gui_grounding`/`screenshot_action`/`computer_use`, but
+  `docs/IMPLEMENTATION_STATUS.md` is explicit that no computer-control provider exists in
+  any profile yet — 33 GB for a capability that cannot currently be invoked has no business
+  being in the profile a fresh install gets with no flag. Net result: **new default `core`
+  is 77.7 GB** (down from the 289.5 GB a no-flag install used to pull), `workstation`
+  remains 289.5 GB total but is now an explicit, deliberate choice
+  (`./Install.ps1 -Profile workstation`), not the silent default. README, `LOCAL_BUILD.md`
+  and `configs/install-profiles.yaml` all updated with the corrected, verified figures.
+- **Verification:** `k.registry.validate() == []` after the manifest change; confirmed live
+  that `ui-tars-1.5-7b` is absent from `core`'s model list and present in `workstation`'s,
+  and that it remains `status: final` in `configs/models.yaml` (still fully installable via
+  `workstation`/`full`, just not by default). Full suite: **46 passed**, unaffected — no
+  test asserted specific `core`/`workstation` contents.
 
 ### F-015 — `GET /ui` resolves the UI path relative to the process working directory
 
@@ -983,8 +1004,10 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
 4. ~~**F-010 + F-011 + F-026**~~ — **fixed.** Bounded job dispatcher with durable `Run`
    attempts, a cross-process durable GPU lease, and the migration runner both were built
    on. `Run` and `ResourceLease` from `D-008` stopped being architecture and became code.
-5. **F-014 + F-013** — cut the manifest and the retrieval stack. Turns the install from a coin
-   flip into something reproducible.
+5. ~~**F-014**~~ — **fixed.** Default install profile changed `workstation` (289.5 GB) ->
+   `core` (now 77.7 GB after also moving the unwired `ui-tars-1.5-7b` out). **F-013**
+   (retrieval stack right-sizing) remains open — same "turn the install from a coin flip
+   into something reproducible" goal, different lever.
 6. **F-008** — real vector index, or an honest README.
 7. **F-006, F-007, F-009, F-015 (fixed), F-016, F-021, F-023, F-024** — cleanup, each
    independently shippable.

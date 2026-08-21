@@ -60,13 +60,21 @@ No model, harness, sandbox, inference engine or UI owns the architecture. The ke
 > inside the distro but does not publish their listening sockets in the Windows TCP table, so
 > a host-only scan reports a busy port as free. See `docs/FIXES.md` F-019.
 
-From PowerShell in the repository root. The recommended `workstation` profile is
-matched to this RTX 5070 Ti Laptop GPU; heavy artifacts are stored on WSL ext4,
-not the smaller/slower `D:` filesystem:
+From PowerShell in the repository root. `core` (~78 GB) is the default and recommended
+starting profile — a genuinely useful daily assistant: coding, retrieval, documents,
+speech. Heavy artifacts are stored on WSL ext4, not the smaller/slower `D:` filesystem:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 $env:HF_TOKEN="YOUR_TOKEN_IF_NEEDED"
+./Install.ps1
+```
+
+`workstation` adds ~212 GB more (creative/audio/vision/computer-use/data specialists, ~290
+GB total) on top of `core` — install it deliberately once you know you want that coverage,
+not by default (`docs/FIXES.md` F-014):
+
+```powershell
 ./Install.ps1 -Profile workstation
 ```
 

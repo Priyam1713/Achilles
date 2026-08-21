@@ -77,6 +77,6 @@ async def main(strict: bool, profile: str) -> int:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--strict", action="store_true")
-    ap.add_argument("--profile", choices=("core", "workstation", "full"), default="workstation")
+    ap.add_argument("--profile", choices=("core", "workstation", "full"), default="core")
     a = ap.parse_args()
     raise SystemExit(asyncio.run(main(a.strict, a.profile)))

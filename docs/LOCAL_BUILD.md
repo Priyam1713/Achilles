@@ -20,10 +20,15 @@ cannot overwrite one another.
 
 ## Installation profiles
 
-- `core` (~111 GB of current checkpoint downloads; requires at least 220 GB free): cognition, text retrieval/reranking, documents,
-  speech, TTS, perception, GUI fallback and basic forecasting.
-- `workstation` (recommended; ~290 GB of current checkpoint downloads; requires at least 500 GB): core plus multimodal retrieval,
-  advanced audio, creative media, segmentation, tabular modelling and medical vision.
+- `core` (default and recommended; ~78 GB of current checkpoint downloads; requires at
+  least 150 GB free): cognition, text retrieval/reranking, documents, speech, TTS,
+  perception and basic forecasting.
+- `workstation` (~212 GB additional on top of `core`, ~290 GB total; requires at least
+  500 GB): adds multimodal retrieval, advanced audio, creative media, segmentation,
+  tabular modelling, medical vision and the GUI-fallback/computer-use model (`ui-tars-1.5-7b`,
+  33.19 GB — moved out of `core` in `docs/FIXES.md` F-014 because no computer-control
+  provider is wired up in any profile yet, so it cannot currently be invoked regardless of
+  which profile installs it).
 - `full` (requires at least 700 GB): every final manifest model, including niche protein,
   materials, Earth-observation and formal-proof specialists.
 
@@ -35,22 +40,30 @@ checkpoints still require accepting their upstream terms; the installer never ac
 Do not execute the heavyweight build sequence until the D-011 pre-build gates in
 [the research ledger](../knowledge/research.md) pass. In particular, pin mutable runtime,
 specialist, package and container inputs; establish service identity/configurable ports; and
-preserve the unrelated router currently listening on port 8080. The first physical run after
-those corrections should use `core`, establish a benchmark/recovery baseline, and only then
-expand to `workstation`.
+preserve the unrelated router currently listening on port 8080 (`docs/FIXES.md` F-018/F-019
+resolved the collision itself, but the general rule still governs new installs). The first
+physical run after those corrections should use `core` -- now the default, not an
+intermediate step -- establish a benchmark/recovery baseline, and only then deliberately
+expand to `workstation` if that broader coverage is actually wanted.
 
 Run from PowerShell:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 $env:HF_TOKEN = "YOUR_TOKEN_AFTER_ACCEPTING_REQUIRED_MODEL_TERMS"
+./Install.ps1
+```
+
+To install `workstation` instead, deliberately:
+
+```powershell
 ./Install.ps1 -Profile workstation
 ```
 
-To avoid gated models:
+To avoid gated models on either profile, add `-WithoutGatedModels`:
 
 ```powershell
-./Install.ps1 -Profile workstation -WithoutGatedModels
+./Install.ps1 -WithoutGatedModels
 ```
 
 The installer performs these gates in order:

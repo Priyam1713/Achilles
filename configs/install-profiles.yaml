@@ -1,6 +1,19 @@
 profiles:
+  # FIXES.md F-014: this is the default install profile (scripts/bootstrap.ps1,
+  # Install.ps1) as of 2026-08-21. It previously defaulted to `workstation` (289.5 GB,
+  # verified against state/audit-workstation/source-audit.json) even though `core` (110.9
+  # GB, verified against state/audit-core/source-audit.json) already covers a genuinely
+  # useful daily assistant. `ui-tars-1.5-7b` (33.19 GB -- the single largest model in this
+  # profile, bigger even than the 27B deep brain) was moved to `workstation`: it is the
+  # ONLY model serving gui_grounding/screenshot_action/computer_use, but
+  # docs/IMPLEMENTATION_STATUS.md is explicit that no computer-control provider (Playwright,
+  # UIA broker, or a UI-TARS worker adapter) is wired up yet in any profile -- shipping 33 GB
+  # for a capability tier that cannot currently be invoked, in the profile a new install
+  # gets by default, is exactly the "capability slot in a YAML file, not a measured
+  # invocation" F-014 named. It remains `status: final` in configs/models.yaml and fully
+  # installable via `workstation`/`full` once an automation provider exists to use it.
   core:
-    description: Daily local assistant, coding, retrieval, documents, speech and GUI perception.
+    description: Daily local assistant, coding, retrieval, documents and speech. ~78 GB.
     models:
       - qwen38-27b
       - qwen35-9b
@@ -13,13 +26,15 @@ profiles:
       - voxcpm2
       - rf-detr-large
       - depth-anything-3
-      - ui-tars-1.5-7b
       - chronos-2
 
   workstation:
-    description: Recommended 12GB-VRAM profile with broad creative, audio, vision and data coverage.
+    description: >-
+      Broad creative, audio, vision, computer-use and data coverage on top of `core`.
+      ~212 GB additional (~290 GB total) -- install this deliberately, not by default.
     extends: core
     models:
+      - ui-tars-1.5-7b
       - qwen3-vl-embedding-8b
       - qwen3-vl-reranker-8b
       - qwen3-forced-aligner-0.6b

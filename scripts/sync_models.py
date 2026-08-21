@@ -19,7 +19,7 @@ def main() -> int:
     ap.add_argument("--model-dir", default="models")
     ap.add_argument("--state-dir", default="state")
     ap.add_argument("--profiles-config", default="configs/install-profiles.yaml")
-    ap.add_argument("--profile", choices=("core", "workstation", "full"), default="workstation")
+    ap.add_argument("--profile", choices=("core", "workstation", "full"), default="core")
     ap.add_argument("--include-gated", action="store_true")
     ap.add_argument("--candidates", action="store_true")
     ap.add_argument("--only", action="append", default=[])

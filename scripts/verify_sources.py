@@ -31,7 +31,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Resolve model sources without downloading weights"
     )
-    parser.add_argument("--profile", choices=("core", "workstation", "full"), default="workstation")
+    parser.add_argument("--profile", choices=("core", "workstation", "full"), default="core")
     parser.add_argument("--state-dir", default=os.getenv("SOAI_STATE_DIR", "state"))
     args = parser.parse_args()
 

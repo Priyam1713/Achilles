@@ -1,7 +1,7 @@
 param(
   [switch]$WithoutGatedModels,
   [switch]$SkipModelSmoke,
-  [ValidateSet("core", "workstation", "full")][string]$Profile = "workstation",
+  [ValidateSet("core", "workstation", "full")][string]$Profile = "core",
   [string]$Distro = "Ubuntu-24.04"
 )
 $ErrorActionPreference = "Stop"

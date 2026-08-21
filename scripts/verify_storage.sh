@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="${1:-$(pwd)}"
-PROFILE="${2:-workstation}"
+PROFILE="${2:-core}"
 source "$ROOT/scripts/runtime_env.sh"
 
 case "$PROFILE" in
-  core) required_gb=220 ;;
+  core) required_gb=150 ;;
   workstation) required_gb=500 ;;
   full) required_gb=700 ;;
   *) echo "Unknown install profile: $PROFILE" >&2; exit 2 ;;

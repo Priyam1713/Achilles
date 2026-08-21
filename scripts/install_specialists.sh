@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT="${1:-$(pwd)}"
 shift || true
-PROFILE="workstation"
+PROFILE="core"
 while (($#)); do
   case "$1" in
     --profile) PROFILE="${2:?--profile requires a value}"; shift 2 ;;
