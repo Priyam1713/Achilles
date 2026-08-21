@@ -445,6 +445,26 @@ class CollaborationStore:
             ).fetchall()
         return [self._event(row) for row in rows]
 
+    def events_for_member(self, identity_id: str, limit: int = 200) -> list[CollaborationEvent]:
+        """Every event in every room `identity_id` currently belongs to, most recent
+        first -- the raw material a mailbox read-model is built from (FIXES.md Tier 5;
+        docs/ARCHITECTURE.md's "mailboxes and presence are projections of the append-only
+        event journal"). Scoped to current membership deliberately: a mention in a room
+        this identity does not belong to could never have been dispatched to them either
+        (see `CollaborationService._dispatches`'s own membership check), so it should not
+        surface in their mailbox.
+        """
+        limit = max(1, min(limit, 1000))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT e.* FROM collaboration_events e
+                   JOIN collaboration_memberships m ON m.room_id = e.room_id
+                   WHERE m.identity_id = ?
+                   ORDER BY e.seq DESC LIMIT ?""",
+                (identity_id, limit),
+            ).fetchall()
+        return [self._event(row) for row in rows]
+
     def get_event(self, event_id: str) -> CollaborationEvent | None:
         with self._connect() as connection:
             row = connection.execute(

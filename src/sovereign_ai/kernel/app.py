@@ -35,6 +35,7 @@ from .delegations import DelegationStore
 from .events import EventStore
 from .jobs import JobStore
 from .policy import PolicyEngine
+from .presence import PresenceService
 from .registry import CapabilityRegistry
 from .roster import RosterService
 from .runs import RunStore
@@ -79,6 +80,7 @@ class SovereignKernel:
     approvals: ApprovalRequestStore
     workspace_leases: WorkspaceLeaseStore
     roster: RosterService
+    presence: PresenceService
 
     @classmethod
     def build(cls, config_root: str | None = None) -> SovereignKernel:
@@ -131,6 +133,7 @@ class SovereignKernel:
         approvals = ApprovalRequestStore(state / "approvals.db")
         workspace_leases = WorkspaceLeaseStore(state / "workspace_leases.db")
         roster = RosterService(agent_profiles, delegations, capability_grants, approvals, jobs, policy)
+        presence = PresenceService(capability_grants, workspace_leases, delegations, jobs)
         return cls(
             config,
             registry,
@@ -168,4 +171,5 @@ class SovereignKernel:
             approvals,
             workspace_leases,
             roster,
+            presence,
         )

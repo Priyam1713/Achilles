@@ -88,6 +88,15 @@ class WorkspaceLeaseStore:
             ).fetchall()
         return [self._record(row) for row in rows]
 
+    def active_for_subject(self, subject_id: str) -> list[WorkspaceLeaseRecord]:
+        self.reap_stale()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM workspace_leases WHERE subject_id=? ORDER BY acquired_at",
+                (subject_id,),
+            ).fetchall()
+        return [self._record(row) for row in rows]
+
     def try_acquire(
         self, root_path: str, subject_id: str, writable: bool, ttl_seconds: float
     ) -> WorkspaceLeaseRecord | None:

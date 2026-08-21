@@ -169,6 +169,27 @@ class CollaborationService:
             raise ValueError(f"Unknown room: {room_id}")
         return self.store.events(room_id, limit)
 
+    def mailbox(self, identity_id: str, limit: int = 200) -> dict[str, list[CollaborationEvent]]:
+        """A derived read-model, not a second mutable queue (FIXES.md Tier 5;
+        `knowledge/research.md`'s minimal implementation sequence, step 2): `outbox` is
+        every event this identity authored; `inbox` is every event addressed to it --
+        currently that means appearing in an event's `mentions` payload field, the same
+        field `_dispatches` already uses to decide who gets paged. Both are read straight
+        from the existing append-only event chain; nothing new is written to produce
+        either.
+        """
+        if self.store.get_identity(identity_id) is None:
+            raise ValueError(f"Unknown identity: {identity_id}")
+        events = self.store.events_for_member(identity_id, limit)
+        outbox = [event for event in events if event.actor_id == identity_id]
+        inbox = [
+            event
+            for event in events
+            if event.actor_id != identity_id
+            and identity_id in (event.payload.get("mentions") or [])
+        ]
+        return {"inbox": inbox, "outbox": outbox}
+
     def post_message(
         self,
         room_id: str,

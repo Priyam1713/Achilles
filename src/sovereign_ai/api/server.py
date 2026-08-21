@@ -635,6 +635,25 @@ def create_app(config_root: str | None = None) -> FastAPI:
             "grants": [g.model_dump() for g in kernel.capability_grants.active_for_subject(subject_id)]
         }
 
+    @app.get("/roster/presence/{subject_id}")
+    async def get_presence(subject_id: str) -> dict[str, Any]:
+        """Derived from active grants/leases/jobs, never self-asserted (FIXES.md Tier 5)."""
+        return kernel.presence.compute(subject_id).model_dump()
+
+    @app.get("/collaboration/identities/{identity_id}/mailbox")
+    async def get_mailbox(identity_id: str, limit: int = 200) -> dict[str, Any]:
+        """A read-model over the existing event chain, not a second mutable queue
+        (FIXES.md Tier 5): inbox is events mentioning this identity, outbox is events it
+        authored, both drawn only from rooms it currently belongs to."""
+        try:
+            mailbox = kernel.collaboration.mailbox(identity_id, limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "inbox": [event.model_dump() for event in mailbox["inbox"]],
+            "outbox": [event.model_dump() for event in mailbox["outbox"]],
+        }
+
     @app.post("/workspaces/leases", status_code=201, dependencies=[Depends(require_session)])
     async def acquire_workspace_lease(request: WorkspaceLeaseCreate) -> dict[str, Any]:
         """A lease layers on top of the existing WorkspaceRegistry allow-list, never

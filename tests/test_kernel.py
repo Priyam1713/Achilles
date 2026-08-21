@@ -1654,3 +1654,132 @@ def test_workspace_lease_http_layers_on_the_existing_registry(tmp_path, monkeypa
             "/workspaces/leases", json={"path": str(approved), "subject_id": "run-2"}
         )
         assert reacquired.status_code == 201
+
+
+# --- Tier 5 continued: mailbox/presence read-models ------------------------------------
+
+
+def test_collaboration_mailbox_splits_inbox_and_outbox(tmp_path, monkeypatch):
+    """FIXES.md Tier 5: mailbox is a derived read-model over the existing event chain,
+    not a new mutable queue. Uses the real bootstrap room/identities (build-lab, owner,
+    swift, forge) already exercised by test_native_collaboration_rooms_mentions_and_chain."""
+    k = kernel(tmp_path, monkeypatch)
+    message, _ = k.collaboration.post_message(
+        "build-lab", "owner", "@swift please take the next step"
+    )
+
+    swift_mailbox = k.collaboration.mailbox("swift")
+    assert [e.event_id for e in swift_mailbox["inbox"]] == [message.event_id]
+    assert swift_mailbox["outbox"] == []
+
+    owner_mailbox = k.collaboration.mailbox("owner")
+    assert [e.event_id for e in owner_mailbox["outbox"]][:1] == [message.event_id]
+    assert message.event_id not in [e.event_id for e in owner_mailbox["inbox"]]
+
+    # forge was not mentioned in this message, so it must not appear in forge's inbox.
+    forge_mailbox = k.collaboration.mailbox("forge")
+    assert message.event_id not in [e.event_id for e in forge_mailbox["inbox"]]
+
+
+def test_collaboration_mailbox_unknown_identity_raises(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="Unknown identity"):
+        k.collaboration.mailbox("does-not-exist")
+
+
+def test_collaboration_mailbox_excludes_rooms_not_a_member_of(tmp_path, monkeypatch):
+    """A mention only reaches an identity's mailbox if it currently belongs to that room --
+    matching the same membership boundary `_dispatches` already enforces for actual paging."""
+    k = kernel(tmp_path, monkeypatch)
+    k.collaboration.create_room("private-room", "Private Room", "just the owner")
+    message, _ = k.collaboration.post_message(
+        "private-room", "owner", "@swift this mention is in a room swift never joined"
+    )
+    swift_mailbox = k.collaboration.mailbox("swift")
+    assert message.event_id not in [e.event_id for e in swift_mailbox["inbox"]]
+
+
+def test_presence_service_idle_with_no_active_grants_leases_or_jobs(tmp_path):
+    from sovereign_ai.kernel.capability_grants import CapabilityGrantStore
+    from sovereign_ai.kernel.delegations import DelegationStore
+    from sovereign_ai.kernel.jobs import JobStore
+    from sovereign_ai.kernel.presence import PresenceService
+    from sovereign_ai.resources.workspace_leases import WorkspaceLeaseStore
+
+    presence = PresenceService(
+        CapabilityGrantStore(tmp_path / "grants.db"),
+        WorkspaceLeaseStore(tmp_path / "leases.db"),
+        DelegationStore(tmp_path / "delegations.db"),
+        JobStore(tmp_path / "jobs.db"),
+    )
+    record = presence.compute("swift")
+    assert record.state == "idle"
+    assert record.active_grants == 0
+    assert record.active_workspace_leases == 0
+    assert record.running_job_ids == []
+
+
+def test_presence_service_active_with_a_capability_grant(tmp_path):
+    from sovereign_ai.kernel.capability_grants import CapabilityGrantStore
+    from sovereign_ai.kernel.delegations import DelegationStore
+    from sovereign_ai.kernel.jobs import JobStore
+    from sovereign_ai.kernel.presence import PresenceService
+    from sovereign_ai.resources.workspace_leases import WorkspaceLeaseStore
+
+    grants = CapabilityGrantStore(tmp_path / "grants.db")
+    grants.issue("swift", "read", "workspace", "policy", ttl_seconds=3600)
+    presence = PresenceService(
+        grants,
+        WorkspaceLeaseStore(tmp_path / "leases.db"),
+        DelegationStore(tmp_path / "delegations.db"),
+        JobStore(tmp_path / "jobs.db"),
+    )
+    record = presence.compute("swift")
+    assert record.state == "active"
+    assert record.active_grants == 1
+
+
+def test_presence_service_active_with_a_running_delegated_job(tmp_path):
+    from sovereign_ai.kernel.capability_grants import CapabilityGrantStore
+    from sovereign_ai.kernel.delegations import DelegationStore
+    from sovereign_ai.kernel.jobs import JobStore
+    from sovereign_ai.kernel.presence import PresenceService
+    from sovereign_ai.resources.workspace_leases import WorkspaceLeaseStore
+
+    delegations = DelegationStore(tmp_path / "delegations.db")
+    jobs = JobStore(tmp_path / "jobs.db")
+    delegation = delegations.create("swift", "do work", requested_grants=[])
+    job = jobs.create("agent", {"delegation_id": delegation.id})
+    jobs.mark_running(job.id)
+    delegations.set_status(delegation.id, "approved", child_job_id=job.id)
+
+    presence = PresenceService(
+        CapabilityGrantStore(tmp_path / "grants.db"),
+        WorkspaceLeaseStore(tmp_path / "leases.db"),
+        delegations,
+        jobs,
+    )
+    record = presence.compute("swift")
+    assert record.state == "active"
+    assert record.running_job_ids == [job.id]
+
+
+def test_roster_http_mailbox_and_presence(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOVEREIGN_STATE_DIR", str(tmp_path / "state"))
+    app = create_app(str(ROOT / "configs"))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.headers["Authorization"] = f"Bearer {app.state.session_token}"
+
+        idle = client.get("/roster/presence/swift").json()
+        assert idle["state"] == "idle"
+
+        client.post(
+            "/collaboration/rooms/build-lab/messages",
+            json={"actor_id": "owner", "content": "@swift check the presence endpoint"},
+        )
+        mailbox = client.get("/collaboration/identities/swift/mailbox").json()
+        assert len(mailbox["inbox"]) == 1
+        assert "check the presence endpoint" in mailbox["inbox"][0]["payload"]["content"]
+
+        missing = client.get("/collaboration/identities/does-not-exist/mailbox")
+        assert missing.status_code == 404

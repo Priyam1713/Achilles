@@ -45,7 +45,8 @@ with it.
 - mention-to-durable-job dispatch with threaded agent results and hash-chain verification
 - persistent-agency roster domain: durable `AgentProfile`, `Delegation`, `CapabilityGrant`,
   `ApprovalRequest` and `WorkspaceLease`, coordinated through the existing `PolicyEngine`
-  (FIXES.md F-031) — see "Persistent agency" below for what's still open in this domain
+  (FIXES.md F-031), plus mailbox/presence read-models over existing events, leases and job
+  state (FIXES.md F-032) — see "Persistent agency" below for what's still open in this domain
 
 The current control UI is a browser-served single-page bootstrap/control surface, not the
 planned Tauri desktop product.
@@ -143,9 +144,17 @@ without rewriting history — and the GPU lease is a durable, cross-process `GPU
 with TTL-based staleness recovery (`resources/gpu_leases.py`, FIXES.md F-011), not
 process-local.
 
+Mailbox and presence are also implemented (FIXES.md F-032), as read-models rather than new
+mutable state: `CollaborationService.mailbox(identity_id)` splits an identity's events
+(scoped to rooms it currently belongs to) into `inbox` (events mentioning it) and `outbox`
+(events it authored) — the same `mentions` field `_dispatches` already uses for paging, not
+a new definition of "addressed to". `kernel/presence.py`'s `PresenceService.compute()`
+derives `active`/`idle` purely from whether the subject holds an active `CapabilityGrant`,
+an active `WorkspaceLease`, or a delegation with a `queued`/`running` job — no self-asserted
+status, no new liveness signal invented.
+
 Still pending, genuinely unbuilt (not started, not just unwired):
 
-- addressed mailbox/presence projections over the event journal
 - enforceable memory scope/visibility filters — `AgentProfile.memory_scopes` is a real
   field; nothing yet reads it to restrict what `MemoryStore`/`ContextBuilder` return
 - versioned workflow DAGs and recurring triggers that create ordinary jobs

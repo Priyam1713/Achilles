@@ -1410,6 +1410,52 @@ not fabrication.
   identity through `NativeAgentLoop`/`job_executor` so a `Run` actually records which
   profile it acted for.
 
+### F-032 — Added: mailbox and presence, as read-models over the existing event/lease/job
+  state — closes two of F-031's named gaps
+
+- **Severity:** `minor` (both are read-only derived views, not new authority) · **Status:**
+  `fixed`
+- **Motivating problem:** `knowledge/research.md`'s minimal implementation sequence step 2
+  and `docs/ARCHITECTURE.md` both specified that "mailboxes and presence are projections
+  of the append-only event journal" and "presence is derived from active runs and health
+  evidence, not self-asserted by a model" — and F-031 named both as explicitly not built.
+  Concretely: there was no way to ask "what has been addressed to this identity" other
+  than reading every room's raw event stream by hand, and no way to ask "is this agent
+  doing anything right now" at all.
+- **Fix applied:** Deliberately built as **derived reads, not new mutable state** — matching
+  the design note's own reasoning against "another mutable queue and model-claimed status."
+  - `collaboration/store.py`'s new `events_for_member(identity_id, limit)` joins
+    `collaboration_events` against `collaboration_memberships` — every event in every room
+    an identity currently belongs to, most recent first. `collaboration/service.py`'s new
+    `mailbox(identity_id, limit)` splits that into `outbox` (events the identity authored)
+    and `inbox` (events where the identity appears in the existing `mentions` payload
+    field — the same field `_dispatches` already uses to decide who gets paged, so
+    "addressed to" means exactly what it already meant for actual dispatch, not a new
+    definition). Scoped to current room membership on purpose: a mention in a room the
+    identity was never a member of could never have been dispatched to them either, so it
+    should not surface in their mailbox now.
+  - `kernel/presence.py` — `PresenceService.compute(subject_id)`: `active` if the subject
+    holds any unexpired `CapabilityGrant`, any active `WorkspaceLease`
+    (`WorkspaceLeaseStore.active_for_subject`, new), or has a delegation whose child `Job`
+    is `queued`/`running`; `idle` otherwise. No new liveness signal is invented — presence
+    is a pure function of state this kernel already tracks durably, so a subject cannot
+    claim to be busy; it either holds an active grant/lease/job or it does not.
+  - New endpoints: `GET /roster/presence/{subject_id}`,
+    `GET /collaboration/identities/{id}/mailbox`.
+- **Verification:** 7 new tests. Mailbox: inbox/outbox correctly split using the real
+  bootstrap room/identities; an unknown identity raises; a mention in a room the identity
+  never joined does not leak into its mailbox (the membership-scoping guarantee, verified
+  directly, not assumed from the query's shape). Presence: idle with nothing active;
+  active with exactly one issued grant; active with a delegation's job marked `running`,
+  and `running_job_ids` names it. Full HTTP round trip: presence starts `idle`, posting a
+  `@swift`-mentioning room message makes it appear in swift's mailbox inbox verbatim, and
+  an unknown identity's mailbox request 404s. Full suite **81 passed**,
+  `ruff check src/ tests/ scripts/` clean.
+- **Still open from F-031's list:** enforceable memory scope ACLs, workflow DAGs,
+  skill-candidate evaluation/promotion, `WorkspaceLease` enforcement inside
+  `ExecutionBroker`, `collaboration/store.py`'s full `MigrationRunner` retrofit, and
+  `AgentProfile` identity propagation into `Run` records.
+
 ---
 
 ## Priority order
@@ -1462,13 +1508,18 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
    mailbox/presence projections, enforceable memory scope ACLs, workflow DAGs,
    skill-candidate evaluation/promotion, and wiring `WorkspaceLease` as an enforced gate
    inside `ExecutionBroker` (see F-031's "Explicitly out of scope").
+10. ~~**F-032**~~ — **fixed.** Mailbox and presence, both derived read-models over
+    existing state (events/memberships for mailbox; grants/leases/jobs for presence) —
+    no new mutable authority or self-asserted status, matching the design note's own
+    "avoids another mutable queue and model-claimed status."
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
 **F-013** (retrieval stack right-sizing, blocked on the same licence review); **F-022**
 (explicitly the user's values decision, not mine — already resolved for personal use via
 the local overlay, F-025). Every cleanup-tier item (F-006 through F-024) is now `fixed`.
-Tier 5's safety-critical core (F-031) is built; its remaining pieces (mailbox/presence,
-memory ACLs, workflow DAGs, skill evaluation) and all of Tier 6 (harness tournament,
-desktop product, remote providers) remain unstarted — genuine new subsystem builds, not
-bounded defect fixes.
+Tier 5's safety-critical core (F-031) and mailbox/presence (F-032) are built; remaining
+Tier 5 pieces (enforceable memory ACLs, workflow DAGs, skill evaluation, `WorkspaceLease`
+enforcement in `ExecutionBroker`) and all of Tier 6 (harness tournament, desktop product,
+remote providers) remain unstarted — genuine new subsystem builds, not bounded defect
+fixes.
