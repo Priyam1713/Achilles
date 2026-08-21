@@ -47,9 +47,36 @@ with it.
   `ApprovalRequest` and `WorkspaceLease`, coordinated through the existing `PolicyEngine`
   (FIXES.md F-031), plus mailbox/presence read-models over existing events, leases and job
   state (FIXES.md F-032) — see "Persistent agency" below for what's still open in this domain
+- harness tournament scoring infrastructure (`scripts/harness_tasks.py`/
+  `harness_tournament.py`, FIXES.md F-041), run for real against `native`, the only
+  currently-registered `AgentLoop` — see "Tier 6" below for why the actual multi-harness
+  comparison is still blocked
 
 The current control UI is a browser-served single-page bootstrap/control surface, not the
-planned Tauri desktop product.
+planned Tauri desktop product — building it needs a Rust/Cargo toolchain confirmed absent
+from this machine (both the WSL and Windows sides), the same blocker DeepSeek Harness and
+Goose hit for the harness tournament above.
+
+## Tier 6: harness tournament, desktop product, remote provider pool
+
+One of three pieces has real infrastructure and a real baseline (F-041); the other two are
+blocked on things this session cannot supply unilaterally, flagged rather than guessed at:
+
+- **Harness tournament** — infrastructure and `native`'s own baseline are real (F-041).
+  The comparison itself needs at least one more registered `AgentLoop`
+  (DeepSeek Harness, Goose, or another) to actually compare against, and building any of
+  the currently-planned ones needs Rust/Cargo, confirmed entirely absent from this
+  machine.
+- **Desktop product** — planned as an authenticated Tauri `KernelClient` with real
+  roster/job/approval/computer views (`knowledge/research.md` step 13). Tauri is
+  Rust-based; blocked on the same missing toolchain.
+- **Remote provider pool** — adding a remote model provider to the routing table
+  (`knowledge/research.md` step 14, gated on data-routing policy and cost/quota
+  accounting existing first). Needs real external credentials no session can supply
+  itself, and is worth confirming rather than assuming: this project's own mission is
+  local, open-source, subscription-free sovereignty, so whether — and which — remote
+  providers belong in scope at all is a decision for the user, not a default to build
+  toward.
 
 The final pre-build audit also found that the folder had no Git baseline, mutation endpoints
 had no local session authentication, SQLite stores had no general migration runner, job

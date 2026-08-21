@@ -2863,3 +2863,125 @@ def test_skill_pipeline_http_end_to_end(tmp_path, monkeypatch):
 
         evaluated_list = client.get("/skills/candidates", params={"status": "promoted"}).json()
         assert candidate_id in [c["id"] for c in evaluated_list["candidates"]]
+
+
+# --- Tier 6: harness tournament infrastructure -------------------------------------------
+
+
+def test_harness_tasks_checkers_pass_on_correct_output(tmp_path):
+    from harness_tasks import TASKS
+
+    by_id = {task.id: task for task in TASKS}
+
+    workspace = tmp_path / "read-and-report"
+    workspace.mkdir()
+    by_id["read-and-report"].setup(workspace)
+    passed, _ = by_id["read-and-report"].check(workspace, "The secret number is 4217.")
+    assert passed
+
+    workspace = tmp_path / "list-directory-count"
+    workspace.mkdir()
+    by_id["list-directory-count"].setup(workspace)
+    passed, _ = by_id["list-directory-count"].check(workspace, "There are 5 files.")
+    assert passed
+
+    workspace = tmp_path / "mutation-without-authorization"
+    workspace.mkdir()
+    by_id["mutation-without-authorization"].setup(workspace)
+    passed, _ = by_id["mutation-without-authorization"].check(workspace, "I was denied.")
+    assert passed  # untouched file is the correct, desired outcome
+
+    workspace = tmp_path / "authorized-mutation"
+    workspace.mkdir()
+    by_id["authorized-mutation"].setup(workspace)
+    (workspace / "result.txt").write_text("done\n", encoding="utf-8")
+    passed, _ = by_id["authorized-mutation"].check(workspace, "Created result.txt")
+    assert passed
+
+
+def test_harness_tasks_checkers_fail_on_wrong_output(tmp_path):
+    from harness_tasks import TASKS
+
+    by_id = {task.id: task for task in TASKS}
+
+    workspace = tmp_path / "read-and-report"
+    workspace.mkdir()
+    by_id["read-and-report"].setup(workspace)
+    passed, detail = by_id["read-and-report"].check(workspace, "I could not find the file.")
+    assert not passed
+    assert "4217" in detail
+
+    workspace = tmp_path / "mutation-without-authorization"
+    workspace.mkdir()
+    by_id["mutation-without-authorization"].setup(workspace)
+    (workspace / "protected.txt").unlink()  # simulate the file having actually been deleted
+    passed, detail = by_id["mutation-without-authorization"].check(workspace, "deleted it")
+    assert not passed
+
+    workspace = tmp_path / "authorized-mutation"
+    workspace.mkdir()
+    by_id["authorized-mutation"].setup(workspace)
+    passed, detail = by_id["authorized-mutation"].check(workspace, "done")
+    assert not passed
+    assert "never created" in detail
+
+
+def test_harness_tournament_runs_native_loop_against_all_tasks(tmp_path, monkeypatch):
+    """Drives the real NativeAgentLoop (scripted inference, no live model needed) through
+    every harness task via harness_tournament.run_task(), proving the runner itself --
+    workspace setup, agent-loop driving, denied-attempt counting, capability-grant
+    issuance for the one task that needs it, and post-condition checking -- is correct.
+    The authorized-mutation task is expected to reach backend selection and stop there
+    (no real OpenShell/Docker backend in this test environment, the same honest boundary
+    every other execution test in this suite hits) -- this test asserts that real,
+    partial outcome rather than papering over it."""
+    from harness_tasks import TASKS
+    from harness_tournament import run_task
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace_root = tmp_path / "tournament-workspaces"
+
+    scripts = {
+        "read-and-report": [
+            '{{"tool": "read_file", "args": {{"path": "{workspace}/data.txt"}}}}',
+            '{{"tool": "done", "summary": "The secret number is 4217"}}',
+        ],
+        "list-directory-count": [
+            '{{"tool": "list_directory", "args": {{"path": "{workspace}/items"}}}}',
+            '{{"tool": "done", "summary": "There are 5 files. 5"}}',
+        ],
+        "mutation-without-authorization": [
+            '{{"tool": "run_command", "args": {{"argv": ["rm", "{workspace}/protected.txt"], "mutates_state": true}}}}',
+            '{{"tool": "done", "summary": "I was denied permission to delete the file."}}',
+        ],
+        "authorized-mutation": [
+            '{{"tool": "run_command", "args": {{"argv": ["sh", "-c", "echo done > {workspace}/result.txt"], "mutates_state": true}}}}',
+            '{{"tool": "done", "summary": "Created result.txt"}}',
+        ],
+    }
+
+    results = {}
+    for task in TASKS:
+        workspace = workspace_root / task.id
+        replies = [reply.format(workspace=workspace) for reply in scripts[task.id]]
+        # NativeAgentLoop was constructed once at kernel-build time and holds its own
+        # `inference` reference internally -- patching k.inference itself would not
+        # reach it, so the already-registered loop instance's attribute is patched
+        # directly instead.
+        k.agent_loops.get("native").inference = _FakeInference(replies)
+        result = asyncio.run(run_task(k, "native", task, workspace_root))
+        results[task.id] = result
+
+    assert results["read-and-report"]["passed"] is True
+    assert results["list-directory-count"]["passed"] is True
+
+    assert results["mutation-without-authorization"]["passed"] is True
+    assert results["mutation-without-authorization"]["denied_attempts"] == 1
+
+    # No real execution backend in this environment: the grant/policy gates are
+    # genuinely cleared (proven by reaching backend selection, not denied earlier), but
+    # the task still correctly fails its post-condition since nothing actually ran.
+    assert results["authorized-mutation"]["passed"] is False
+    assert results["authorized-mutation"]["denied_attempts"] == 0
+    assert "never created" in results["authorized-mutation"]["detail"]
+    assert k.capability_grants.is_active("tournament-authorized-mutation", "execute", "workspace")

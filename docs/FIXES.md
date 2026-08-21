@@ -1934,6 +1934,64 @@ not fabrication.
   `SkillVersion` is not currently referenced by `AgentProfile` or any `Run`, so nothing
   yet consults "does this profile have this skill" as part of routing or execution.
 
+### F-041 — Added: harness tournament infrastructure (Tier 6, item 1 of 3)
+
+- **Severity:** `debt` (new evaluation infrastructure, not a defect) · **Status:**
+  `fixed` for the infrastructure and the `native` loop's own baseline; the actual
+  multi-harness tournament remains blocked on a missing toolchain, see "Honest limits."
+- **Motivating problem:** `knowledge/research.md` experiment 11: *"Replay the same
+  coding tasks through Hermes, DeepSeek Harness, LongHorizon/GSD where appropriate, and
+  Grok Build. Score completed post-conditions, unsafe attempts, recovery, tokens, wall
+  time, and operator interventions."* No scoring framework existed, and (confirmed live,
+  both WSL and Windows sides, not assumed) `cargo`/`rustc` are absent from this
+  workstation entirely — DeepSeek Harness needs them (already known from F-027), and so
+  does Goose, the harness `D-015` actually picked to build next.
+- **Fix applied:** Rather than wait on a toolchain this session cannot install
+  unilaterally, built the scoring framework now and ran it for real against the one
+  harness that *is* registered — `native` (F-027) — establishing its baseline so a future
+  harness has something concrete to be measured against the moment it can be added,
+  instead of the tournament starting from zero.
+  - `scripts/harness_tasks.py` — `HarnessTask`: an `objective_template`, a `setup(workspace)`
+    that prepares real files, and a `check(workspace, final_summary)` post-condition —
+    every check is a deterministic filesystem/string check, never an LLM judge, matching
+    this project's own quality-eval discipline (F-028, applied there to single chat
+    completions). Four tasks: two read-only (`read_file`/`list_directory`, genuinely
+    completable today with no authorization needed), one deliberately-unauthorized
+    mutation attempt (the *correct* outcome is the file staying untouched — PolicyEngine's
+    untrusted-content gate denying it, F-036, is the system working, not a harness
+    failure), and one authorized mutation that pre-issues a real `CapabilityGrant`
+    (F-037) so the task can, in principle, actually succeed end to end.
+  - `scripts/harness_tournament.py` — `run_task()` drives a named `AgentLoop` to
+    completion for one task exactly the way `job_executor._run_agent_loop` does, and
+    additionally counts `denied_attempts` (an observation whose error contains `"denied"`)
+    as its own metric, separate from `passed` — matching research.md's "unsafe attempts"
+    as a distinct scoring dimension, not folded into pass/fail. `run_tournament()` iterates
+    every requested loop name, skipping (not erroring on) any name not currently
+    registered on this kernel, so the same script keeps working once a second harness is
+    added later. Like every other benchmark script in this project, writes a JSON report
+    and changes no config, no route, nothing.
+- **Verification:** 3 new tests. Every task's checker verified against both a correct
+  and an incorrect outcome. **Caught a real bug in the checker itself while writing the
+  "incorrect outcome" test, not after:** `_check_mutation_without_authorization` called
+  `.read_text()` on `protected.txt` unconditionally — the one scenario the check exists to
+  catch, the file actually being deleted, would have crashed the checker with
+  `FileNotFoundError` instead of correctly reporting a failure. Fixed to check existence
+  first. Then a full run of `run_task()` through a real `NativeAgentLoop` (scripted
+  inference, no live model) against all four tasks: the two read-only tasks pass; the
+  unauthorized-mutation task passes with `denied_attempts == 1` and the file genuinely
+  untouched; the authorized-mutation task correctly reaches backend selection (proving the
+  grant/policy gates were genuinely cleared, not denied) and then correctly fails its
+  post-condition, since this test environment has no real OpenShell/Docker backend to
+  actually run the command — the same honest boundary every other execution test in this
+  suite already hits, not papered over here either. Full suite **130 passed**,
+  `ruff check src/ tests/ scripts/` clean.
+- **Honest limits:** this is infrastructure and one real baseline, not the tournament
+  research.md actually describes — Hermes, DeepSeek Harness, LongHorizon/GSD and Grok
+  Build are all still unregistered, unbuilt or both. DeepSeek Harness and Goose both need
+  Rust/Cargo, confirmed absent; installing a toolchain is a decision affecting the dev
+  environment this session did not make unilaterally. Flagged to the user alongside
+  Tier 6's other two items (desktop product, remote provider pool) rather than assumed.
+
 ---
 
 ## Priority order
@@ -2040,6 +2098,15 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
     **This closes Tier 5**: every named object across F-031 through F-040 is now real,
     tested and wired through the existing kernel machinery rather than a parallel one.
 
+19. ~~**F-041**~~ — **fixed, infrastructure plus one real baseline.** The harness
+    tournament scoring framework (`scripts/harness_tasks.py`/`harness_tournament.py`) is
+    real and run against `native`, the only currently-registered `AgentLoop`. Caught and
+    fixed a real bug in its own test the same way this session has caught several others:
+    a checker crashed instead of correctly failing on the exact scenario it existed to
+    catch. The actual multi-harness comparison remains blocked: `cargo`/`rustc` are
+    confirmed absent on both the WSL and Windows sides of this workstation, and both
+    DeepSeek Harness and Goose (`D-015`'s pick) need them.
+
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
 **F-013** (retrieval stack right-sizing, blocked on the same licence review); **F-022**
@@ -2049,8 +2116,11 @@ the local overlay, F-025). Every cleanup-tier item (F-006 through F-024) is now 
 memory-scope filtering, `WorkspaceLease` enforcement, identity propagation, a
 `CapabilityGrant`-authorized execution path, workflow DAGs with recurring triggers, and
 the skill-candidate pipeline are all real, tested, and composed through the existing
-`PolicyEngine`/`JobDispatcher` rather than a second authority or execution plane. All of
-Tier 6 (harness tournament, desktop product, remote providers) remains unstarted —
-genuine new subsystem builds, not bounded defect fixes, several explicitly flagged
-earlier this session as needing external toolchains this workstation does not have
-(Rust/Cargo for Goose, per F-027) or weeks of scope.
+`PolicyEngine`/`JobDispatcher` rather than a second authority or execution plane.
+**Tier 6 (F-041 through F-043) is one-third done:** harness tournament infrastructure
+exists (F-041) but the actual multi-harness comparison is blocked on a missing Rust/Cargo
+toolchain; the Tauri desktop product (planned) needs the same toolchain, confirmed
+entirely absent from this machine; and a remote provider pool needs real external
+credentials this session does not have and should not assume the user wants, given the
+project's own open-source, no-subscription mission. Both are flagged to the user rather
+than guessed at.
