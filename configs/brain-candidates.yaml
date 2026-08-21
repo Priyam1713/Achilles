@@ -85,49 +85,44 @@ candidates:
     optional: true
     notes: Run only after the plain -ncmoe sweep identifies the best offload point.
 
-  # ---- Unverified local artifacts (throughput reference only) ----
-  # These files were placed by hand under $SOAI_MODEL_DIR and were NOT resolved through
-  # scripts/fetch_brain_candidate.sh or any Hugging Face revision lock. Per the project's
-  # own evidence standard (knowledge/research.md) they are `unverified`: no confirmed
-  # upstream repo, no immutable revision, no license text bundled in the GGUF metadata.
-  # GGUF header inspection (llama-gguf) confirms both are `qwen35`-architecture models
-  # consistent with a Qwen3.8-27B derivative, but the header carries no source/license key,
-  # so provenance rests entirely on the filename and the user's own account of origin
-  # ("Qwen3.8-27B OBLITERATED", attributed to Pliny the Liberator's "Obliteratus" release).
+  # ---- Verified: OBLITERATUS/Qwen3.8-27B-OBLITERATED, accepted for personal use ----
+  # Provenance RESOLVED 2026-08-21 (was `unverified`, see FIXES.md F-022 history): confirmed
+  # via the HuggingFace API against huggingface.co/OBLITERATUS/Qwen3.8-27B-OBLITERATED --
+  # license apache-2.0 (real LICENSE file, no extra restrictions), base_model
+  # Qwen/Qwen3.8-27B (matches our own adopted incumbent exactly), file listing matches these
+  # exact filenames. Author elder-plinius / Pliny the Liberator, real and public
+  # (github.com/elder-plinius/OBLITERATUS, 7.7k stars, AGPL-3.0 toolkit code -- the weights
+  # repo itself is separately and explicitly apache-2.0). This is `primary-verified` evidence
+  # per knowledge/research.md's own taxonomy, not a filename guess.
   #
-  # "Obliterated"/"abliterated" models have refusal directions removed from their
-  # activations so the model complies with requests the base model would decline. That is
-  # a deliberate, safety-relevant property, not a quality variant -- it is evaluated here
-  # for ONE reason only: architecture and total-parameter count are identical to the
-  # incumbent, so a throughput measurement is directly comparable and costs nothing extra
-  # to collect while other candidates are being benchmarked. A throughput number is not an
-  # endorsement and settles nothing about whether this belongs anywhere in the manifest,
-  # a default profile, or a system given to the community. See FIXES.md F-021: that is a
-  # values decision, not a benchmarking one, and it is the user's to make, not a default
-  # this file gets to set by merely listing the file.
+  # "Obliterated"/"abliterated" (V2, complementary abliteration blending) removes refusal
+  # directions from the base model's activations; the model card states 0.24% refusal on an
+  # 842-prompt corpus and explicitly names "cyber, jailbreak generation, and complex AI
+  # attack chain capabilities" among its target capabilities, not just generic uncensoring.
+  # That is a deliberate, safety-relevant property of the artifact. The kernel's own
+  # execution/policy boundary does not depend on model alignment either way
+  # (docs/SECURITY.md), so this affects content-level output, not kernel authority.
   #
-  # NEVER promoted, NEVER routed, NEVER included in an install profile from this file alone.
+  # Decision (D-017, 2026-08-21): accepted for PERSONAL/LOCAL use only, same as Nemotron
+  # (D-016). Never added to configs/models.yaml or any shared install profile.
   - id: qwen38-27b-obliterated-q6k
-    label: Qwen3.8-27B OBLITERATED Q6_K (unverified, throughput reference only)
+    label: Qwen3.8-27B OBLITERATED Q6_K (verified source, personal-use-only)
     family: dense
     model: qwen38-27b-obliterated/gguf/Qwen3.8-27B-OBLITERATED-Q6_K.gguf
-    provenance: unverified-local
     optional: true
     notes: >-
-      22.43 GB. GGUF header: architecture=qwen35, no source/license metadata. Larger than
-      the official UD-Q6_K (21.98 GB) -- consistent with an unquantized-embedding or
-      slightly different quantization recipe, not confirmed against upstream.
+      22.43 GB. Larger than the official UD-Q6_K (21.98 GB) -- consistent with a different
+      quantization recipe/imatrix, not a defect.
 
   - id: qwen38-27b-obliterated-iq4xs
-    label: Qwen3.8-27B OBLITERATED IQ4_XS (unverified, throughput reference only)
+    label: Qwen3.8-27B OBLITERATED IQ4_XS (verified source, personal-use-only)
     family: dense
     model: qwen38-27b-obliterated/gguf/Qwen3.8-27B-OBLITERATED-IQ4_XS.gguf
-    provenance: unverified-local
     optional: true
     notes: >-
-      14.36 GB, close to the official UD-IQ4_XS (14.25 GB). Useful as a second, independent
-      data point for the "does IQ4_XS meaningfully improve throughput over Q4_K_M" question
-      in F-005, without waiting on an official-source download.
+      14.36 GB, close to the official UD-IQ4_XS (14.25 GB). Same architecture/size class as
+      the dense Qwen3.8-27B incumbent (F-005: 6.36 tok/s at UD-Q4_K_M), so this is also a
+      useful data point for whether IQ4_XS meaningfully improves throughput at this size.
 
   # ---- Fast brain, for reference scale ----
   - id: qwen35-9b-q6k

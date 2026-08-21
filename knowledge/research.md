@@ -757,6 +757,36 @@ change to the OpenShell-preferred, Docker-fallback decision.
   shared defaults, that is itself a decision this ledger would need to record, not an
   automatic consequence of this one.
 
+### D-017 — Obliterated Qwen3.8-27B accepted for personal use only, on verified provenance
+
+- **Date:** 2026-08-21
+- **Status:** `adopted`. Personal-machine scope only; explicitly **not** extended to
+  `configs/models.yaml` or any shared install profile. Same pattern as `D-016`.
+- **Reason:** `docs/FIXES.md` F-022 opened as `unverified` — two GGUF files with no
+  discoverable source. A web search plus direct HuggingFace/GitHub API checks resolved
+  this to `primary-verified`: `OBLITERATUS/Qwen3.8-27B-OBLITERATED`, Apache-2.0, base model
+  exactly our own adopted Qwen3.8-27B, filenames matching exactly, author real and public.
+  Unlike Nemotron there is no non-OSI licence or indemnification risk — the remaining
+  question was purely fit, not law: the model card states 0.24% refusal on an 842-prompt
+  corpus and explicitly names attack-chain/jailbreak-generation among its target
+  capabilities. Presented with the verified facts, the user chose personal use only.
+- **Consequence:** Reuses the `D-016` mechanism exactly — `configs/models.local.yaml`,
+  `status: candidate` (routes only under `mode: deep`). Given a **distinct id**
+  (`qwen38-27b-obliterated`) rather than shadowing the manifest's `qwen38-27b`: shadowing
+  the trusted incumbent's id would make every route currently resolving to stock Qwen3.8-27B
+  silently start returning different weights with no distinguishing marker, which is a
+  silent default swap, not an opt-in personal model. `D-008`'s safety boundaries and
+  invariant 8 both rule that out regardless of licence cleanliness.
+- **Safety boundary:** The kernel's own security model does not depend on model alignment
+  for authority, execution, or credential access (`docs/SECURITY.md`) — this decision
+  affects content-level chat/completion output only, never what the kernel will let any
+  model *do*. `status: candidate` keeps it from ever winning an ordinary routing decision
+  against the evaluated incumbent.
+- **Revisit trigger:** Independent reproduction of the vendor's own MMLU/refusal-rate claims
+  would upgrade the evidence label from `vendor-claim` to `independent-verified` for those
+  specific numbers; it would not by itself change the personal-use-only scope, which is a
+  values decision distinct from a quality measurement.
+
 ## Recommended experiment order
 
 This order adds information without destabilizing the first physical build.

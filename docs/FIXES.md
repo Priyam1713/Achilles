@@ -1,3 +1,81 @@
+### F-022 — Local Qwen3.8-27B "OBLITERATED" files: provenance resolved, accepted for personal use
+
+- **Severity:** `debt` · **Status:** `fixed`
+- **Original finding (2026-08-21, superseded below):** Two GGUF files placed by hand at
+  `C:\Users\priya\Downloads\Qwen3.8-27B-OBLITERATED-{IQ4_XS,Q6_K}.gguf`, attributed by the
+  user to "Pliny the Liberator's Obliteratus." GGUF header inspection confirmed a
+  `qwen35`-architecture model consistent with a Qwen3.8-27B derivative but carried no
+  source/license metadata — at that point genuinely `unverified` per this project's own
+  evidence taxonomy: not `primary-verified`, not even `vendor-claim`, only a filename.
+- **RESOLVED 2026-08-21, same session — provenance is real and checks out.** Web search plus
+  direct HuggingFace/GitHub API verification: `OBLITERATUS/Qwen3.8-27B-OBLITERATED` is a real,
+  public, non-gated repo. `cardData.license = apache-2.0`, a real Apache-2.0 `LICENSE` file is
+  present (verified by fetching it directly — standard text, no added restrictions),
+  `base_model = Qwen/Qwen3.8-27B` (exactly our own already-adopted incumbent), and the repo's
+  file listing contains `Qwen3.8-27B-OBLITERATED-IQ4_XS.gguf` and
+  `Qwen3.8-27B-OBLITERATED-Q6_K.gguf` — an exact filename match to what was downloaded.
+  Author `elder-plinius` (Pliny the Liberator) is a real, public figure; the `OBLITERATUS`
+  toolkit itself is a real GitHub repo (7,734 stars, AGPL-3.0 for the *toolkit code* — the
+  model weights repo is separately and explicitly Apache-2.0). This is now
+  `primary-verified` evidence, not a filename guess. **Unlike Nemotron (F-012), there is no
+  indemnification clause or non-OSI licence risk here — Apache-2.0 is a clean grant.**
+- **What "obliterated"/"abliterated" means, stated plainly:** this is "V2: complementary
+  abliteration blending" — two different weight-projection surgeries (aggressive/SVD and
+  LEACE) blended 60/40 to remove refusal directions while limiting capability loss. The
+  model card's own (vendor-claimed, not independently reproduced by us) figures: MMLU 84.3%
+  vs stock 84.6% (-0.3pp), refusal rate 0.24% on an 842-prompt author-run corpus. The card
+  explicitly names **"cyber, jailbreak generation, and complex AI attack chain
+  capabilities"** among its stated target capabilities — this is not generic "won't lecture
+  me" uncensoring, it is specifically optimised toward offensive-security-adjacent output.
+  That is a deliberate, safety-relevant property of the artifact, not a quality variant.
+  It changes what the model will *say*, not how it executes — the kernel's own security
+  model already assumes this correctly (`docs/SECURITY.md`: "the model is never the security
+  boundary"; `PolicyEngine` is fail-closed and does not depend on model alignment for
+  authority, execution, or credential access). Including this model does not weaken the
+  kernel's execution/authority boundary.
+- **User decision, 2026-08-21: accepted for personal/local use only** — same pattern as
+  `D-016`/Nemotron, never a community default. See **D-017** in `knowledge/research.md`.
+- **Fix applied:** `configs/brain-candidates.yaml` provenance comments corrected from
+  `unverified-local` to reflect the verified facts above. Both quants benchmarked for
+  throughput (same architecture/size class as the F-005 incumbent). Wired via
+  `configs/models.local.yaml` under a **distinct id** (`qwen38-27b-obliterated`, not
+  shadowing the manifest's `qwen38-27b`) — deliberately not shadowing the trusted incumbent's
+  id, because a same-id override would make every route currently resolving to stock
+  Qwen3.8-27B silently start using different weights with no distinguishing marker. That
+  would cross from "opt-in personal model" into "silent default swap," which invariant 8 and
+  `D-008`'s safety boundaries both exist to prevent. `status: candidate` again, so it only
+  reaches routing under explicit `mode: deep`.
+- **MEASURED 2026-08-21.** Both quants were already local (no download needed). `llama-bench`,
+  same methodology as F-005/F-012:
+
+  | candidate | tg128 (tok/s) | pp512 (tok/s) | peak VRAM |
+  | --- | --- | --- | --- |
+  | Qwen3.8-27B UD-Q4_K_M (stock incumbent, F-005) | 6.36 | 376.05 | 9398 MiB |
+  | Nemotron-3.5-Lightning-30B-A3B `@ncmoe32` (F-012) | 52.79 | 581.74 | 9438 MiB |
+  | Qwen3.8-27B OBLITERATED Q6_K | 3.82 | 170.27 | 9244 MiB |
+  | **Qwen3.8-27B OBLITERATED IQ4_XS** | **6.89** | 288.56 | 9430 MiB |
+
+  IQ4_XS edges out the stock quant slightly (+8%); Q6_K is markedly worse (more CPU offload
+  at 22.43 GB vs 16.46 GB). **Both fail the 10 tok/s interactive-viability gate**, same as
+  the stock incumbent at this size class — unsurprising, since it is the same dense
+  architecture and abliteration does not change parameter count or memory-bandwidth cost.
+  IQ4_XS wired as the routable quant.
+- **Wired, same mechanism as F-012/D-016, given a distinct id:**
+  `state/llama-models.ini` gained a `[qwen38-27b-obliterated]` section pointing at the
+  IQ4_XS artifact. `configs/models.local.yaml` gained a `ModelSpec` entry with id
+  `qwen38-27b-obliterated` — **deliberately not** `qwen38-27b`, so it can never silently
+  replace the trusted incumbent in an ordinary route; `status: candidate` so it only
+  reaches routing under explicit `mode: deep`.
+- **Verification:** `k.registry.validate() == []`. Live against the built kernel:
+  `mode=fast` and `mode=smart` both resolve to `['qwen38-27b']` only; `mode=deep` resolves to
+  `['qwen38-27b', 'nemotron35-lightning-30b-a3b', 'qwen38-27b-obliterated']`. A full
+  load→chat→unload round trip through the router was not repeated for this model — that
+  exact mechanism was already proven end-to-end for Nemotron in this same session and
+  reuses identical code paths (same engine, same preset format, same overlay merge).
+  `configs/models.local.yaml.example` gained a fifth rule (don't shadow a trusted
+  incumbent's id with a differently-aligned checkpoint) and this as its second worked
+  example. Full suite: see below.
+
 # Fix and update ledger
 
 > Opened: **2026-08-21**

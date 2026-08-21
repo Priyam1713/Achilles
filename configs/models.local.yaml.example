@@ -26,11 +26,19 @@
 #   4. `status: candidate` (not `final`) is the right default for anything not yet
 #      quality-evaluated: candidates only route in `mode: deep`, never fast/smart, so an
 #      unevaluated personal model can't silently win a routing decision it hasn't earned.
+#   5. Rule 1 says a local id CAN shadow a manifest id -- that doesn't mean it SHOULD when
+#      the two models differ in something other than quality, like alignment/safety
+#      properties. Overriding `qwen38-27b` with a same-architecture but differently-tuned
+#      checkpoint would make every route that currently resolves to the trusted incumbent
+#      silently return different weights with no visible marker. Give it its own id instead
+#      (see the second worked example below) so it is reachable only by deliberately asking
+#      for it, never by accident.
 #
-# Worked example below — the actual entry used on this machine as of 2026-08-21, after
-# measuring an 8.3x generation-speed win over the dense Qwen3.8-27B incumbent at essentially
-# the same VRAM cost (docs/FIXES.md F-012) and accepting the NVIDIA Open Model License's
-# Article 8 indemnification clause for personal use only (never for a shared profile).
+# Two worked examples below — the actual entries used on this machine as of 2026-08-21.
+# The first accepts a non-OSI vendor license (NVIDIA Open Model License, Article 8
+# indemnification) after an 8.3x measured throughput win (docs/FIXES.md F-012). The second
+# is a same-base-model, differently-tuned checkpoint (refusal-ablated) with a clean license
+# but a deliberately distinct id, per rule 5 above (docs/FIXES.md F-022).
 
 models:
   - id: nemotron35-lightning-30b-a3b
@@ -70,3 +78,46 @@ models:
       (state/llama-models.ini) to carry a matching [nemotron35-lightning-30b-a3b] section
       with `n-cpu-moe = 32` -- no engine alias is needed since the model id matches the
       preset section name exactly.
+
+  - id: qwen38-27b-obliterated
+    name: Qwen3.8-27B OBLITERATED (V2, complementary abliteration blending)
+    source: OBLITERATUS/Qwen3.8-27B-OBLITERATED
+    source_type: huggingface
+    verified_source: true
+    status: candidate
+    install_policy: local
+    capabilities:
+      - reasoning
+      - coding
+      - planning
+      - synthesis
+      - verification
+    preferred_engines:
+      - llama_cpp
+    quality_prior: 0.75
+    resident_priority: 0
+    estimated_vram_mb: 9430
+    can_cpu_offload: true
+    exclusive_gpu: true
+    commercial_allowed: true
+    license_note: >-
+      Apache-2.0 (verified: real LICENSE file at the source repo, no extra restrictions).
+      Base model Qwen/Qwen3.8-27B, matching this project's own adopted incumbent. Author
+      elder-plinius / Pliny the Liberator, real and public (github.com/elder-plinius/
+      OBLITERATUS). Refusal directions removed from base-model activations; the model card
+      states 0.24% refusal on an 842-prompt corpus and explicitly names cyber/jailbreak/
+      attack-chain generation among its target capabilities -- a deliberate, safety-relevant
+      property, not a quality variant. Accepted for PERSONAL/LOCAL use only on 2026-08-21.
+      Never to be added to configs/models.yaml or any shared install profile, and given a
+      distinct id rather than shadowing qwen38-27b so it can never silently replace the
+      trusted incumbent in an ordinary route. See docs/FIXES.md F-022 and
+      knowledge/research.md invariant 8 and D-017.
+    notes: >-
+      Dense, same architecture/size class as the manifest incumbent. Measured 2026-08-21 on
+      this machine: IQ4_XS 6.89 tok/s / 288.56 tok/s prefill / 9430 MiB peak (routed quant --
+      slightly faster than stock Q4_K_M's 6.36 tok/s); Q6_K 3.82 tok/s / 170.27 tok/s prefill
+      / 9244 MiB peak (not routed -- much slower, not worth the extra disk). Both fail the
+      10 tok/s interactive-viability gate, same as the stock incumbent at this size class.
+      Quality on real tasks is NOT evaluated; quality_prior is a conservative placeholder.
+      Requires state/llama-models.ini to carry a matching [qwen38-27b-obliterated] section
+      pointing at the IQ4_XS artifact -- no engine alias needed, id matches the preset name.
