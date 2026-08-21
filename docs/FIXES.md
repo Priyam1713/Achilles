@@ -782,8 +782,8 @@ not fabrication.
 
 ### F-021 — The WSL runtime installer builds a conversion environment that cannot convert
 
-- **Severity:** `minor` · **Status:** `open`
-- **Evidence:** `scripts/install_wsl_runtimes.sh` creates the `llama-convert` venv with a
+- **Severity:** `minor` · **Status:** `fixed`
+- **Evidence:** `scripts/install_wsl_runtimes.sh` created the `llama-convert` venv with a
   hand-picked package list — `huggingface-hub transformers sentencepiece protobuf numpy
   safetensors` — instead of installing llama.cpp's own
   `requirements/requirements-convert_hf_to_gguf.txt`. That file pins `torch==2.11.0`
@@ -795,13 +795,24 @@ not fabrication.
   locally rather than synced pre-quantised) fails on a fresh install. The failure mode gives
   no hint that the fix is "install the requirements file that already exists two directories
   away" — it looks like a missing environment step, not a wrong one.
-- **Fix:** Replace the hand-picked package list in `install_wsl_runtimes.sh` with
+- **Fix applied:** Replaced the hand-picked package list in `install_wsl_runtimes.sh` with
   `uv pip install --python "$CONV/bin/python" -r
   "$SOAI_RUNTIME_DIR/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt"`, matching
   what upstream itself declares as correct rather than re-deriving it by hand.
-- **Worked around for this session:** installed the correct requirements file directly into
-  the existing `llama-convert` env without touching the installer script, to unblock the
-  Q6_K conversion benchmark. The installer itself still has the bug.
+- **Verification:** live, in a disposable venv (not the real `llama-convert` env, so a bad
+  run couldn't corrupt the working install): `uv venv` + the exact new install line against
+  the real `requirements-convert_hf_to_gguf.txt` (which itself `-r`-includes
+  `requirements-convert_legacy_llama.txt` — confirmed the sibling file exists so the relative
+  include resolves) resolved and installed 28 packages including `torch==2.11.0+cpu`.
+  `import torch, transformers, sentencepiece, safetensors, numpy, huggingface_hub` succeeded,
+  and `convert_hf_to_gguf.py --help` ran clean with no `ModuleNotFoundError` — the exact
+  failure this closes. `bash -n` on the edited script passed. Full suite **54 passed**,
+  `ruff check src/ tests/ scripts/` clean (no Python changed by this fix, sanity re-run).
+- **Note:** this session had already worked around the bug by installing the correct
+  requirements file directly into the existing `llama-convert` env without touching the
+  installer script, to unblock the Q6_K conversion benchmark recorded elsewhere in this
+  document. This fix is what makes a *fresh* install correct too, not just this machine's
+  already-patched one.
 
 ### F-022 — Unverified local model files: provenance, license, and a values decision that is not mine to make
 
@@ -1178,5 +1189,5 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
    vectors), plus `delete()`/supersession cleanup so a superseded memory stops being
    reachable by lexical or semantic search. Still an exact O(n) scan by design, not ANN —
    documented as the right tradeoff at this project's target scale.
-7. **F-006, F-007 (fixed), F-009 (fixed), F-015 (fixed), F-016 (fixed), F-021, F-023,
-   F-024** — cleanup, each independently shippable.
+7. **F-006, F-007 (fixed), F-009 (fixed), F-015 (fixed), F-016 (fixed), F-021 (fixed),
+   F-023, F-024** — cleanup, each independently shippable.

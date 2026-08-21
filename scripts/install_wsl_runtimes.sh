@@ -87,9 +87,17 @@ cmake -S "$SOAI_RUNTIME_DIR/llama.cpp" -B "$SOAI_RUNTIME_DIR/llama.cpp/build" -D
 cmake --build "$SOAI_RUNTIME_DIR/llama.cpp/build" --config Release -j "$(nproc)"
 
 # Dedicated conversion environment: no dependency leakage into system Python.
+#
+# FIXES.md F-021: this used to hand-pick a package list here instead of installing
+# llama.cpp's own requirements-convert_hf_to_gguf.txt, which pins torch -- imported
+# unconditionally at the top of convert_hf_to_gguf.py. That produced a fresh install
+# that built cleanly and then failed every conversion with
+# "ModuleNotFoundError: No module named 'torch'". Install what upstream itself
+# declares as correct instead of re-deriving it by hand.
 CONV="$SOAI_ENV_DIR/llama-convert"
 [[ -x "$CONV/bin/python" ]] || uv venv --python 3.12 "$CONV"
-uv pip install --python "$CONV/bin/python" -U huggingface-hub transformers sentencepiece protobuf numpy safetensors
+uv pip install --python "$CONV/bin/python" -U \
+  -r "$SOAI_RUNTIME_DIR/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt"
 printf '%s\n' "$CONV/bin/python" > "$SOAI_STATE_DIR/llama-convert-python.txt"
 
 SOAI_RUNTIME_DIR="$SOAI_RUNTIME_DIR" SOAI_STATE_DIR="$SOAI_STATE_DIR" python3 - <<'PY'
