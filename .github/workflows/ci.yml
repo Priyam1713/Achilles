@@ -1,0 +1,80 @@
+name: ci
+
+# The 153 tests in tests/test_kernel.py existed for weeks with nothing running them on a
+# change (knowledge/research.md research wave 8, D-040). This workflow is that gate.
+#
+# Nothing here downloads model weights, starts a GPU runtime or touches WSL: the kernel
+# suite is deliberately runnable without any of them, which is what makes it a usable CI
+# signal on a hosted runner.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kernel:
+    name: kernel tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Windows is the project's primary host but the suite has only ever been run on
+    # Linux/WSL here, so it stays informational until D-035's cross-platform work makes
+    # that claim honest in both directions.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Test
+        run: uv run pytest -q
+
+  docs:
+    name: documentation invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      # A repository whose own baseline invariant is "open source, end to end" shipped for
+      # weeks with no LICENSE file (research wave 8, D-033). This check exists so that
+      # specific failure cannot recur silently.
+      - name: Required project files
+        run: |
+          for f in LICENSE NOTICE CONTRIBUTING.md SECURITY.md README.md \
+                   knowledge/research.md docs/IMPLEMENTATION_STATUS.md; do
+            test -f "$f" || { echo "missing required file: $f"; exit 1; }
+          done
+          grep -q "Apache License" LICENSE || { echo "LICENSE is not the Apache licence"; exit 1; }
+          grep -q '^license' pyproject.toml || { echo "pyproject.toml has no license field"; exit 1; }
+
+      - name: Validate configuration manifests
+        run: uv run python -c "import yaml,glob,sys; [yaml.safe_load(open(p, encoding='utf-8')) for p in glob.glob('configs/*.yaml')]; print('configs parse')"

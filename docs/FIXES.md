@@ -2331,6 +2331,53 @@ not fabrication.
 
 ---
 
+### F-046 — Fixed: the repository was not legally open source, and nothing ran its tests
+
+- **Severity:** `critical` (mission-blocking, not runtime) · **Status:** `fixed`.
+- **Motivating problem:** `knowledge/research.md` research wave 8 audited the artifact itself
+  rather than its code and found that the project violated its own baseline invariant 8. There
+  was **no `LICENSE` file and no `license` field in `pyproject.toml`**, which under default
+  copyright law makes the work all-rights-reserved: nobody could legally copy, modify or
+  redistribute a system whose entire stated purpose is being given away. The same audit found
+  **no CI** — 153 tests in `tests/test_kernel.py` and nothing running them on a change — no
+  contribution path, and no vulnerability-disclosure policy (`docs/SECURITY.md` is an
+  architecture document, not a reporting policy).
+- **Evidence:** `ls` of the repository root returned no `LICENSE`, `CONTRIBUTING`, `SECURITY.md`
+  or `.github`; `grep -n "license" pyproject.toml` returned nothing.
+- **Fix:**
+  - `LICENSE` — the canonical Apache-2.0 text, **fetched from `apache.org` at install time
+    rather than retyped from memory**, with the appendix copyright line filled in. Apache-2.0
+    is what `D-033` chose: it is the licence this project demands of components it adopts, it
+    carries an explicit patent grant, and it is compatible with the Apache-2.0/MIT upstreams
+    waves 6-8 intend to port from.
+  - `NOTICE` — records the third-party designs and formats this project adapts (Codex's
+    `apply_patch` format, Cline's shadow-repository checkpoints, Aider's repo map) and states
+    plainly that model weights are **not** covered by this licence and keep their own terms,
+    which keeps `D-016`/`D-017`'s personal-use-only boundary legible to anyone who clones this.
+  - `pyproject.toml` — `license = "Apache-2.0"`, `license-files`, authors, keywords and OSI
+    classifiers.
+  - `CONTRIBUTING.md` — leads with the two non-negotiable rules (open source end to end; the
+    kernel owns authority) and defines "done" as *reachable by an agent through the tool plane
+    and covered by an end-to-end test*, which is `D-034` written where a contributor will
+    actually read it.
+  - `SECURITY.md` — a real disclosure policy with an explicit scope section that distinguishes
+    an unauthorised *action* (in scope, valuable) from a model merely being talked into saying
+    something (not a vulnerability in this architecture).
+  - `.github/workflows/ci.yml` — ruff plus the full kernel suite on push and pull request, on
+    Ubuntu and Windows, plus a second job that asserts `LICENSE`/`NOTICE`/`CONTRIBUTING`/
+    `SECURITY` still exist and that `pyproject.toml` still declares a licence, so this specific
+    failure cannot recur silently.
+- **Verification:** the suite was run before the change to establish the baseline —
+  **153 passed in 80.92s** under the project's own WSL virtualenv — and `ruff check .` reports
+  `All checks passed!`. `tomllib` parses the new `pyproject.toml` and returns `Apache-2.0`.
+  The Windows matrix leg is marked `continue-on-error` deliberately and honestly: the suite has
+  only ever been executed on Linux/WSL here, so claiming a verified Windows result would be the
+  same overstatement wave 8 was written to stop. It becomes required when `D-035`'s
+  cross-platform work makes the claim true.
+- **What this does not fix:** the repository is now licensed and tested on every change; it is
+  still Windows-plus-WSL to *install* (`D-035`), still has no release, tag, changelog or signed
+  artifact (`D-040`'s remaining half), and the tool plane is still empty (`D-034`, F-047).
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

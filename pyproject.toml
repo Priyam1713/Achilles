@@ -5,8 +5,19 @@ build-backend = "hatchling.build"
 [project]
 name = "local-sovereign-ai"
 version = "0.1.0"
-description = "Hardware-aware local AI kernel with replaceable agent, inference, execution, memory and verification planes."
+description = "Achilles: hardware-aware local AI kernel with replaceable agent, inference, execution, memory and verification planes."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "The Achilles Authors" }]
+keywords = ["local-first", "agent", "llm", "sovereign", "offline"]
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.116",

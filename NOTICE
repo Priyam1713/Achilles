@@ -1,0 +1,29 @@
+Achilles (formerly Local Sovereign AI)
+Copyright 2026 The Achilles Authors
+
+This product includes software developed by the Achilles project, licensed under the
+Apache License, Version 2.0. See LICENSE.
+
+Third-party components
+----------------------
+
+This repository takes dependencies on, and in places adapts designs and file formats from,
+independently licensed open-source projects. Their licences govern their own code and are
+not superseded by this project's licence.
+
+Runtime and library dependencies are declared in `pyproject.toml`, `uv.lock`,
+`desktop/package.json` and `configs/runtime-sources.env`; each carries its own licence.
+
+Designs, formats or algorithms adapted from other projects are recorded in
+`knowledge/research.md` (research waves 6 to 8) with their upstream and licence, and are
+noted in the source files that adapt them. At the time of writing this includes:
+
+  * The `apply_patch` edit format, adapted from OpenAI Codex CLI (Apache-2.0).
+  * The shadow-repository checkpoint approach, adapted from Cline (Apache-2.0).
+  * The tree-sitter/PageRank repository-map approach, adapted from Aider (Apache-2.0).
+
+Model weights are NOT part of this repository and are NOT covered by this licence. Each
+model is downloaded from its own upstream under its own terms, recorded in
+`configs/models.yaml` and `docs/SOURCES.md`. Some carry non-OSI vendor licences that this
+project does not ship in any default install profile; see `knowledge/research.md`
+baseline invariant 8 and decisions D-016 and D-017.

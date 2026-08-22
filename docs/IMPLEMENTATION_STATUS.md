@@ -138,6 +138,75 @@ namespace. See `docs/FIXES.md` F-018 and F-019.
 
 The source-level test suite passes in the build environment.
 
+## Known capability gaps found by the wave-6 harness audit (2026-08-22)
+
+The lists above are accurate about what exists. `knowledge/research.md` research wave 6 adds
+the comparison they cannot make on their own — this system against the coding agents it is
+meant to replace — and the result belongs here too, because it is the largest honest gap in
+the artifact:
+
+- `NativeAgentLoop` has three tools (`read_file`, `list_directory`, `run_command`). There is
+  **no edit, write, patch, search or glob tool in this repository**, so file mutation only
+  happens through a shell command.
+- Tool calls are recovered by scanning model prose for a JSON span; decoding is not grammar
+  constrained, although the pinned llama.cpp build supports it.
+- Conversation history is never compacted, and `CheckpointStore` stores job state, not file
+  state — so an agent's edit cannot be undone by this system.
+- There is no MCP *client* (only the `agents/mcp_bridge.py` server), no `AGENTS.md`/`SKILL.md`
+  loading, no repo map or symbol index, no interactive TUI, and no editor integration.
+
+`D-019` through `D-025` record what is being adopted to close each of these, and the wave-6
+"steal order" is the sequence. None of it is implemented yet; nothing above should be read as
+in progress.
+
+Research wave 7 audited the experience layer the same way, against `web/index.html`, all five
+desktop views, the Tauri client and the Typer CLI. Six findings are severity `S1` — they block
+daily use, and they are not implied by any bullet in the lists above:
+
+- **No surface can start work.** `JobsView` cancels, `RosterView` lists, `ApprovalsView`
+  resolves, and the CLI has no run command. The only way to make this system do anything is an
+  `@mention` in a collaboration room or a hand-written HTTP request.
+- **Nothing streams.** There is no `StreamingResponse`, SSE endpoint, WebSocket or generator in
+  the API; every view polls on a four-second `setInterval`.
+- **The approval card does not show what it is approving** — no command, no diff, no triggering
+  rule, no grant scope or expiry. Treated as a safety defect, not a cosmetic one.
+- **No diff view exists** in any surface, so there is nowhere to review an edit.
+- **Agent output renders as plain text** — no markdown, no syntax highlighting, in a coding tool.
+- **Accessibility is effectively zero**: one `aria-`/`role=`/`onKeyDown`/`tabIndex` occurrence
+  across the entire desktop app and web page.
+
+`D-026` through `D-032` record the corrections. The severity ledger, with fourteen further
+`S2`/`S3` findings, is in `knowledge/research.md` research wave 7.
+
+Research wave 8 then audited every other capability domain the same way, and found the gap
+that subsumes both of the above: **installed is not reachable.**
+
+| Fact | Evidence |
+| --- | --- |
+| `ToolRegistry` holds zero tools | instantiated at `kernel/app.py:160`; no `register()` call exists anywhere |
+| The agent cannot invoke any specialist, media, memory or web capability | `NativeAgentLoop` has `read_file`, `list_directory`, `run_command` and no dispatcher into any broker |
+| `ComputerController` holds zero controllers | `execute()` raises `RuntimeError` on every call; Playwright is an unused optional dependency |
+| 7 of 14 workers have no handler | `HANDLERS` in `scripts/specialist_worker.py` covers 7; `moss_audio`, `sam`, `ui_tars`, `fairchem`, `medgemma`, `ace_step` return HTTP 501 |
+| SearXNG is deployed and never queried | present in `infra/docker-compose.yml`; `grep -rn "searx" src` returns nothing |
+| Memory is never consulted | `ContextBuilder` is constructed in `kernel/app.py` and called by no request path |
+
+**19 of 21 capability domains are therefore unreachable by an agent**, including every one of
+the specialist models the `workstation` profile installs. The reachability table is in
+`knowledge/research.md` research wave 8.
+
+Two further facts about the artifact itself were blocking for a project meant to be given
+away, and **both are now fixed**: the repository carries an Apache-2.0 `LICENSE`, a `NOTICE`
+recording adapted third-party designs, a `license` field in `pyproject.toml`, a
+`CONTRIBUTING.md` and a vulnerability-disclosure `SECURITY.md` (`D-033`); and
+`.github/workflows/ci.yml` runs ruff plus the 153 kernel tests on every push and pull request,
+with a second job asserting the licence and required project files still exist (`D-040`).
+Windows is in the CI matrix but informational until `D-035`'s cross-platform work lands, since
+the suite has only ever been verified on Linux/WSL here. There is still no Linux or Apple
+Silicon *install* path; every installer is PowerShell plus WSL2.
+
+`D-033` through `D-042` record the corrections, and the revised order puts the licence, CI and
+the tool plane ahead of everything previously planned.
+
 ## Hardware-bound steps performed by the one-shot bootstrap on the target workstation
 
 These cannot be truthfully pre-certified from a different machine:

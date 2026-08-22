@@ -1,4 +1,7 @@
-# Local Sovereign AI
+# Achilles
+
+*(formerly, and still architecturally, Local Sovereign AI — see `knowledge/research.md` `D-018`.
+The Python package remains `sovereign_ai` until a rename is scheduled with its own migration.)*
 
 A hardware-aware local AI kernel whose defining rule is:
 
@@ -9,6 +12,16 @@ THE MODEL IS A COMPONENT. THE KERNEL IS THE SYSTEM.
 No model, harness, sandbox, inference engine or UI owns the architecture. The kernel owns policy, state, capability routing, resource arbitration, transactions, verification, provenance, checkpoints and audit. Everything fast-moving sits behind adapters.
 
 ## What is implemented
+
+> **Read this first (research wave 8, 2026-08-22).** The list below describes *kernel
+> features that exist*, not capabilities an agent can use. An audit on 2026-08-22 found that
+> **19 of 21 capability domains are unreachable by the agent loop**: `ToolRegistry` has zero
+> tools registered in it, `ComputerController` has zero controllers, 7 of 14 specialist
+> workers return HTTP 501, the deployed SearXNG has no client, and the memory
+> `ContextBuilder` is never called by any request path. The agent can currently read a file,
+> list a directory, run a command, and talk. Everything else is installed, designed, or
+> declared - and not yet wired. See `knowledge/research.md` research wave 8 and `D-034`.
+
 
 - capability/model registry with source, license/gating and hardware-fit metadata
 - dual cognition: fast resident brain + heavyweight quality brain
@@ -21,15 +34,17 @@ No model, harness, sandbox, inference engine or UI owns the architecture. The ke
 - OS credential-store secret handles
 - append-only events, checkpoint persistence primitives, transaction journal/rollback hooks
 - lexical memory, persistent vector adapter, graph memory and provenance metadata
-- contextual tool discovery
+- contextual tool discovery (the registry and ranking are implemented; **no tools are
+  registered in it yet**)
 - deterministic post-condition verification
 - hierarchical computer-control interface: API → CLI → plugin → DOM → UIA → vision GUI
+  (**interface only - no controller is registered, so no computer control executes**)
 - watcher/event bus
 - durable background job journals with cancellation, result/error records and restart
   interruption detection (automatic resume/retry is not implemented yet)
 - native collaboration rooms with human/agent identities, threads, reactions, shared canvases,
   mention-to-job dispatch and per-room tamper-evident history
-- local SearXNG deployment option
+- local SearXNG deployment option (**deployment only - nothing in the kernel queries it**)
 - exact Hugging Face revision locks, post-install Git runtime commit records and a
   non-promoting official release radar
 - isolated specialist environments so conflicting ML stacks cannot poison the kernel
@@ -133,3 +148,14 @@ The dated reasoning, evaluated upstreams, rejected alternatives, and recheck tri
 in [knowledge/research.md](knowledge/research.md).
 Confirmed defects, their evidence, and the order in which they are being fixed live in
 [docs/FIXES.md](docs/FIXES.md).
+
+## Licence and contributing
+
+Achilles is licensed under the [Apache License 2.0](LICENSE). Adapted third-party designs and
+formats are recorded in [NOTICE](NOTICE); model weights are downloaded from their own
+upstreams under their own terms and are not covered by this licence.
+
+Contributions are welcome — read [CONTRIBUTING.md](CONTRIBUTING.md) first, because this
+project has two non-negotiable rules (open source end to end, and the kernel owns authority)
+that shape what can be merged. Security issues go through [SECURITY.md](SECURITY.md), not
+public issues.

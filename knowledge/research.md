@@ -1,6 +1,6 @@
 # Living research and architecture ledger
 
-> Last consolidated: **2026-08-21**  
+> Last consolidated: **2026-08-22** (waves 6-8)  
 > Target: Windows host + Ubuntu 24.04/WSL2, RTX 5070 Ti Laptop GPU (12 GB VRAM),
 > 32 GB host RAM  
 > Architecture truth: [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)  
@@ -92,6 +92,18 @@ These are the decisions new research must fit rather than silently overthrow.
 | Protocol edge | Kernel adapters directly | `adopted`; agentgateway `trial` | A gateway becomes valuable when MCP/A2A/remote-provider traffic grows, not merely because it exists. |
 | Endpoint observation | Kernel audit plus Numbat candidate | Native audit implemented; Numbat `trial` | Internal intent and external endpoint facts are complementary evidence. |
 | Capability models | Replaceable specialists in isolated workers | `adopted`, family-specific work remains | Avoids one Torch/CUDA dependency graph poisoning the control plane. |
+| Coding tool surface | `NativeAgentLoop`'s three read-only tools | **gap**, wave 6 `D-021` | Identified in wave 6 as the binding constraint: no edit, patch, search or glob tool exists. Adoption work, not invention. |
+| Context budget | Unmanaged; history grows into a 16K window | **gap**, wave 6 `D-025` | The one major resource the kernel does not arbitrate, on the machine where it is scarcest. |
+| Editor reach | None | `adopted` seam (`D-024`), ACP `trial` | AG-UI faces our own UI; ACP faces every editor we will never write a plugin for. |
+| Task entry | No surface can start work | **gap**, wave 7 `D-026` | The CLI has no run command and the desktop has no composer; an `@mention` in a room is the only door. |
+| Streaming | None; every view polls on a 4s timer | **gap**, wave 7 `D-027` | Contradicts `D-014` in practice, and presents our slowest property in its worst possible form. |
+| Approval evidence | Risk badge and free text | **gap**, wave 7 `D-028` (safety) | An approval that hides its evidence trains the operator to rubber-stamp it. |
+| Latency and authority legibility | Data exists, nothing renders it | `adopted` thesis, wave 7 `D-029`/`D-030` | The two experience categories the cloud-first field has no reason to build and we can win outright. |
+| Tool plane | `ToolRegistry` holds zero tools | **gap**, wave 8 `D-034` | 19 of 21 capability domains are unreachable by the agent; registering tools is the single highest-leverage change in the project. |
+| Licence of this repository | None present | **blocking gap**, wave 8 `D-033` | Invariant 8 is currently violated by us alone: with no `LICENSE`, the work is all-rights-reserved. |
+| Platform coverage | Windows + WSL2 only | **gap**, wave 8 `D-035` | No Linux path, no Apple Silicon path - most of the stated audience cannot install it. |
+| Untrusted-content defence | Trust labels only | **gap**, wave 8 `D-037` | Labels record provenance; they do not stop injected instructions reaching a planner that holds tools. |
+| Prompt/context optimisation | Hand-written string constants | **gap**, wave 8 `D-036` | On fixed hardware the prompt is the tunable parameter, and we already own the eval harness GEPA needs. |
 
 ### Intended provider seams
 
@@ -493,6 +505,481 @@ change to the OpenShell-preferred, Docker-fallback decision.
 6. **OpenBot validated our governance design and failed our licence gate** — the most useful
    possible outcome for a `reference`.
 
+## Research wave 6 — the harness capability audit: what the field has that we do not
+
+Consolidated on **2026-08-22**. Five waves compared harnesses **as governance objects**.
+None of them compared a harness **as a coding tool**. This wave does exactly that: it reads
+this repository's own agent loop against the public capability surface of Claude Code,
+OpenAI Codex CLI and the open-source harness field, parameter by parameter — interface, loop
+mechanics, code intelligence, tool access, system access, control, safety, distribution,
+evaluation and observability — and for each one names **who already does it best**, so the
+work becomes adoption rather than invention.
+
+### Truth correction — the binding constraint is now the harness, not the kernel
+
+The project has a control plane most of the field does not have, driving an agent loop that
+essentially every member of the field beats. Read `src/sovereign_ai/agents/native_loop.py`
+and `src/sovereign_ai/tools/registry.py` and the position is unambiguous:
+
+- the loop exposes **three tools** — `read_file`, `list_directory`, `run_command`;
+- there is **no edit, write, patch, search or glob tool anywhere in this repository**
+  (`grep -ril "write_file\|apply_patch\|edit_file" src` returns nothing). Every file
+  mutation has to be smuggled through `run_command`;
+- tool calls are recovered by scanning the model's prose for the outermost `{`…`}` span and
+  hoping `json.loads` succeeds — on a runtime (llama.cpp) that has had grammar-constrained
+  decoding compiled in the entire time;
+- conversation history grows **without compaction** into a 16K operating context, with a flat
+  4,000-character truncation per observation as the only budget control;
+- `CheckpointStore` snapshots **job state JSON, not file state**, so nothing in this system
+  can undo an edit an agent made;
+- there is no repo map, no symbol index, no MCP *client*, no project instruction file, no
+  todo/plan state, no context-isolated subagent and no interactive terminal surface.
+
+This is not a criticism of the loop, which `D-015` correctly scoped as a reference
+implementation. It is the statement that **the coding-agent layer is now the binding
+constraint on the whole project**, and that the largest available quality win is no longer a
+model, a sandbox or a memory engine.
+
+### The evidence rule for this wave
+
+Claude Code is closed source and subscription-gated; under invariant 8 it can never be a
+dependency. Its **mechanisms** are still legitimate design evidence, and are recorded here as
+`unverified` at primary source — described consistently across independent write-ups and
+vendor documentation, but not inspected by us. Codex CLI is different and more useful: the CLI
+itself is **Apache-2.0** (`primary-verified`), so its *code and formats* are legitimately
+readable and portable even though the service behind it is gated. Everything marked
+`primary-verified` below had its repository, specification or model card fetched in this wave.
+
+### Where we are already ahead — do not rebuild these
+
+Recording this matters as much as the gap list, because it says where **not** to spend time.
+
+| Parameter | Our position | Nearest comparable in the field |
+| --- | --- | --- |
+| Authority and policy | Kernel-owned `PolicyEngine`, expiring `CapabilityGrant`, structured `ApprovalRequest`, workspace/resource leases | Nothing in the open field is close. OpenBot's CEL gateway is the only similar design and it is hosted-dependent (wave 5) |
+| Durable execution truth | `Job`/`Run` separation, per-attempt journals, migrations, backup/restore, restart reconciliation | Harnesses keep sessions on disk; none has a migrated, transactional job store |
+| Audit and provenance | Append-only events with trust labels, hash-chained room history, provenance-aware memory | Cline's shadow git and OpenHands' event stream are both narrower |
+| Model routing | Capability routing with hardware fit, local-benchmark override, GPU arbitration, VRAM fitting, dynamic load/unload | Aider and opencode *select* a model; none arbitrates a 12 GB card |
+| Multi-store memory | Lexical + vector + graph with scope ACLs, provenance and deletion semantics | Most harnesses have a markdown file |
+| Contextual tool discovery | `ToolRegistry.discover` — agents see a small relevant roster, never the whole universe | Only now appearing elsewhere as "tool search" |
+| Windows-first execution | Windows→WSL2 OpenShell bridge with hardened Docker fallback | The field's sandboxing is Linux/macOS-first; Windows is its weakest platform |
+
+### Gap matrix 1 — code intelligence and editing (the lethal category)
+
+| Parameter | Who does it best | What they actually do | Ours today | Verdict |
+| --- | --- | --- | --- | --- |
+| File mutation | **Codex CLI `apply_patch`** (Apache-2.0, `primary-verified` licence) | A model-friendly freeform patch format dispatched as a first-class tool rather than a shell command, so edits are parseable, reviewable and refusable | none | **steal the format, port the applier** |
+| Edit-format fit | **Aider** (Apache-2.0) | Several edit formats — whole-file, search/replace blocks, unified diff, patch, architect/editor split — *selected per model*, because weak models fail different formats | none | **steal**: the model registry already stores per-model metadata; add an `edit_format` field |
+| Context selection | **Aider repo map** | tree-sitter symbol graph across 100+ languages, ranked by PageRank over the definition/reference graph, emitted inside a token budget | none | **steal outright** — the highest-value borrowed algorithm in the field |
+| Symbol-level ops | **Serena** (MIT, `primary-verified`) | LSP-backed `find_symbol`, `find_referencing_symbols`, `replace_symbol_body`, `insert_before/after_symbol`, safe delete, type hierarchy, 40+ language servers; explicitly more token-efficient than text search/replace | none | **steal** — through an MCP client (`D-023`) first, vendored later if it earns it |
+| Search | ripgrep-backed `grep`/`glob` tools in every serious harness; **ast-grep** for structural search | Dedicated, bounded, structured search instead of `bash grep` | `run_command` only | **build (trivial)** — a day's work that removes a whole class of failure |
+| Edit application speed | **Kortix FastApply** 1.5B/7B (Apache-2.0, `primary-verified`; Qwen2.5-Coder base; ~340 tok/s at 1.5B, ~150 tok/s at 7B) | A small specialist merges a terse edit snippet into a full file, so the big model never regenerates unchanged lines | none | **adopt** — a direct answer to F-005/F-012: the deep brain must not spend its 6–52 tok/s reprinting code |
+| Verify-then-commit | **Aider** | Auto-commit per edit with a generated message, `/undo`, and an automatic lint/test loop after every change | a verification engine exists but is not wired into an edit loop | **wire ours up** |
+
+### Gap matrix 2 — loop mechanics (where small models are won or lost)
+
+| Parameter | Who does it best | What they actually do | Ours today | Verdict |
+| --- | --- | --- | --- | --- |
+| Tool-call reliability | **llama.cpp GBNF / llguidance / XGrammar** (`primary-verified` capability, present in our pinned build) | Constrain decoding to a grammar so a malformed tool call becomes *impossible* rather than retried. llguidance reports ~50 µs mask computation; XGrammar reports near-zero end-to-end overhead | outermost-brace prose scraping | **adopt immediately** — the best reliability-per-line-of-code available, and free |
+| Action expressiveness | **OpenHands CodeAct** (MIT; ICML 2024 paper) | The action space *is* Python/bash: loops, conditionals and variable reuse happen inside one turn. Reported ~30% fewer turns and ~20% higher success versus one JSON tool call per turn | one JSON action per turn | **steal as a second loop mode** — turn count is our dominant cost at 6–52 tok/s |
+| Plan/act separation | **Cline** (Apache-2.0) plan vs act; **Aider** architect/editor; Claude Code plan mode | A read-only reasoning phase produces a plan a human approves before any mutation is possible | none (`approved` is a single boolean) | **steal** — it maps directly onto the existing `ApprovalRequest` |
+| Task-state tracking | **Claude Code** todo list; **Cline** focus chain | An explicit, model-maintained checklist held in context so long tasks do not drift | none | **steal (cheap)** — disproportionately effective for small models |
+| Context compaction | **Claude Code** `/compact` plus automatic microcompaction; **Cline** `ContextManager` | Summarise-and-continue with the working set preserved, plus tool-result pruning | none — unbounded growth into a 16K context | **build now** — currently the hard ceiling on task length |
+| Sub-task isolation | **Claude Code** subagents; **Goose** subagents | A child run gets a *fresh context*, returns only its result, and never pollutes the parent | `Delegation` exists but carries no context discipline | **wire ours up** — the contract exists, the mechanism does not |
+| Failure recovery | 2026 self-healing-orchestrator literature (`unverified`, arXiv 2606.01416) | monitor→detect→diagnose→recover→verify; reports 98.8% task success versus 94.5% for retry-only, and verifier-guided repair driving silent failures to 0% | one retry, as a new `Run` | **build on ours** — we already own the verifier the literature identifies as the difference |
+| Prompt-cache economics | **llama.cpp** `--cache-reuse`, slot reuse, `--cache-ram` | Keep the stable prefix resident so each agent turn reprocesses only the changed suffix | not configured anywhere | **adopt (configuration only)** |
+| Speculative decoding | llama.cpp `spec-type` family (recorded in wave 5, unused) | A draft head multiplies generation speed on a memory-bound path | recorded, unused | **promote** — it is on the critical path now, not a curiosity |
+
+### Gap matrix 3 — control, safety and system access
+
+| Parameter | Who does it best | What they actually do | Ours today | Verdict |
+| --- | --- | --- | --- | --- |
+| Deterministic hooks | **Claude Code** (`unverified`; ~30 documented lifecycle events including `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, `SubagentStart`, `FileChanged`) | User-owned shell/HTTP/prompt handlers at fixed points that can allow, deny or annotate, returning structured JSON decisions | kernel policy only; no user-programmable layer | **steal the event vocabulary**, keep our policy as the authority |
+| Permission granularity | **Claude Code** allow/deny/ask rules; **Codex** approval modes (read-only, auto, full-access) | Per-tool, per-pattern rules with a real "ask" path, plus one coarse session-wide mode | binary `approved` plus grants | **steal the surface**, back it with `CapabilityGrant` |
+| Action pre-screening | **Claude Code Auto Mode** (`unverified`) — a *separate small classifier model* reviews each proposed action before it runs | A cheap model as a safety pre-filter: safe actions proceed, risky ones escalate | none | **steal the mechanism** — we already run a 49.6 tok/s fast brain that sits idle during deep-brain turns |
+| OS sandboxing | **Codex CLI** (Apache-2.0): Landlock + seccomp + bubblewrap on Linux, Seatbelt on macOS, AppContainer/restricted tokens on Windows; **Microsoft Execution Containers** preview (`unverified`) targeting Windows and WSL | Kernel-enforced filesystem and network confinement, with an explicit legacy fallback path | OpenShell/WSL2 + Docker (strong), nothing for direct Windows-side execution | **watch MXC; port the AppContainer idea** — the field's Windows story is also weak, so parity here is a differentiator, not catch-up |
+| Filesystem undo | **Cline checkpoints** (Apache-2.0) — a *shadow git repository*, separate from the user's own history, committed after each tool use | Restore files without losing the conversation, on an auditable trail | job-state checkpoints only | **steal outright** — small, self-contained, and it is what makes autonomy tolerable |
+| Parallel isolation | **git-worktree orchestrators** (Conductor, Claude Squad, Vibe Kanban, container-use; `unverified` landscape reporting) | One worktree or container per agent, diff-first review, many agents at once | `WorkspaceLease` exists; no worktree materialisation | **finish ours** — we are roughly one function away |
+| Egress control | agentgateway (already `trial`, wave 2) | — | seam exists | unchanged |
+
+### Gap matrix 4 — surface, distribution and reach
+
+| Parameter | Who does it best | What they actually do | Ours today | Verdict |
+| --- | --- | --- | --- | --- |
+| Editor integration | **Agent Client Protocol** (Apache-2.0, `primary-verified`) — JSON-RPC over stdio; Zed and JetBrains native, Neovim/Emacs/VS Code community, a registry since Jan 2026, reported 50+ agents and 11+ editors | One protocol puts an agent inside every ACP editor with no per-editor work | none | **adopt** — the highest reach-per-effort item in this wave, and complementary to AG-UI (`D-014`): ACP faces editors, AG-UI faces our own UI |
+| Terminal experience | **Codex** (Ratatui TUI), **opencode**, **Aider**, **Goose** | A real interactive REPL: streaming, inline diffs, approvals, slash commands, history | Typer CLI of one-shot commands, one static web page, a Tauri slice | **build** — no daily-driver claim survives without it |
+| Project instructions | **AGENTS.md** (the field's de facto standard: Codex and most open agents) | A committed per-repo file the agent loads automatically | none | **adopt the standard** — do not invent a fourth filename |
+| Portable skills | **Agent Skills / SKILL.md** — public specification since 2025-12-18; reported 40+ platforms during 2026 (`unverified` count) | Filesystem-packaged procedures with progressive disclosure (~100 tokens of metadata until the skill is actually needed) | `SkillCandidate`→`SkillVersion` governance, but no portable file format | **adopt the format, keep our governance** — the rare case where we are *ahead on safety and behind on interoperability*; adopting it imports the community's skills for free |
+| External tool access | **MCP client** in every serious harness (Goose ships 70+ extensions) | Thousands of existing servers become available without writing adapters | we are an MCP *server* (`agents/mcp_bridge.py`) and not a client | **build** — the asymmetry is costing us the entire tool ecosystem |
+| Slash commands / prompts | Claude Code, Codex, opencode, Cline | Reusable parameterised prompts committed alongside the repository | none | **build (cheap)** |
+| Session continuity | Claude Code `/resume`, fork and transcript search; Codex resume | Reattach to a prior conversation, branch it, search it | `Run` records exist; no conversational resume | **wire ours up** |
+| Plugin distribution | Claude Code plugins; Cline MCP marketplace; the ACP registry | One command installs a bundle of skills, commands, hooks and servers | none | **defer** — this matters at community-release time, not before |
+| Observability | **OpenTelemetry GenAI semantic conventions** (CNCF; Copilot, Codex and Claude Code reported to emit them) | Standard span/metric names for model calls, agent steps, tool calls, tokens and cost, readable in any OTLP backend | rich internal events, no export | **adopt the schema** — a mapping layer, not a dependency; our event store stays canonical |
+| Benchmarking | **Terminal-Bench 2.x** and SWE-bench Verified harnesses; **Aider polyglot** | Containerised, reproducible task suites — and the published finding that the *same model* scores materially differently under different harnesses | `harness_tournament.py` + `evaluate_brain_quality.py` (good bones) | **steal the task format** — the tournament needs a public, comparable task set to be evidence rather than opinion |
+
+### The model layer, revisited under a coding-agent lens
+
+`D-012` and `D-016` optimised the deep brain for **throughput on general text**. The harness
+lens adds a second axis this ledger has never recorded: **agentic training**. Landscape
+reporting (`unverified`) puts Qwen3-Coder-Next (Apache-2.0, ~80B total with ~3B active,
+released February 2026) and Devstral 2 (Apache-2.0) as the open-weight models explicitly
+trained for coding-agent scaffolds and tool calling, with GLM-5.2 (MIT) leading agentic and
+terminal benchmarks at a size this machine cannot host. Two consequences:
+
+1. A model trained for tool use inside a harness is not interchangeable with a general model
+   of the same speed. The tournament must vary **model × harness**, not model alone.
+2. Both leading candidates are permissively licensed *and* sparse-active, so `D-012`'s
+   principle and invariant 8 point at the same shortlist for once. Qwen3-Coder-Next at ~3B
+   active is the first candidate satisfying the hardware constraint, the licence gate and the
+   agentic-training requirement simultaneously. It is a `trial` candidate for the coding
+   capability slot, not an adoption; nothing here has been measured on this machine.
+
+### The steal order
+
+Ordered by (impact on a *local, small-model* agent) ÷ (effort), not by novelty. Items 1–5 are
+days of work each and change what the system can do at all.
+
+1. **Grammar-constrained tool calls.** A GBNF grammar for the action schema, applied through
+   the existing llama.cpp router. Retires the brace-scraping parser. Configuration plus a
+   schema; no new dependency.
+2. **A real tool surface.** `write_file`, patch-format `apply_patch` (Codex format), `grep`
+   (ripgrep), `glob`, and `read_file` with line ranges. Every one policy-gated through the
+   existing `ExecutionBroker`/`CapabilityGrant` path — the authority model does not change,
+   only the vocabulary available inside it.
+3. **Shadow-git checkpoints.** Cline's mechanism on our `CheckpointStore`: a separate
+   repository under `state/`, a commit per mutating tool call, restore by run and step.
+4. **Context management.** Compaction with a preserved working set, per-observation budgets,
+   and `--cache-reuse` configured on the router.
+5. **AGENTS.md + SKILL.md loading.** Read the standards the field already writes, and keep our
+   candidate/evaluation/promotion governance on top of them.
+6. **MCP client.** Consume the ecosystem, starting with Serena for symbol-level editing.
+7. **Repo map.** tree-sitter plus PageRank, token-budgeted, cached and invalidated per file.
+8. **CodeAct mode.** A second `AgentLoop` whose action space is code, measured against the
+   JSON loop in the tournament rather than assumed better.
+9. **FastApply specialist.** A 1.5B merge model in the existing specialist-worker plane, so
+   the deep brain emits edit snippets instead of whole files.
+10. **ACP server.** Achilles appears in Zed, JetBrains, Neovim and VS Code without four
+    separate integrations being written.
+11. **Hooks, permission modes and classifier pre-screening**, the last of these using the
+    otherwise-idle fast brain.
+12. **TUI**, then worktree-per-run, then OTel export, then Terminal-Bench task import.
+
+### What this wave explicitly does not authorise
+
+- Forking or vendoring Claude Code (closed source — mechanisms only, never code).
+- Depending on the Codex *service*; only its Apache-2.0 CLI code and file formats are in scope.
+- Treating any reported benchmark number in this wave as local truth.
+- Replacing the kernel's authority model with any harness's permission system. Every stolen
+  mechanism arrives *below* `PolicyEngine`, never beside it.
+- Adopting a wider tool surface without verifiers: more power in the loop raises, not lowers,
+  the bar for post-condition checks.
+
+## Research wave 7 — the experience audit: interface, interaction, and the parts a user actually touches
+
+Consolidated on **2026-08-22**, immediately after wave 6, because wave 6 was itself
+incomplete: it treated the entire experience layer as three rows in a table ("terminal
+experience", "editor integration", "session continuity") and moved on. That was wrong. For a
+system whose stated ambition is to replace a daily-driver coding agent for people who cannot
+buy one, **interaction design is a first-class axis, not a footnote** — and it is the axis on
+which this repository is furthest behind, further behind than the harness gap wave 6 found.
+
+This wave is written to the standard of a demanding practitioner evaluating whether to switch
+to Achilles, not to the standard of "reasonable for an early open-source project".
+
+### The one-sentence verdict
+
+**There is no path from "I have a task" to "the agent did it" that any developer in this field
+would accept**, and every surface that exists is a polling read-only table over a system that
+never streams.
+
+### What was actually inspected
+
+`web/index.html` (47 lines), `desktop/src/App.tsx`, all five desktop views,
+`desktop/src/api/kernelClient.ts`, `desktop/src/App.css` (438 lines) and
+`src/sovereign_ai/cli.py`. Findings below are grep-verifiable, not impressions.
+
+### Severity ledger
+
+`S1` blocks daily use. `S2` makes the system feel unfinished to a demanding user. `S3` is
+polish that separates a good product from a great one.
+
+| # | Finding (verified in this repository) | Severity |
+| --- | --- | --- |
+| X-01 | **No surface can start work.** `JobsView` cancels, `RosterView` lists, `ApprovalsView` resolves. The CLI has `preflight`, `route`, `serve`, `workspace`, `secret`, `dump-manifest` — and no command that runs a task. The only way to make the system do anything is to `@mention` an agent in a chat room or hand-write an HTTP request. | `S1` |
+| X-02 | **Nothing streams, anywhere.** No `StreamingResponse`, no SSE, no WebSocket, no generator in the API (`grep` returns zero hits). Every view is a 4-second `setInterval` poll. On hardware that generates 6–52 tok/s, a user stares at "Loading..." for minutes and then receives a finished wall of text. This also silently contradicts `D-014`: we adopted AG-UI *because* it standardises streaming, then built the opposite. | `S1` |
+| X-03 | **The approval card does not show what it is approving.** It renders `subject_id`, `action:scope`, a risk badge and a free-text reason — no command, no diff, no file list, no evidence, no policy rule, no expiry countdown, no consequence-of-denial. This is not a cosmetic gap: an approval surface that hides evidence trains its operator to click Approve, which converts our strongest safety mechanism into a rubber stamp. | `S1` (safety) |
+| X-04 | **No diff view exists in any surface.** When `D-021` lands there will be nowhere to review an edit. Review is the core interaction of an agentic coding tool; we have none of it. | `S1` |
+| X-05 | **Agent output is rendered as plain text.** The room timeline builds message bodies with `textContent`. Markdown, code blocks, syntax highlighting, copy buttons and file links do not exist — in a *coding* assistant. | `S1` |
+| X-06 | **No terminal interface.** No TUI, no REPL, not even a one-shot `sovereign run "<task>"`. The field's primary surface is absent entirely. | `S1` |
+| X-07 | **Accessibility is zero.** Across the whole desktop app and web page there is exactly one `aria-`/`role=`/`onKeyDown`/`tabIndex` occurrence. No focus management, no keyboard navigation, no screen-reader labels, no reduced-motion or contrast handling. For software meant to be given to everyone, this excludes people by omission. | `S1` |
+| X-08 | **Errors are raw protocol strings.** `GET /jobs -> 500: {"detail": ...}` is shown directly to the user. There is no recovery affordance, no retry, no diagnosis, no link to `doctor.py`. | `S2` |
+| X-09 | **A failed connection is terminal.** `KernelClient.connect()` runs once in a `useEffect`; if the kernel is not up, the app shows an error panel with no retry and never reconnects. Restarting the app is the only recovery. | `S2` |
+| X-10 | **The room shows chatter and failures only.** `renderEvents` filters to `message.posted` and `job.failed`. Job completions, approvals, delegations, grants and verification receipts — the things wave 3 principle 3 says rooms exist to display — are invisible. | `S2` |
+| X-11 | **Scroll position is destroyed on every poll.** The timeline sets `scrollTop = scrollHeight` on each refresh, so reading history while an agent works is impossible. | `S2` |
+| X-12 | **No session, thread, or history model in the product.** `Run` records exist in the kernel; no surface offers resume, fork, search, or "what did we do yesterday". | `S2` |
+| X-13 | **No notifications.** A twenty-minute local run ends silently; the user must babysit the window. | `S2` |
+| X-14 | **No live cost of the only currency we have.** No tokens/second, no context-window meter, no VRAM gauge, no KV-cache hit indicator, no model-load progress, no queue position, no "which brain answered this". The system knows all of it and shows none of it. | `S2` |
+| X-15 | **No onboarding or hardware fit experience.** For a project whose entire premise is that strangers run it on hardware we have never seen, the fit story is a YAML manifest, a PowerShell installer and `doctor.py`. There is no first-run wizard, no autotune, no "here is what your GPU can actually run". | `S2` |
+| X-16 | **No permission gradations in the UI.** Approve/Deny only: no "approve once", "approve for this session", "always allow this tool in this workspace". The kernel has `CapabilityGrant` with expiry and scope; the UI throws that expressiveness away. | `S2` |
+| X-17 | **No theming, no light/dark, no font scaling, no i18n.** One hard-coded dark palette in 438 lines of CSS. | `S3` |
+| X-18 | **No command palette, no keyboard shortcuts, no search** across jobs, runs, rooms or memory. | `S3` |
+| X-19 | **Identity is inconsistent and hard-coded.** The web page injects the session token by `%%SOAI_SESSION_TOKEN%%` string replacement, every actor is the literal string `"owner"`, and the product is called three different things across surfaces. | `S3` |
+| X-20 | **No lists are virtualised, no optimistic updates, no skeletons.** Fine at 50 jobs; visibly amateur at 5,000. | `S3` |
+
+### Who does each thing best — the experience steal list
+
+| Parameter | Who does it best | What specifically to take |
+| --- | --- | --- |
+| Live tool-call visibility | **Zed Agent Panel** | Tool calls stream into the panel as they happen, so the user sees *what the model is doing*, not just its final output. This is the single most trust-building interaction in the field |
+| Diff review | **Zed** multi-buffer review with per-hunk keep/reject, mirrored inline in the file; **Cline** streaming diffs into the editor | Review is per hunk, in place, with the agent's change temporarily overriding the git diff — not a text blob in a chat log |
+| Checkpoint navigation | **Cline** | A checkpoint per tool call, restorable independently, with the conversation preserved — pair it with `D-021`'s shadow git |
+| Terminal experience | **Codex** (Ratatui) and **opencode** | Multi-session, configurable keybindings through a keybind provider, vim mode, themes, client/server split so the TUI is one client of a local server — which is exactly our kernel/API shape already |
+| Terminal quality-of-life | **Claude Code** (`unverified`, mechanisms only) | Status line (model, context %, spend, branch), message queueing while the agent works, `@`-file autocomplete, image paste, completion notifications, a transcript view |
+| Parallel work | **Zed Parallel Agents**, **Conductor** | Several agents in one window on separate worktrees, each with an isolated diff to inspect before merging |
+| Multi-pane workspace | **OpenHands GUI** | Chat, terminal, file explorer and browser as one working surface — the closest existing analogue to what our kernel could render |
+| Local-model onboarding | **LM Studio**, **Jan** | Model browser showing disk size, RAM/VRAM requirement and quantisation *before* download; side-by-side comparison; models labelled "fast / balanced / high-quality" instead of by parameter count |
+| Session sharing | **opencode** | A session is a first-class, addressable, shareable object |
+| Permission and trust patterns | 2026 agentic-UX literature | Layered controls over data, action, evidence, review, recovery and accountability; default to the most conservative autonomy and let the user raise it as trust builds; explanation always one interaction away, never forced |
+
+### Where we can be better than all of them, not merely level
+
+Two categories exist where the field has no incentive to build well and we have every
+incentive, because they arise directly from being local and from being authority-first.
+These are the experience equivalents of a moat.
+
+**1. Latency legibility.** Every competing product is designed around cloud inference that is
+effectively instant and effectively unlimited. Ours is not: the deep brain runs at 6.36 tok/s
+under offload and the fast brain at 49.57 tok/s (F-005, F-012), models take tens of seconds
+to load, and VRAM is a hard 12 GB. Cloud-first UI hides latency because it can afford to.
+**We should render it instead**: live tokens/second, a context-window meter, a VRAM gauge, KV
+cache hit/miss, model load progress in gigabytes, queue position, and an explicit marker of
+which brain produced which turn, with a one-click "escalate this to the deep brain". A user
+who can *see* why something is slow tolerates it; a user watching an undifferentiated spinner
+concludes the product is broken. Nobody else will build this, because nobody else needs it.
+
+**2. Authority legibility.** We are the only system in this comparison that *has* the data:
+policy decisions with reasons, expiring capability grants, workspace and resource leases,
+trust labels on every event, verification receipts, and a hash-chained journal. Rendering
+that is a category nobody in the open field can enter: an approval card that shows the exact
+command or diff, the rule that triggered the request, what the grant will permit and for how
+long, and what happens if it is denied; a run inspector that replays every step with its trust
+label and verifier result; a "why was this allowed?" answer that is one click from any action.
+The 2026 UX literature says explanation is the strongest driver of trust and its absence the
+strongest driver of abandonment — and we are sitting on the only substrate that can provide it.
+
+### The experience order
+
+1. **Make the system usable at all**: `sovereign run "<task>"` in the CLI, a "New task"
+   affordance in the desktop, and a task composer that is not a chat-room mention.
+2. **Stream everything**: SSE over the existing API, AG-UI event shapes (`D-014`), retire the
+   4-second polls. Tool calls appear as they happen.
+3. **Render the work**: markdown and syntax highlighting, per-hunk diff review with
+   keep/reject, and a checkpoint timeline over `D-021`'s shadow git.
+4. **Fix the approval card** into an evidence card, with grant scope, expiry, the triggering
+   rule, and once/session/always gradations backed by `CapabilityGrant`.
+5. **Build the TUI** as a first-class client of the kernel API — the same split opencode and
+   Codex use, which our client/server shape already supports.
+6. **Latency legibility**: status line and gauges wherever a run is visible.
+7. **Recovery and errors**: reconnecting client, human-readable failures with a next action,
+   and completion notifications.
+8. **Accessibility and theming** as release gates: keyboard paths, focus management, labels,
+   light/dark, font scaling.
+9. **First-run experience**: hardware detection, an autotune sweep that picks the operating
+   point our own benchmark scripts already know how to measure, and a model browser that
+   states VRAM fit before download.
+10. **Session model**: resume, fork, search, share.
+
+### The honest framing
+
+Wave 6 said the harness is the binding constraint. Wave 7 corrects that: **the harness is the
+binding constraint on capability, and the experience layer is the binding constraint on
+adoption.** A system with a perfect kernel and no way to start a task is not a product, and
+the people this project exists for will not read the architecture document before deciding.
+
+## Research wave 8 — the total capability audit: what Achilles would actually have to be
+
+Consolidated on **2026-08-22**. Waves 6 and 7 audited the coding harness and the experience
+layer. This wave audits **everything else the name implies** — audio, speech, vision,
+documents, images, video, music, science, browser, computer control, memory, learning,
+security, distribution and scale-out — against one standard, stated by the user and adopted
+here as the bar:
+
+> A person who finds this should be surprised it is open source rather than proprietary.
+
+That is a demanding test and this wave applies it without generosity. Where the answer is
+"they would not be surprised", it says so.
+
+### Truth correction 1 — the manifest is not the system
+
+`configs/models.yaml` declares 35 models spanning reasoning, coding, vision, retrieval, OCR,
+NER, ASR, alignment, diarization, audio reasoning, TTS, detection, segmentation, depth, GUI
+control, image generation, video, music, forecasting, tabular, protein, materials, medical,
+earth observation and theorem proving. It is, on paper, the broadest capability manifest of
+any open coding-agent project reviewed in this ledger. In running software:
+
+- **`ToolRegistry` is instantiated once in `kernel/app.py:160` and never has a single tool
+  registered into it.** The README's "contextual tool discovery" is a working algorithm over
+  an empty dictionary. `discover()` returns nothing because there is nothing to discover.
+- **The agent cannot invoke any specialist.** `NativeAgentLoop` has `read_file`,
+  `list_directory`, `run_command`. There is no tool that reaches the specialist broker, the
+  media broker, memory, retrieval, the computer controller or the web. Every one of the 35
+  models is human-API-only.
+- **`ComputerController` has zero registered controllers**, so `execute()` raises
+  `RuntimeError` on every call. Browser control, Windows UIA and the vision-GUI fallback are
+  an interface with no implementations. Playwright is an optional dependency nothing imports.
+- **7 of 14 declared workers have no handler.** `HANDLERS` covers `retrieval`, `qwen_asr`,
+  `voxcpm`, `paddleocr`, `vision`, `science_general`, `tabpfn`. Requests to `moss_audio`,
+  `sam`, `ui_tars`, `fairchem`, `medgemma` and `ace_step` return **HTTP 501**. That is
+  audio reasoning, diarization, segmentation, GUI grounding, materials, medical and music —
+  declared, installed at ~290 GB in the workstation profile, and unreachable.
+- **SearXNG is deployed and never queried.** `infra/docker-compose.yml` and
+  `scripts/configure_infra.py` stand up a search engine; `grep -rn "searx" src` returns
+  nothing. The system installs a web-search service it has no client for.
+- **`ContextBuilder` is constructed and never called in any request path.** `job_executor`'s
+  `chat` branch passes `payload.messages` straight to inference. Memory is written to and
+  never consulted. A memory system outside the loop is a database, not a memory.
+
+The honest summary: **this is a catalogue with a kernel, not yet a system with capabilities.**
+Every claim in this section is a `grep` away from being reproduced.
+
+### Truth correction 2 — the project is not, today, open source
+
+Baseline invariant 8 says the system "is open source, end to end, and is meant to be given
+away". As of this audit:
+
+- **There is no `LICENSE` file in the repository, and no `license` field in
+  `pyproject.toml`.** Under default copyright law that makes the work *all rights reserved*:
+  nobody may legally copy, modify or redistribute it. The single most load-bearing invariant
+  in this ledger is currently unenforceable, and the fix is five minutes of work.
+- **There is no CI.** No `.github/` directory exists. 153 tests are written and nothing runs
+  them on a change.
+- **There is no release process**: version is `0.1.0` in `pyproject.toml`, with no changelog,
+  no tags, no signed artifacts, no updater.
+- **There is no contribution path**: no `CONTRIBUTING`, no code of conduct, no issue
+  templates, and no vulnerability-reporting policy (`docs/SECURITY.md` is an architecture
+  document, not a disclosure policy).
+- **Installation is Windows-only.** `Install.ps1`, `bootstrap.ps1`, `provision_wsl.ps1` and
+  `start.ps1` are PowerShell; the `.sh` scripts run *inside WSL*, not on Linux. There is no
+  Linux install path and no Apple Silicon path at all — and Apple Silicon unified memory is
+  currently among the best consumer hardware for local inference, while Linux is where most
+  of this project's stated audience actually is.
+
+A project cannot be "given back to the community" when the community cannot legally copy it,
+cannot install it on their operating system, cannot verify it builds, and has no way to
+contribute. This is not pedantry: it is the mission's own success criterion, unmet.
+
+### Capability reachability — the table that matters
+
+`Declared` = in `configs/models.yaml`. `Adapter` = a worker handler or broker exists.
+`Agent-reachable` = the agent loop can actually invoke it. **The last column is the product.**
+
+| Domain | Declared | Adapter | Agent-reachable | Verdict |
+| --- | --- | --- | --- | --- |
+| Text/code reasoning | yes | yes (llama.cpp router) | yes | the only fully connected path in the system |
+| Retrieval / embedding / rerank | yes (4 models) | yes | **no** | wired to `ContextBuilder`, which nothing calls |
+| Lexical / vector / graph memory | yes | yes | **no** | not in the loop |
+| OCR / document parsing | yes (PaddleOCR-VL 1.6) | yes | **no** | genuinely SOTA choice, unreachable |
+| NER / structured extraction | yes (GLiNER2) | yes | **no** | — |
+| ASR / alignment | yes (3 models) | yes | **no** | — |
+| TTS | yes (VoxCPM2) | yes | **no** | — |
+| Audio reasoning / diarization | yes (MOSS ×2) | **no (501)** | no | declared, installed, unimplemented |
+| Object detection / depth | yes (RF-DETR, DA3) | yes | **no** | — |
+| Segmentation | yes (SAM 3.1) | **no (501)** | no | — |
+| GUI grounding | yes (UI-TARS-1.5-7B) | **no (501)** | no | and no controller to act on it |
+| Browser control | — | **none** | no | Playwright is an unused optional dependency |
+| Windows UI control | — | **none** | no | designed in wave 4, never built |
+| Image generation/editing | yes (FLUX.2 Klein) | via WanGP | **no** | — |
+| Video generation | yes (LTX-2.5, MiniMax-H3) | via WanGP | **no** | — |
+| Music generation | yes (ACE-Step 1.5) | **no (501)** | no | — |
+| Deterministic media editing | FFmpeg/SoX named | **no** | no | not wrapped as a tool at all |
+| Forecasting / tabular | yes (Chronos-2, TabPFN-3) | yes | **no** | — |
+| Protein / materials / medical / earth / proving | yes (5 models) | partial (`fairchem`, `medgemma` 501) | **no** | breadth nobody else has, reachable by nobody |
+| Web search | SearXNG in infra | **no client** | no | deployed, unqueryable |
+| Code intelligence (LSP/symbols/repo map) | — | none | no | wave 6 `D-021`/`D-023` |
+
+**Nineteen of twenty-one capability domains are unreachable by the agent.** This single table
+explains the gap between how the architecture reads and how the system behaves.
+
+### Gap matrix 5 — the axes waves 6 and 7 did not cover at all
+
+| Axis | Who does it best | What we are missing | Verdict |
+| --- | --- | --- | --- |
+| **Automatic prompt/context optimisation** | **GEPA** (reflective prompt evolution; reported 10–20% accuracy over GRPO/MIPROv2 with up to 35× fewer rollouts, with DSPy, MCP and Terminal-Bench adapters) and **ACE** (generator–reflector–curator loop evolving a living playbook) | Nothing. Prompts are hand-written string constants in `native_loop.py`. | **the largest unexploited quality lever we have.** We are the rare project with the two things GEPA needs — an eval harness and reproducible tasks — and a model too weak to waste a single prompt token on |
+| **On-device personalisation** | **Unsloth** LoRA/QLoRA (≈2× faster, ~50% less VRAM), O-LoRA-style continual adapters | No fine-tuning path at all | **differentiator**: a subscription agent can never train on your private codebase overnight on your own GPU. We can |
+| **Agent-shaped serving** | **SGLang RadixAttention** (prefix reuse across turns; reported ~29% higher agent throughput, up to 6× on RAG), **vLLM PagedAttention** for concurrency | llama.cpp only, single stream, no prefix cache configured, no batching for parallel agents | **adopt as a second engine** behind the existing adapter plane — our own seam already allows it |
+| **Browser agency** | **Browser Use** (~108k stars, reported 87.4% on a 200-task long-horizon web benchmark) | zero | wave 4 designed it; nothing exists |
+| **GUI grounding models** | **Holo-1.5** (Apache-2.0, 3B/7B/72B), **OpenCUA** (7B/32B/72B), **UI-Venus-1.5**, **Qwen3-VL** | manifest pins UI-TARS-1.5-7B only, with no adapter | **re-scan**: the GUI-grounding field moved twice since our manifest was written, and Apache-2.0 options now exist |
+| **Untrusted-content defence** | **CaMeL** (privileged/quarantined LLM split, capability sandbox, data-flow-tracking interpreter); **FIDES, Progent, RTBAS** | trust labels on events, and a plan to add web + browser + MCP + skills on top of them | **architectural gap, and it is a security one.** Labels describe provenance; they do not prevent an injected instruction from reaching a privileged planner |
+| **Low-storage local RAG** | **LEANN** (pruned proximity graph + on-the-fly re-embedding: <5% storage overhead, >90% recall@3) | a conventional vector store that keeps full embeddings | **steal**: the exact problem shape of indexing a whole laptop on a 12 GB card |
+| **Document conversion for RAG** | **Docling**, **MinerU 2.5**, **Marker 2/Surya 2** | PaddleOCR-VL (a strong pick) and nothing that converts a PDF into structured chunks | complete the path from document to memory |
+| **Office document generation** | open libraries (`python-docx`, `openpyxl`, `python-pptx`, LaTeX/Typst) | nothing — we can *read* documents and not *produce* them | **build**: "all-rounder" fails immediately on "make me a report" |
+| **Realtime voice interaction** | **Moshi** full-duplex (~160 ms), **Pipecat 1.0** / **LiveKit Agents** orchestration, **Kokoro/Orpheus/Chatterbox/Higgs/Dia2** (Apache-2.0/MIT) | batch ASR and batch TTS models with no adapter path to the agent, no duplex, no barge-in, no wake word, no voice UI | **build**: voice is the modality where local wins outright — no audio ever leaves the machine |
+| **Scale-out to idle machines** | **prima.cpp** (30–70B on heterogeneous home clusters; reported 5–17× lower TPOT vs llama.cpp/exo/dllama), **llama.cpp RPC**, **exo** | single-machine only | **the sovereign answer to "your GPU is too small"**: use the other machines you already own instead of a subscription |
+| **Distribution** | **Tauri 2** bundler + signed updater (MSI/NSIS, DMG, deb/rpm/AppImage) | Windows-only PowerShell, no license, no CI, no releases | blocking for the mission |
+
+### Where Achilles can be a category of one
+
+The honest answer to "why is this open source and not proprietary?" cannot be "it has the
+features of the proprietary ones." It has to be **capabilities a subscription product cannot
+offer at all**. Six exist, and every one is a direct consequence of running on the user's own
+hardware under the user's own authority:
+
+1. **It learns your codebase in the weights, not just the prompt.** Overnight LoRA on your own
+   GPU. No hosted agent can do this without taking your code.
+2. **It indexes your whole machine.** LEANN-class storage overhead makes a personal index of
+   everything feasible locally; a cloud agent would have to upload your life first.
+3. **Voice that never leaves the room.** Full-duplex local speech is the one modality where
+   privacy is not a preference but a precondition — medical, legal, personal.
+4. **It uses the hardware you already own.** prima.cpp-style clustering turns a laptop, a
+   desktop and an old GPU box into one pool. Subscriptions cannot sell you that.
+5. **It can prove what it did.** Hash-chained events, expiring grants, verification receipts
+   and a replayable run inspector — an audit story a hosted product cannot give you, because
+   you would have to trust their logs about their machine.
+6. **It does everything, in one authority domain.** Nobody else combines code, documents,
+   speech, vision, media, science and computer control behind one policy engine, one memory
+   and one audit trail. That is the actual moat — and the reachability table above shows it
+   is currently the least-realised part of the system.
+
+### What must stop being claimed
+
+Until each is reachable by an agent and smoke-tested, `README.md` and `docs/FINAL_STACK.md`
+must not present these as capabilities of the system: audio reasoning, diarization,
+segmentation, GUI control, browser control, music generation, materials modelling, medical
+multimodal, web search, and "contextual tool discovery". They are *installed model weights and
+declared intentions*. `docs/IMPLEMENTATION_STATUS.md` exists precisely to prevent this class
+of overstatement and did not catch it, because it audited kernel features rather than
+end-to-end reachability.
+
+### The revised build order
+
+Waves 6 and 7 produced two ordered lists. Wave 8 puts one item before both of them and adds a
+third phase after them.
+
+**Phase 0 — legitimacy (hours, not days).** `LICENSE` (Apache-2.0, matching what we demand of
+everything we adopt), a `license` field in `pyproject.toml`, a CI workflow that runs the 153
+existing tests, `CONTRIBUTING`, and a vulnerability-reporting policy. Nothing else in this
+ledger is deliverable to anyone until this exists.
+
+**Phase 1 — the tool plane (this is the unlock).** Register real tools in `ToolRegistry` and
+give the agent loop a dispatcher into them: the wave-6 file tools first, then specialist
+invoke, media generate, memory search, and web search against the SearXNG we already run.
+Nineteen unreachable domains become reachable through *one* mechanism. This is the highest
+leverage change available anywhere in the project.
+
+**Phase 2 — waves 6 and 7 as written.** Harness parity, then experience.
+
+**Phase 3 — the category-of-one work.** In order of (differentiation × feasibility): GEPA/ACE
+prompt optimisation, quarantined-LLM injection defence before any browser or web tool ships,
+browser control, LEANN-class personal index, realtime voice, prima.cpp scale-out, LoRA
+personalisation, cross-platform packaging and signed releases.
+
+### The uncomfortable summary
+
+The kernel is genuinely excellent and genuinely rare. The manifest is genuinely ambitious. But
+the system today can read a file, list a directory, run a command, and talk. Everything else is
+either declared, installed, or designed — and unreachable. **The distance between this
+repository and the name Achilles is not research. It is wiring, and then legitimacy.**
+
 ## Decision records
 
 ### D-001 — The sovereign kernel, not DeepSeek Harness, is the foundation
@@ -799,9 +1286,516 @@ change to the OpenShell-preferred, Docker-fallback decision.
   specific numbers; it would not by itself change the personal-use-only scope, which is a
   values decision distinct from a quality measurement.
 
+### D-018 — The system is named Achilles
+
+- **Date:** 2026-08-22
+- **Status:** `adopted` as the product name. The package/module rename is a separate,
+  mechanical change and is **not** implied by this record.
+- **Reason:** The user named the system after Achilles, with the stated ambition that it be
+  the best of the open-source and locally runnable systems. A name is not decoration for a
+  project meant to be given away: the community needs one word for the thing they install,
+  distinct from the sentence that describes its architecture.
+- **Consequence:** "Achilles" is the product. "Local Sovereign AI" survives as the
+  description of what it is — a hardware-aware local sovereign AI kernel — and
+  `sovereign_ai` remains the Python package until a deliberate rename is scheduled with its
+  own migration, since a package rename touches every import, config path and state
+  directory and must not be smuggled in beside research.
+- **Safety boundary:** None. This changes naming, not behaviour, authority or licences.
+- **Revisit trigger:** A name collision with an existing open-source project in the same
+  space would force a rename before public release; check before publishing.
+
+### D-019 — The harness layer is the binding constraint, and it is closed by adoption
+
+- **Date:** 2026-08-22
+- **Status:** `adopted` as the current priority ordering.
+- **Reason:** Wave 6's audit found a kernel ahead of the field driving an agent loop behind
+  every member of it: three tools, no way to edit a file, prose-scraped tool calls, no
+  compaction, no undo. Meanwhile the published Terminal-Bench and SWE-bench work shows the
+  *same model* scoring materially differently under different harnesses. On this machine,
+  where the model is fixed by 12 GB of VRAM, the harness is the only large remaining lever.
+- **Consequence:** Until the wave-6 steal order's items 1–5 are done, further model shopping,
+  provider integration and desktop features are deprioritised. The parity work is explicitly
+  **adoption**: formats, algorithms and mechanisms already proven in Apache-2.0 and MIT
+  projects, ported rather than reinvented.
+- **Safety boundary:** Adoption is of mechanism, never of authority. Every borrowed tool
+  enters through `ExecutionBroker`, `PolicyEngine` and `CapabilityGrant`; a harness's own
+  permission model is a UX reference, not a security control. `D-001` is unchanged.
+- **Revisit trigger:** If parity work stops changing measured task outcomes in the harness
+  tournament, the constraint has moved and this ordering should be re-derived.
+
+### D-020 — Tool calls are grammar-constrained, not parsed out of prose
+
+- **Date:** 2026-08-22
+- **Status:** `adopted` principle; GBNF through the pinned llama.cpp router is the
+  implementation.
+- **Reason:** `NativeAgentLoop` currently locates an action by taking the outermost `{`…`}`
+  span of the model's reply and attempting `json.loads`. Every failure costs a full turn at
+  6–52 tok/s, and small models fail this far more often than large ones — which is precisely
+  the regime we operate in. Constrained decoding makes a malformed action structurally
+  impossible instead of recoverable, and the capability is already compiled into the runtime
+  we already pinned.
+- **Consequence:** The action schema becomes a grammar. The prose parser stays only as a
+  fallback for backends that cannot accept a grammar, and its use is recorded as a
+  degradation rather than treated as normal operation.
+- **Safety boundary:** A grammar constrains *form*, never *authority*. A perfectly formed
+  action is still untrusted model output and still passes through policy. Grammar-guided
+  generation has its own reported attack surface; it is not a security feature.
+- **Revisit trigger:** Measured throughput loss from mask computation large enough to
+  outweigh the retries it prevents, on this hardware.
+
+### D-021 — A real editing surface, with undo, before any further autonomy
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`.
+- **Reason:** A coding agent that cannot write a file is not a coding agent. Shell-mediated
+  mutation is also the worst available option for review: `run_command` hides *what changed*
+  behind *what ran*, which defeats both the approval surface and the verifiers. Separately,
+  nothing in the system can currently undo an agent's edit, which is what makes unattended
+  operation unreasonable.
+- **Consequence:** Adopt Codex's Apache-2.0 `apply_patch` format for edits, add `write_file`,
+  ripgrep-backed `grep`, `glob` and ranged `read_file`, and adopt Cline's shadow-git
+  checkpoint mechanism — a repository under `state/`, separate from the user's own history,
+  committed after each mutating tool call and restorable by run and step. Aider's per-model
+  edit-format selection becomes a field on the model registry rather than a global constant.
+- **Safety boundary:** Every new tool is policy-gated exactly as `run_command` is today, and
+  a patch is *more* reviewable than a shell line, not less. Shadow git is an undo and audit
+  mechanism, not a security boundary, and must never contain secrets that policy would keep
+  out of the workspace.
+- **Revisit trigger:** If a patch format proves unreliable for the models we actually run,
+  fall back per-model rather than globally, and record which model needed which format.
+
+### D-022 — Adopt the field's portable agent files: AGENTS.md and SKILL.md
+
+- **Date:** 2026-08-22
+- **Status:** `adopted` as formats; our existing skill governance is unchanged.
+- **Reason:** The project has a `SkillCandidate`→`SkillVersion` evaluation and promotion
+  pipeline that almost nothing in the field has, and no way to read a skill anyone in the
+  field has actually written. `AGENTS.md` is the de facto per-repository instruction file,
+  and the Agent Skills/`SKILL.md` format has been a public specification since 2025-12-18
+  with broad reported adoption. Inventing a fourth filename would cost us the community's
+  existing work for no benefit.
+- **Consequence:** Load `AGENTS.md` as project instructions and `SKILL.md` packages with
+  progressive disclosure, then run them through our own candidate/evaluation/promotion gate
+  before any of their content is trusted.
+- **Safety boundary:** A skill file is untrusted input, exactly like web content or a tool
+  description — this is baseline invariant 4 and it applies unchanged. Published research
+  already describes supply-chain attacks on skill registries. An imported skill may propose
+  procedure; it may never widen authority, and it is evaluated before promotion.
+- **Revisit trigger:** A specification change that cannot express our provenance and
+  evaluation metadata without a lossy side channel.
+
+### D-023 — Achilles becomes an MCP client, not only an MCP server
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`.
+- **Reason:** `agents/mcp_bridge.py` exposes our policy-gated tools *to* an external harness,
+  which is the correct half to have built first — it proved the authority path. But the
+  ecosystem's value flows the other way: every serious harness consumes MCP servers, and the
+  most valuable single one for our purposes is Serena (MIT), whose LSP-backed symbol tools
+  cover 40+ languages and are explicitly more token-efficient than text search and replace —
+  which matters more for us than for anyone with a large context budget.
+- **Consequence:** Add an MCP client behind the existing tool registry so external servers
+  appear as ordinary discoverable tools, subject to the same policy and grants. Serena is the
+  first trial. `ToolRegistry.discover` already prevents the context blow-up that adding many
+  servers would otherwise cause.
+- **Safety boundary:** `D-009` is unchanged and now cuts both ways: MCP is a transport and
+  tool boundary, not an authority boundary. A server's tool descriptions are untrusted text,
+  a server's results are untrusted evidence, and no server is reachable outside a grant.
+- **Revisit trigger:** If per-server process cost or latency outweighs the tool value on this
+  laptop, vendor the two or three servers that earn it and drop the general client.
+
+### D-024 — Adopt ACP alongside AG-UI: one seam faces editors, the other faces our UI
+
+- **Date:** 2026-08-22
+- **Status:** `adopted` seam; implementation `trial`.
+- **Reason:** `D-014` adopted AG-UI so that a community member can replace our frontend. It
+  does not address the other direction: developers who will never adopt our frontend at all
+  because they live in Zed, JetBrains, Neovim, Emacs or VS Code. The Agent Client Protocol
+  (Apache-2.0, JSON-RPC over stdio) is the field's answer, with native support in Zed and
+  JetBrains and a registry since January 2026. Implementing it once is worth more reach than
+  any UI work we could do in the same time.
+- **Consequence:** Expose the kernel's run/approval/diff/terminal surface over ACP as a second
+  client of the same typed seam AG-UI speaks across. Our Tauri desktop remains one client
+  among several, exactly as `D-014` intended.
+- **Safety boundary:** Identical to `D-014` and `D-009`: ACP is a rendering, streaming and
+  permission-*presentation* contract. Nothing arriving over it authorises a mutation, and an
+  editor's approval click resolves against a kernel `ApprovalRequest`, never against a
+  protocol event on its own.
+- **Revisit trigger:** If ACP cannot express approvals, delegations and verification receipts
+  without lossy translation, keep the seam and replace the protocol — the same rule `D-014`
+  states for AG-UI.
+
+### D-025 — Context is a managed resource, with an explicit budget owner
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`.
+- **Reason:** The loop appends every assistant reply and every observation to history with no
+  compaction, into a 16 K operating context, with a flat 4,000-character truncation per
+  observation as the only control. On this hardware the context window is a scarcer resource
+  than disk or even VRAM, and it is currently the only major resource the kernel does *not*
+  arbitrate — while it arbitrates GPU, workspaces and remote quota carefully.
+- **Consequence:** Compaction with a preserved working set, per-observation budgets, repo-map
+  and retrieval results counted against the same budget, context-isolated child runs so a
+  subtask cannot consume the parent's window, and `--cache-reuse` configured so a stable
+  prefix is not reprocessed every turn. Treat this as a resource policy in the kernel, not as
+  a detail inside one loop.
+- **Safety boundary:** Compaction destroys information. The summary is derived, untrusted
+  model output; the append-only event journal remains the audit record, and no compaction may
+  drop a verification receipt, an approval or a grant from the record — only from the prompt.
+- **Revisit trigger:** A model with a materially larger usable context on this machine changes
+  the budget, not the principle that someone must own it.
+
+### D-026 — Every surface must be able to start work, and the terminal is the primary one
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`.
+- **Reason:** Wave 7's first finding is that no surface in this repository can start a task.
+  The desktop cancels, lists and resolves; the CLI has no run command; the only door is an
+  `@mention` in a chat room, which is a collaboration idea borrowed from Buzz, not a coding
+  workflow. A system that cannot be asked to do something is not a product regardless of the
+  quality of its kernel.
+- **Consequence:** `sovereign run "<task>"` and a task composer in the desktop come before any
+  further view work, and the interactive TUI becomes the primary developer surface — built as
+  a client of the kernel HTTP API, exactly as opencode and Codex split their TUI from their
+  server, which our architecture already supports. The chat room remains a *collaboration*
+  surface, not the entry point for work.
+- **Safety boundary:** A new entry point is not new authority. Every surface submits an
+  ordinary `Job` and is subject to the same policy, grants and approvals; a task typed into a
+  TUI is exactly as untrusted as one posted in a room.
+- **Revisit trigger:** None for the requirement. Which surface is *primary* may change if
+  measured usage says otherwise.
+
+### D-027 — Streaming is a requirement, not an enhancement
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`.
+- **Reason:** There is no `StreamingResponse`, SSE endpoint, WebSocket or generator anywhere
+  in the API, and every view polls on a four-second timer. On hardware measured at 6.36 tok/s
+  for the deep brain, that means minutes of undifferentiated waiting followed by a wall of
+  text — the worst possible presentation of exactly our weakest property. It also contradicts
+  `D-014` in practice: AG-UI was adopted *because* it standardises streaming and human-in-the-
+  loop interrupts, and then the opposite was built.
+- **Consequence:** Server-sent events over the existing API carrying AG-UI-shaped events;
+  tool calls, tokens, step transitions, approvals and job state changes all arrive as they
+  happen; the four-second polls are retired rather than supplemented. Zed's Agent Panel is the
+  reference for what to show: the tool call as it happens, not only the final answer.
+- **Safety boundary:** A streamed event is a *view* of a kernel record, never a substitute for
+  one. Approvals resolve against kernel state; a client that missed an event must be able to
+  reconcile by reading, and a dropped connection must never lose a durable transition.
+- **Revisit trigger:** If SSE cannot express interrupts and resumption cleanly across
+  reconnects, upgrade the transport — not the requirement.
+
+### D-028 — An approval must render its own evidence
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`. Treated as a **safety** requirement, not a UX preference.
+- **Reason:** The approval card currently shows a subject id, an `action:scope` string, a risk
+  badge and free text. It does not show the command, the diff, the files, the policy rule that
+  triggered the request, what the resulting grant permits, when it expires, or what denial
+  costs. An operator asked repeatedly to authorise things they cannot see learns to click
+  Approve, which silently converts the project's strongest safety mechanism into a rubber
+  stamp. The 2026 agentic-UX literature is blunt that absent explanation is the strongest
+  driver of both distrust and abandonment.
+- **Consequence:** The approval surface becomes an evidence surface: exact action, rendered
+  diff or command, triggering rule, requested grant scope and expiry, consequence of denial,
+  and the run it belongs to. Approve/Deny gains once / this-session / always-in-this-workspace
+  gradations, each backed by a real `CapabilityGrant` with a real expiry rather than by a
+  client-side preference.
+- **Safety boundary:** Gradations widen convenience, never scope. "Always" means a persisted,
+  revocable, expiring grant with a named scope — never an unbounded permission, and never one
+  a model can request into existence without a human resolution.
+- **Revisit trigger:** Evidence of approval fatigue in real use (a high approve rate with low
+  read time) means the *policy* is asking too often, and should be re-tuned rather than the UI
+  made faster to click through.
+
+### D-029 — Latency legibility is a differentiator, and we design for it rather than hiding it
+
+- **Date:** 2026-08-22
+- **Status:** `adopted` as an experience principle.
+- **Reason:** Every competing product is designed around cloud inference that is effectively
+  instantaneous and effectively unlimited, so hiding latency is rational for them. Ours is
+  measured: 6.36 tok/s deep, 49.57 tok/s fast, tens of seconds of model load, a hard 12 GB
+  ceiling. A spinner communicates "broken"; a tokens/second readout, a context meter, a VRAM
+  gauge, a load-progress bar in gigabytes and a marker of which brain answered communicate
+  "working, and here is why it costs what it costs". The kernel already knows every one of
+  these numbers and displays none of them.
+- **Consequence:** Status line and gauges wherever a run is visible, plus an explicit
+  escalate-to-deep-brain control so the user chooses the trade rather than suffering it.
+- **Safety boundary:** None, except that displayed telemetry must be measured rather than
+  estimated — a fabricated progress bar is worse than none.
+- **Revisit trigger:** Hardware fast enough that latency stops being perceptible would make
+  this decoration; that is not this machine and will not be most of our audience's.
+
+### D-030 — Authority legibility is the category we can win outright
+
+- **Date:** 2026-08-22
+- **Status:** `adopted` as an experience principle and a product thesis.
+- **Reason:** No open competitor can render *why an action was allowed* because none of them
+  has the data. We have policy decisions with reasons, expiring grants, leases, trust labels
+  on every event, verification receipts and a hash-chained journal, and we render essentially
+  none of it. This is the one axis where parity is not the ceiling: a run inspector that
+  replays each step with its trust label and verifier result, and a "why was this allowed?"
+  answer one click from any action, is something the field structurally cannot copy quickly.
+- **Consequence:** The audit model becomes a first-class product surface rather than a
+  forensic backend: run replay, per-step trust and verification, grant and lease inspectors,
+  and provenance shown next to any answer derived from memory or the web.
+- **Safety boundary:** Displaying provenance must not leak scoped or private memory into a
+  context that policy would not have allowed; the inspector obeys the same memory scope ACLs
+  as the agents do.
+- **Revisit trigger:** None. If a competitor builds an authority model this rich, that is a
+  win for the field and we will still have ours.
+
+### D-031 — Accessibility, theming and error recovery are release gates
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`.
+- **Reason:** Across the entire desktop app and web page there is a single
+  `aria-`/`role=`/`onKeyDown`/`tabIndex` occurrence; errors surface as raw
+  `GET /path -> 500` strings; and a failed first connection leaves the app permanently dead
+  with no retry. A project whose stated purpose is to be given to people underserved by
+  commercial tools cannot ship an interface that excludes people by omission, and a local
+  system whose backend is a set of processes on the user's own machine will fail to connect
+  regularly — that is a normal state to design for, not an exception.
+- **Consequence:** Keyboard paths, focus management, labelled controls, light/dark and font
+  scaling, a reconnecting client, human-readable failures that name the next action (usually
+  `scripts/doctor.py`), and completion notifications for long runs. These are gates on the
+  first public release, not backlog polish.
+- **Safety boundary:** None.
+- **Revisit trigger:** None.
+
+### D-032 — First run must include hardware autotune, because we do not know the user's machine
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`; implementation `trial`.
+- **Reason:** The mission is that other people run this on hardware we have never seen and
+  adapt it. Today that means reading a YAML manifest, running a PowerShell installer and
+  interpreting `doctor.py`. Meanwhile the local-model field has already solved the
+  presentation problem: LM Studio shows disk size, RAM and VRAM requirements and quantisation
+  *before* download and offers side-by-side comparison; Jan labels models "fast", "balanced"
+  and "high-quality" rather than by parameter count. We have something better than either —
+  `benchmark_brains.py`, the `-ncmoe` sweep methodology from F-012 and a local benchmark DB
+  that already overrides internet priors — and we make the user drive it by hand.
+- **Consequence:** A first-run experience that detects the machine, states plainly what it can
+  run, sweeps the offload operating point the way F-012 did by hand, writes the result into the
+  local benchmark DB, and presents models by what they will actually do on *this* GPU rather
+  than by parameter count.
+- **Safety boundary:** Autotune measures and recommends; it never accepts a licence, never
+  downloads a gated checkpoint on the user's behalf, and never promotes a model past the
+  existing evaluation gates. `D-016`'s personal-overlay boundary is unchanged.
+- **Revisit trigger:** If sweeping proves too slow to run at install time, split it into a fast
+  detection pass and a background refinement job rather than dropping it.
+
+### D-033 — The repository carries an Apache-2.0 licence, and that comes before everything else
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`, blocking. **Implemented 2026-08-22** (`docs/FIXES.md` F-046):
+  `LICENSE` (canonical Apache-2.0 text, fetched from apache.org rather than retyped),
+  `NOTICE`, `license`/`license-files`/classifiers in `pyproject.toml`, `CONTRIBUTING.md`
+  and a disclosure-policy `SECURITY.md` distinct from the architecture document.
+- **Reason:** There was no `LICENSE` file and no `license` field in `pyproject.toml`. Under
+  default copyright law the work is all-rights-reserved: nobody may legally copy, modify or
+  redistribute it. Baseline invariant 8 — the invariant this ledger applies as a gate to every
+  other project's licence before adopting it — is therefore currently violated by us and by
+  nobody else. Apache-2.0 is the correct choice because it is what we demand of the components
+  we adopt, it carries an explicit patent grant, and it is compatible with the Apache-2.0 and
+  MIT upstreams we intend to port from.
+- **Consequence:** `LICENSE`, the `pyproject.toml` field, per-file attribution where code is
+  ported (Codex's `apply_patch`, Cline's checkpoint approach, Aider's repo map), and a
+  `NOTICE` recording those origins. Model weights keep their own separate licences and the
+  `D-016` personal-overlay boundary is unchanged.
+- **Safety boundary:** Licensing our code does not relicense anything we adopt; ported code
+  keeps its own notice, and no non-OSI model weight becomes shippable because the repository
+  is now licensed.
+- **Revisit trigger:** None. A different OSI licence could be argued, but no licence at all
+  cannot.
+
+### D-034 — A capability is not delivered until an agent can invoke it
+
+- **Date:** 2026-08-22
+- **Status:** `adopted` as the project's definition of done.
+- **Reason:** Wave 8's reachability table found nineteen of twenty-one capability domains
+  unreachable by the agent loop: `ToolRegistry` holds zero tools, `ComputerController` holds
+  zero controllers, seven of fourteen workers return HTTP 501, SearXNG is deployed with no
+  client, and `ContextBuilder` is constructed but never called. Installed weights, a worker
+  port and a manifest entry are three different things, and none of them is a capability.
+- **Consequence:** The tool plane becomes the product boundary. Every capability must be
+  registered as a `ToolSpec`, dispatchable from the agent loop through the existing policy and
+  grant path, and covered by an end-to-end smoke test that starts at an agent turn and ends at
+  a verified result. `docs/IMPLEMENTATION_STATUS.md` gains a reachability column, and the
+  README stops listing unreachable capabilities as features.
+- **Safety boundary:** Reachability multiplies blast radius. Every newly reachable tool needs
+  its risk scope, grant requirement and verifier defined *before* it is registered, not after;
+  a tool that can generate media, control a computer or query the web is not equivalent to
+  `read_file` and must not inherit its defaults.
+- **Revisit trigger:** None.
+
+### D-035 — Cross-platform support is a mission requirement, not a roadmap item
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`; Linux first, Apple Silicon second.
+- **Reason:** Every installation path is PowerShell plus WSL2; the shell scripts run *inside*
+  WSL rather than on Linux. The stated audience — people who cannot or will not pay for a
+  subscription — is disproportionately on Linux, and Apple Silicon's unified memory is among
+  the best consumer hardware in existence for local inference. We currently serve neither. A
+  system that only runs on the author's operating system is a personal tool, not a donation to
+  a community.
+- **Consequence:** A Linux install path that does not assume WSL, then an Apple Silicon path
+  (Metal through llama.cpp, which already supports it). The Windows/WSL2 bridge remains
+  first-class and stays our differentiator, since it is the platform the field serves worst.
+- **Safety boundary:** Each platform needs its own execution-isolation story. OpenShell/WSL2
+  does not transfer: Linux needs Landlock/seccomp/bubblewrap, macOS needs Seatbelt. A platform
+  is not supported until its sandbox path is, and shipping an unsandboxed platform is worse
+  than not shipping it.
+- **Revisit trigger:** None.
+
+### D-036 — Prompts are optimised by evidence, not written by hand
+
+- **Date:** 2026-08-22
+- **Status:** `adopted` principle; GEPA/ACE `trial`.
+- **Reason:** The system prompt that decides whether every local model turn produces a usable
+  action is a hand-written string constant in `native_loop.py`. GEPA reports 10–20% accuracy
+  gains over reinforcement-learning and prompt-optimiser baselines with up to 35× fewer
+  rollouts, by reflecting over execution traces; ACE evolves a persistent playbook through a
+  generator–reflector–curator loop. Both need exactly two things we already have and almost
+  nobody else in the open field does: **a reproducible task set and an evaluation harness**
+  (`harness_tasks.py`, `harness_tournament.py`, `evaluate_brain_quality.py`). On a machine
+  where the model cannot be made larger, the prompt and the context are the tunable parameters.
+- **Consequence:** Prompts, tool descriptions and the playbook become versioned, evaluated
+  artifacts under the existing `SkillCandidate`→`SkillVersion` governance, optimised against
+  our own task set and promoted only on measured improvement.
+- **Safety boundary:** An optimiser may rewrite instructions; it may never rewrite policy,
+  authority, tool risk scopes or its own evaluator. An evolved playbook is a `SkillCandidate`,
+  which means untrusted until evaluated — the self-modification boundary in this ledger's
+  explicit non-decisions is unchanged.
+- **Revisit trigger:** If optimisation gains do not survive on this machine's models, keep the
+  versioned-prompt infrastructure and drop the optimiser.
+
+### D-037 — Untrusted content needs an architectural defence before web, browser or MCP tools ship
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`, blocking for the tools it names.
+- **Reason:** The kernel's answer to hostile content is trust labels on events and the
+  principle that conversation is not authorization. That is necessary and insufficient: a
+  label records *where text came from*, it does not stop an injected instruction inside that
+  text from reaching a planner that holds tools. The 2026 literature has converged on
+  structural defences — CaMeL's privileged/quarantined LLM split with a data-flow-tracking
+  interpreter and capability-based policy, plus FIDES, Progent and RTBAS — precisely because
+  prompting-based mitigation keeps failing (a purpose-built protective model was bypassed at a
+  reported 36% rate with standard encoding tricks). We are about to add a web tool, a browser,
+  an MCP client and community-authored skills, which is four new injection surfaces at once.
+- **Consequence:** A quarantined path for untrusted content: the model that reads web pages,
+  documents, tool descriptions, MCP results and skill files does not hold tools; the
+  privileged planner sees derived, typed, provenance-tagged values rather than raw hostile
+  text; and tool calls are checked against a policy that knows which values are tainted. Our
+  `CapabilityGrant` and `PolicyEngine` are already the reference monitor this design needs —
+  we have the hard half and are missing the split.
+- **Safety boundary:** This is a mitigation, not a solution; published work is explicit that no
+  current defence is complete. Nothing here permits relaxing sandboxing, grants or approvals
+  because a defence exists.
+- **Revisit trigger:** A stronger published architecture, or measured evidence that our split
+  breaks legitimate workflows badly enough to need redesign rather than tuning.
+
+### D-038 — Memory that is not in the loop is not memory
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`.
+- **Reason:** `ContextBuilder` is constructed in `kernel/app.py` and never called by any
+  request path; `job_executor`'s chat branch passes messages straight to inference. Four
+  retrieval models totalling tens of gigabytes serve a path nothing takes. The project has
+  argued about memory *providers* for five waves without connecting the one it has.
+- **Consequence:** Retrieval enters the agent loop as an explicit, budgeted step — recalled
+  items counted against the context budget of `D-025`, carrying provenance, and visible in the
+  UI per `D-030`. Writing memory becomes an explicit tool with scope, not an invisible side
+  effect. LEANN-class index economics (reported <5% storage overhead at >90% recall@3) become
+  the trial target once the path exists, since indexing a whole machine is the actual goal.
+- **Safety boundary:** Memory scope ACLs (F-033) apply at recall time and are enforced by the
+  kernel, not by the loop. Recalled content is untrusted input and inherits `D-037`'s handling
+  exactly as web content does.
+- **Revisit trigger:** None for the requirement; the provider question stays open per `D-002`.
+
+### D-039 — Voice is a first-class modality, and realtime is the point
+
+- **Date:** 2026-08-22
+- **Status:** `adopted` direction; duplex stack `trial`.
+- **Reason:** The manifest carries a strong batch speech stack — Qwen3-ASR, Whisper turbo,
+  forced alignment, diarization, VoxCPM2 TTS — none of it reachable by an agent and none of it
+  interactive. Meanwhile the open field has full-duplex speech-to-speech at ~160 ms, mature
+  orchestration frameworks (Pipecat 1.0, LiveKit Agents), and several Apache-2.0/MIT TTS
+  models. Voice is also the modality where local is not a preference but a precondition:
+  medical, legal and personal audio cannot be sent to a subscription service at all.
+- **Consequence:** A streaming path — partial ASR, barge-in, incremental TTS — behind the
+  existing worker plane, orchestrated by the kernel rather than by a second framework, and
+  exposed as agent tools per `D-034`.
+- **Safety boundary:** Always-on audio is a surveillance surface. Capture requires an explicit,
+  revocable, visibly indicated grant with local-only retention by default; a wake word is not
+  consent to record continuously, and transcripts inherit memory scope rules.
+- **Revisit trigger:** If duplex quality on this hardware cannot beat cascaded ASR→LLM→TTS,
+  ship the cascade and keep the seam.
+
+### D-040 — Distribution is a feature: CI, signed releases, and an updater
+
+- **Date:** 2026-08-22
+- **Status:** `adopted`.
+- **Reason:** 153 tests exist and nothing runs them on a change; there is no `.github/`, no
+  tags, no changelog, no signed artifact and no update path. Tauri 2's bundler already produces
+  MSI/NSIS, DMG and deb/rpm/AppImage with a cryptographically signed updater — the packaging
+  problem is solved upstream and simply not adopted. For an audience installing on hardware we
+  have never seen, the install and update experience *is* the product's first impression.
+- **Consequence:** CI running the existing suite plus lint and link checks; versioned releases
+  with a changelog; signed installers per platform; an updater; and a documented rollback.
+- **Safety boundary:** An auto-updater is remote code execution by design. Signing and a
+  user-visible, declinable update are requirements, not options, and the updater must never be
+  able to change policy, grants or model licence scope silently.
+- **Revisit trigger:** None.
+
+### D-041 — Scale-out uses the machines the user already owns
+
+- **Date:** 2026-08-22
+- **Status:** `trial`.
+- **Reason:** The ceiling on this project is 12 GB of VRAM, and the two conventional answers
+  are "buy a subscription" (excluded by invariant 8) or "buy a bigger GPU" (excluded by our
+  audience's circumstances). A third answer exists and is measured: prima.cpp reports running
+  30–70B models across heterogeneous home clusters with 5–17× lower time-per-output-token than
+  llama.cpp, exo and dllama, and llama.cpp's own RPC backend already distributes across hosts.
+  Most of our audience owns more than one computer.
+- **Consequence:** A distributed backend behind the existing inference adapter plane, treated
+  exactly like any other engine: measured on this hardware, promoted only on evidence, and
+  never required for single-machine operation.
+- **Safety boundary:** Cluster members are a trust boundary. Weights and prompts crossing a
+  home network need authentication and encryption, and a peer must never inherit kernel
+  authority — the split-brain invariant applies to hosts as much as to harnesses.
+- **Revisit trigger:** If network latency dominates on realistic home networking, record the
+  negative result and close the option rather than leaving it aspirational.
+
+### D-042 — On-device personalisation is a differentiator we should actually build
+
+- **Date:** 2026-08-22
+- **Status:** `trial` after the tool plane and harness parity.
+- **Reason:** A subscription agent cannot train on a user's private codebase; we can, on the
+  user's own GPU, while they sleep. Unsloth reports roughly 2× faster LoRA/QLoRA at about half
+  the VRAM, and continual-adapter work (O-LoRA and successors) addresses the catastrophic
+  forgetting that makes naive sequential fine-tuning useless. This is one of the few
+  capabilities where open-source-and-local is strictly *more* capable, not merely cheaper.
+- **Consequence:** An adapter-training job kind in the existing durable job system, with
+  training data drawn only from explicitly scoped local sources, adapters versioned and
+  A/B-evaluated through the existing quality harness, and promotion gated the same way models
+  are.
+- **Safety boundary:** Training data selection is a privacy decision, not a convenience: only
+  explicitly scoped sources, never secrets, never other users' scopes, and an adapter is a
+  `SkillVersion`-class artifact that cannot alter policy. A model fine-tuned on private data
+  must never be shipped in a shared profile.
+- **Revisit trigger:** If measured gains on real tasks do not justify hours of GPU time the
+  user could spend running the model, record it and stop.
+
 ## Recommended experiment order
 
 This order adds information without destabilizing the first physical build.
+
+**Phase 0, added by wave 8 and preceding every item below:** add `LICENSE` (Apache-2.0) and
+the `pyproject.toml` licence field, a CI workflow running the existing 153 tests, a
+contribution path and a vulnerability-reporting policy (`D-033`); then register real tools in
+`ToolRegistry` and give the agent loop a dispatcher into them (`D-034`), which is what makes
+nineteen already-installed capability domains reachable at all.
 
 1. **Pre-build reliability spine.** Create the Git baseline; pin upstream/runtime inputs; add
    service identity/owned lifecycle, migrations/backups, authenticated local sessions and a
@@ -834,6 +1828,24 @@ This order adds information without destabilizing the first physical build.
    pinned Buzz extraction spike, then add real roster/job/approval/computer views.
 14. **Remote provider pool.** Add one provider at a time only after data-routing policy and
    cost/quota accounting exist.
+15. **Harness parity slice.** Wave 6's steal order, items 1-5: grammar-constrained tool
+   calls, a real edit/search tool surface, shadow-git undo, context compaction, and
+   `AGENTS.md`/`SKILL.md` loading. `D-019` places this **ahead of** items 12-14 for any
+   further work: they add reach to a loop that cannot yet edit a file.
+16. **Ecosystem slice.** MCP client (Serena first), repo map, CodeAct mode and the FastApply
+   specialist, each measured in the tournament rather than assumed.
+17. **Experience slice (wave 7).** Runs *interleaved with* 15-16, not after them: task entry
+   on every surface, SSE streaming replacing the polls, rendered markdown/diffs with per-hunk
+   review, the approval evidence card, then the TUI. `D-026`-`D-028` are prerequisites for
+   anyone but us being able to use the harness work at all.
+18. **Reach slice.** ACP server, hooks/permission modes with fast-brain pre-screening,
+   worktree-per-run, OTel GenAI export, Terminal-Bench task import.
+19. **Adoption slice.** Latency and authority legibility surfaces, accessibility and theming
+   gates, first-run hardware autotune, session resume/fork/search.
+20. **Category-of-one slice (wave 8).** GEPA/ACE prompt optimisation; the quarantined-LLM
+   injection defence **before** any web, browser, MCP or community-skill tool ships; browser
+   control; a LEANN-class personal index; realtime voice; prima.cpp scale-out; LoRA
+   personalisation; cross-platform packaging and signed releases.
 
 ## Promotion scorecard
 
@@ -872,6 +1884,14 @@ The following are **not** authorized by this research:
   boundary by itself;
 - running the Windows UI broker as a normal session-0 service or granting unrestricted
   elevated/raw-input control.
+- describing an installed checkpoint, an open worker port or a manifest entry as a capability
+  of this system before an agent can invoke it and a smoke test proves it end to end (`D-034`);
+- shipping a web, browser, MCP or community-skill tool before the quarantined-content defence
+  exists (`D-037`);
+- letting a prompt or context optimiser modify policy, authority, tool risk scopes or its own
+  evaluator (`D-036`);
+- training an adapter on data outside an explicitly scoped source, or shipping a
+  privately-fine-tuned adapter in a shared profile (`D-042`).
 
 ## Open questions
 
@@ -892,6 +1912,33 @@ The following are **not** authorized by this research:
   append-only projections over the existing event store?
 - What is the smallest `AgentLoop` required protocol that supports retries and verification
   without making every adapter emulate unsupported checkpoint/interrupt features?
+- Does grammar-constrained decoding cost more throughput on this GPU than the retries it
+  removes, and at what action-schema complexity does that flip?
+- Does a code-action loop (CodeAct) beat a JSON-action loop on *our* models, or does it only
+  pay off above some tool-use training threshold the local candidates do not meet?
+- Can a 1.5B FastApply specialist and the deep brain be co-resident within 12 GB, or does the
+  merge model have to share the fast brain's slot?
+- Is one shadow-git repository per workspace enough, or does worktree-per-run need one each?
+- Which of our internal event types map cleanly onto OpenTelemetry GenAI spans, and which
+  would be lossy enough that exporting them would mislead?
+- Does AG-UI's event vocabulary cover approval evidence, grant scope and verification
+  receipts, or does authority legibility need our own events carried alongside it?
+- What is the right default autonomy level on first run, given that the literature says
+  overreaching on day one gets a product turned off on day two?
+- Should the TUI and the desktop share one rendering model (both clients of the same event
+  stream) or diverge deliberately, and what does that cost in duplicated review UI?
+- Can an approval card render a diff *before* the edit is applied without giving the loop
+  write access first, or does evidence-first approval require a staged-write mechanism?
+- What is the right granularity for a capability tool: one `invoke_specialist` tool with a
+  model argument, or a named tool per capability that `ToolRegistry.discover` filters?
+- Can a quarantined-LLM split run on this hardware without doubling latency, given that both
+  the privileged and quarantined roles would contend for the same 12 GB?
+- Does GEPA-style optimisation transfer across models, or does every model in the registry
+  need its own optimised prompt set - and if the latter, what does that cost per model?
+- Which sandbox primitive replaces OpenShell on Linux and macOS, and does the execution
+  conformance suite pass identically on all three?
+- Is an unreachable-but-installed model worth its disk at all, or should install profiles be
+  regenerated from the reachability table rather than from the manifest?
 
 ## Primary source registry
 
@@ -941,7 +1988,136 @@ Added 2026-08-21 (wave 5):
 - [topoteretes/cognee](https://github.com/topoteretes/cognee)
 - [letta-ai/letta](https://github.com/letta-ai/letta)
 
+Added 2026-08-22 (wave 6):
+
+- [openai/codex](https://github.com/openai/codex) — Apache-2.0 CLI, `apply_patch`, sandbox backends
+- [oraios/serena](https://github.com/oraios/serena) — MIT, LSP-backed symbol tools over MCP
+- [kortix-ai/fast-apply](https://github.com/kortix-ai/fast-apply) — Apache-2.0 edit-merge models
+- [Kortix/FastApply-1.5B-v1.0](https://huggingface.co/Kortix/FastApply-1.5B-v1.0)
+- [Agent Client Protocol](https://zed.dev/acp) — Apache-2.0 editor/agent JSON-RPC standard
+- [Aider repo map with tree-sitter](https://aider.chat/2023/10/22/repomap.html)
+- [OpenHands CodeAct agent](https://github.com/OpenHands/OpenHands/blob/main/openhands/agenthub/codeact_agent/README.md)
+- [Executable Code Actions Elicit Better LLM Agents (CodeAct, ICML 2024)](https://arxiv.org/pdf/2402.01030)
+- [cline/cline checkpoints documentation](https://github.com/cline/cline/blob/main/docs/core-workflows/checkpoints.mdx)
+- [llama.cpp grammar and structured output](https://deepwiki.com/ggml-org/llama.cpp/7.3-grammar-and-structured-output)
+- [guidance-ai/llguidance](https://github.com/guidance-ai/llguidance)
+- [mlc-ai/xgrammar](https://github.com/mlc-ai/xgrammar)
+- [llama.cpp KV cache reuse with llama-server](https://github.com/ggml-org/llama.cpp/discussions/13606)
+- [Claude Code hooks reference](https://code.claude.com/docs/en/hooks) — `unverified` here; vendor documentation, not inspected
+- [OpenTelemetry AI agent observability](https://opentelemetry.io/blog/2025/ai-agent-observability/)
+- [Terminal-Bench v2.1 leaderboard](https://artificialanalysis.ai/evaluations/terminalbench-v2-1)
+- [Self-Healing Agentic Orchestrators (arXiv 2606.01416)](https://arxiv.org/pdf/2606.01416)
+
+Added 2026-08-22 (wave 7, experience):
+
+- [Zed Agent Panel documentation](https://zed.dev/docs/ai/agent-panel)
+- [Cline checkpoints and diff review](https://docs.cline.bot/core-workflows/checkpoints)
+- [opencode TUI commands and keybindings](https://deepwiki.com/anomalyco/opencode/9.2-tui-commands-and-keybindings)
+- [OpenHands multi-pane GUI and entry points](https://www.openhands.dev/blog/opencode-vs-openhands)
+- [Claude Code status line documentation](https://code.claude.com/docs/en/statusline) — `unverified`; vendor documentation, not inspected
+- [Local LLM tooling UX comparison (LM Studio, Jan, Ollama)](https://www.sitepoint.com/local-llms-are-getting-easier-the-complete-guide-2026/)
+- [Agentic UX patterns for permission, evidence and recovery](https://mantlr.com/blog/designing-for-ai-agents-ux-patterns-2026)
+- [UI design principles for AI agents, 2026](https://fuselabcreative.com/ui-design-for-ai-agents/)
+
+Added 2026-08-22 (wave 8, total capability audit):
+
+- [gepa-ai/gepa](https://github.com/gepa-ai/gepa) - reflective prompt evolution, DSPy/MCP/Terminal-Bench adapters
+- [Agentic Context Engineering (ACE)](https://arxiv.org/pdf/2510.04618)
+- [CaMeL: defeating prompt injection by design](https://arxiv.org/pdf/2505.22852)
+- [CaMeLs Can Use Computers Too - system-level security for computer-use agents](https://arxiv.org/pdf/2601.09923)
+- [Indirect prompt injection: 2026 state of the art](https://zylos.ai/research/2026-04-12-indirect-prompt-injection-defenses-agents-untrusted-content/)
+- [tldrsec/prompt-injection-defenses](https://github.com/tldrsec/prompt-injection-defenses)
+- [LEANN: a low-storage vector index for personal devices](https://arxiv.org/abs/2506.08276)
+- [prima.cpp: 30-70B inference on heterogeneous home clusters](https://arxiv.org/html/2504.08791v2)
+- [llama.cpp multi-GPU and distributed inference](https://deepwiki.com/ggml-org/llama.cpp/8.4-multi-gpu-and-distributed-inference)
+- [Unsloth LoRA/QLoRA fine-tuning documentation](https://unsloth.ai/docs/get-started/fine-tuning-llms-guide/lora-hyperparameters-guide)
+- [OpenCUA: open foundations for computer-use agents](https://opencua.xlang.ai/)
+- [Holo-1 open-weight GUI grounding models](https://nextomoro.com/holo-1/)
+- [Browser Use](https://github.com/browser-use/browser-use) - leading open browser-agent framework
+- [OmniDocBench document parsing benchmark](https://github.com/opendatalab/OmniDocBench)
+- [PaddleOCR-VL technical report](https://arxiv.org/html/2510.14528v1)
+- [LTX-2.5 open-weights video model](https://datanorth.ai/news/ltx-releases-ltx-2-5-open-weights-video-world-model)
+- [SGLang structured outputs and RadixAttention](https://docs.sglang.io/docs/advanced_features/structured_outputs)
+- [Pipecat and LiveKit open voice-agent stacks](https://techsy.io/en/blog/best-open-source-voice-agent-frameworks)
+- [Moshi full-duplex speech](https://localaimaster.com/blog/moshi-realtime-speech-guide)
+- [Tauri 2 bundler and signed updater](https://vanja.io/tauri-2-new-default/)
+
 ## Change history
+
+### 2026-08-22 - Wave 8: the total capability audit
+
+- Audited every modality the name implies - audio, speech, vision, documents, images, video,
+  music, science, browser, computer control, memory, learning, security, distribution and
+  scale-out - against the standard the user set: a person finding this should be surprised it
+  is not proprietary.
+- **Truth correction 1: the manifest is not the system.** `ToolRegistry` holds zero tools;
+  `ComputerController` holds zero controllers; seven of fourteen workers return HTTP 501;
+  SearXNG is deployed with no client; `ContextBuilder` is never called. The reachability table
+  records the result: **nineteen of twenty-one capability domains cannot be invoked by the
+  agent**, including every one of the ~290 GB of specialist weights the workstation profile
+  installs.
+- **Truth correction 2: the project is not, today, open source.** There is no `LICENSE` file
+  and no licence field, which makes the work all-rights-reserved and puts us in violation of
+  our own baseline invariant 8. There is also no CI for 153 existing tests, no release or
+  update path, no contribution path, and no Linux or Apple Silicon install path at all.
+- Added the axes waves 6 and 7 missed entirely: automatic prompt/context optimisation
+  (GEPA/ACE), on-device LoRA personalisation, agent-shaped serving (SGLang RadixAttention),
+  browser agency, open GUI-grounding models that now include Apache-2.0 options, architectural
+  prompt-injection defence (CaMeL and successors), low-storage personal indexing (LEANN),
+  document conversion and office-document *generation*, realtime duplex voice, and
+  home-cluster scale-out (prima.cpp, llama.cpp RPC).
+- Named the six capabilities a subscription product structurally cannot offer, as the honest
+  answer to "why is this open source": weights that learn your codebase, an index of your whole
+  machine, voice that never leaves the room, use of hardware you already own, provable audit,
+  and every modality under one authority domain.
+- Adopted `D-033` through `D-042`, and put two things ahead of every previously recorded
+  priority: the licence and CI (`D-033`), then the tool plane (`D-034`).
+
+### 2026-08-22 — Wave 7: the experience audit
+
+- Corrected wave 6's own omission: it compressed the entire experience layer into three table
+  rows. For a system meant to replace a daily-driver coding agent, interaction design is a
+  first-class axis, and it is where this repository is furthest behind.
+- Audited every surface against its source — `web/index.html`, all five desktop views, the
+  Tauri client and the Typer CLI — and recorded twenty findings with severities. Six are `S1`:
+  **no surface can start work**, **nothing streams anywhere**, **the approval card hides its
+  own evidence**, no diff view exists, agent output renders as plain text, and there is no
+  terminal interface at all. Accessibility measured a single attribute across the whole UI.
+- Named the best-in-class source for each experience parameter — Zed for live tool-call
+  visibility and per-hunk diff review, Cline for checkpoint navigation, Codex and opencode for
+  the terminal, Claude Code for terminal quality-of-life mechanisms, OpenHands for the
+  multi-pane workspace, LM Studio and Jan for local-model onboarding.
+- Identified the two categories where we can lead rather than match: **latency legibility**
+  (nobody designing for cloud inference has a reason to render tokens/second, VRAM pressure or
+  model-load progress) and **authority legibility** (nobody else has grants, leases, trust
+  labels and verification receipts to render at all).
+- Adopted `D-026` through `D-032`: task entry on every surface with the terminal primary,
+  streaming as a requirement, approval-as-evidence treated as a safety requirement, latency and
+  authority legibility as product theses, accessibility/theming/recovery as release gates, and
+  first-run hardware autotune.
+- Revised the framing: the harness is the binding constraint on **capability**; the experience
+  layer is the binding constraint on **adoption**.
+
+### 2026-08-22 — Wave 6: the harness capability audit, and the name
+
+- Named the system **Achilles** (`D-018`); "Local Sovereign AI" survives as the architecture
+  description and `sovereign_ai` remains the package until a deliberate rename is scheduled.
+- Audited this repository's own agent loop against Claude Code, Codex CLI and the open-source
+  harness field across roughly thirty parameters, and recorded the correction that follows:
+  **the kernel is ahead of the field and the harness is behind all of it**. The loop has three
+  tools, cannot write a file, scrapes tool calls out of prose, never compacts context and
+  cannot undo an edit.
+- Recorded, for each parameter, who already does it best and whether to steal, build or leave
+  it — plus the list of things we are already ahead on and must not rebuild.
+- Adopted seven consequences: harness parity by adoption before further model or provider work
+  (`D-019`), grammar-constrained tool calls (`D-020`), a real editing surface with shadow-git
+  undo (`D-021`), the portable `AGENTS.md`/`SKILL.md` formats under our own skill governance
+  (`D-022`), an MCP client to match the existing MCP server (`D-023`), ACP alongside AG-UI so
+  the kernel reaches editors as well as our own UI (`D-024`), and context as a kernel-arbitrated
+  resource (`D-025`).
+- Added the agentic-training axis to the model question: Qwen3-Coder-Next and Devstral 2 are
+  permissively licensed, sparse-active and explicitly trained for coding-agent scaffolds, so
+  `D-012`'s hardware principle and invariant 8 point at the same shortlist for the first time.
 
 ### 2026-08-21 — Wave 5: open-source mandate, hybrid MoE, experience plane
 
