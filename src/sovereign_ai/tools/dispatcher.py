@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
 from .base import Tool, ToolContext
 from .plan import PlanStore
 from .registry import ToolRegistry, ToolSpec
+
+#: Most a model may ask for in one turn. Small on purpose: a long batch from a weak
+#: model is usually a sign it has lost the plot, and the cost of being wrong is paid
+#: in parallel rather than caught after the first call.
+MAX_BATCH = 5
 
 
 class ToolDispatcher:
@@ -119,10 +125,55 @@ class ToolDispatcher:
                 "tool": {"type": "string", "enum": names},
                 "args": {"type": "object"},
                 "summary": {"type": "string"},
+                # A batch of independent calls in one turn. Every turn costs a full
+                # generation at 6-52 tok/s, so collapsing three reads into one reply
+                # removes two generations outright -- ForgeCode's `join_all()`, which
+                # `knowledge/harness-research.md` singles out as the cheapest available
+                # multiplier on wall time.
+                "batch": {
+                    "type": "array",
+                    "maxItems": MAX_BATCH,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {"type": "string", "enum": names},
+                            "args": {"type": "object"},
+                        },
+                        "required": ["tool"],
+                    },
+                },
             },
-            "required": ["tool"],
             "additionalProperties": False,
         }
+
+    def is_mutating(self, name: Any) -> bool:
+        tool = self._tools.get(name) if isinstance(name, str) else None
+        return bool(tool and tool.spec.mutating)
+
+    async def invoke_batch(
+        self, calls: list[dict[str, Any]], ctx: ToolContext
+    ) -> list[dict[str, Any]]:
+        """Run several calls from one turn.
+
+        **Concurrently only when every call is non-mutating.** Two writes racing on the
+        same workspace is a correctness hazard, and it also scrambles the order of the
+        audit events and shadow-git checkpoints that are supposed to reconstruct what
+        happened. A batch containing any mutating tool therefore runs sequentially, in the
+        order the model asked for -- which still saves the generations, which is where the
+        time actually goes.
+        """
+        if not calls:
+            return []
+        if any(self.is_mutating(call.get("tool")) for call in calls):
+            results = []
+            for call in calls:
+                results.append(await self.invoke(call.get("tool"), call.get("args"), ctx))
+            return results
+        return list(
+            await asyncio.gather(
+                *(self.invoke(call.get("tool"), call.get("args"), ctx) for call in calls)
+            )
+        )
 
     async def invoke(
         self, name: Any, args: dict[str, Any] | None, ctx: ToolContext

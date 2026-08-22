@@ -3193,6 +3193,46 @@ a different experiment.
   compaction never triggers, so they cannot show this working or failing. A long-horizon task
   is the honest way to measure it and does not exist in the set yet.
 
+### F-059 — Added: parallel tool dispatch — several calls in one turn
+
+- **Severity:** `medium` (wall-time multiplier) · **Status:** `fixed`.
+- **Motivating problem:** the loop executed exactly **one action per turn**, and on this
+  hardware a turn is a full generation at 6-52 tok/s. Three reads therefore cost three
+  generations. `knowledge/harness-research.md` singles out ForgeCode's `join_all()` as the
+  cheapest available multiplier precisely because most harnesses have this shape and the fix
+  composes with everything else.
+- **Fix:**
+  - The action schema gains an optional `batch` array (`maxItems` = 5), so a
+    constrained-decoding model can ask for several calls in one reply. The single-action form
+    is untouched — this is additive, and a model that only ever emits one action is unaffected.
+  - `ToolDispatcher.invoke_batch()` decides concurrency, and the rule is the interesting part:
+    **concurrent only when every call in the batch is non-mutating.** Two writes racing on one
+    workspace is a correctness hazard, and it would also scramble the order of the audit events
+    and shadow-git checkpoints that exist to reconstruct what happened. A batch containing any
+    mutating tool runs **sequentially, in the order asked for** — which still removes the
+    generations, and the generations are where the time actually goes.
+  - `MAX_BATCH = 5`, small on purpose: a long batch from a weak model is usually a sign it has
+    lost the plot, and the cost of being wrong is paid in parallel rather than caught after the
+    first call.
+  - The audit trail is unchanged in shape: **one `agent.step.tool_call` event per call**,
+    flagged `batched`, exactly as if they had arrived separately. Checkpointing still runs per
+    mutating call.
+- **Verification:** 6 new tests, 218 passing overall, ruff clean. Two carry the weight:
+  - `test_read_only_batches_run_concurrently` registers three tools that each sleep 300 ms and
+    asserts the batch completes in under 700 ms — i.e. that they genuinely overlap rather than
+    serialise.
+  - `test_a_batch_containing_a_mutation_runs_in_order` records start/end markers and asserts
+    strict `start,end,start,end` interleaving, so the safety rule is proven rather than
+    assumed.
+- **One real bug found by the tests:** `_parse_action` still required a `"tool"` key, so a
+  batch-only reply was silently classified **unparsable** — the feature would have looked like
+  a model failure rather than a parser gap. Fixed, and the schema contract test updated to
+  record that `tool` is no longer globally required.
+- **Not yet measured against task outcomes.** Whether a 9B model *chooses* to batch is a
+  separate question from whether batching works, and the tournament's tasks are mostly
+  single-read. Measuring the model's willingness needs a task that rewards it, which does not
+  exist in the set yet.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

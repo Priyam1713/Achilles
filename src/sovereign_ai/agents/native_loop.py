@@ -12,7 +12,7 @@ from sovereign_ai.kernel.events import EventStore
 from sovereign_ai.kernel.shadow_git import ShadowRepository
 from sovereign_ai.kernel.types import CapabilityRequest, RoutingMode
 from sovereign_ai.tools.base import ToolContext
-from sovereign_ai.tools.dispatcher import ToolDispatcher
+from sovereign_ai.tools.dispatcher import MAX_BATCH, ToolDispatcher
 from sovereign_ai.tools.standard import build_file_tools
 
 from .base import AgentLoop, AgentStep
@@ -30,6 +30,10 @@ or after it.
 Available tools:
 {tools}
   {{"tool": "done", "summary": "<what you found or accomplished>"}}
+
+To do several independent things at once (much faster -- every turn costs a full
+generation), send them together instead of one at a time:
+  {{"batch": [{{"tool": "read_file", "args": {{...}}}}, {{"tool": "grep", "args": {{...}}}}]}}
 
 Rules:
 - Mutating actions (writing, editing, deleting, generating media, storing memory) may be
@@ -166,6 +170,10 @@ class NativeAgentLoop(AgentLoop):
             )
             return AgentStep(kind="done", payload={"summary": summary}, done=True)
 
+        batch = action.get("batch")
+        if isinstance(batch, list) and batch:
+            return await self._execute_batch(batch, content, state, history, stream_id)
+
         observation = await self._execute_tool(tool, action.get("args") or {}, state)
         history.append({"assistant": content, "action": action, "observation": observation})
         self.events.append(
@@ -174,6 +182,50 @@ class NativeAgentLoop(AgentLoop):
             trust="untrusted_model_output",
         )
         return AgentStep(kind="observation", payload={"tool": tool, "observation": observation}, done=False)
+
+    async def _execute_batch(
+        self,
+        batch: list[dict[str, Any]],
+        content: str,
+        state: dict[str, Any],
+        history: list[dict[str, Any]],
+        stream_id: str,
+    ) -> AgentStep:
+        """Several tool calls from one model turn.
+
+        The saving is generations, not execution: three reads issued together cost one turn
+        instead of three, and on this hardware a turn is seconds. Whether they actually run
+        concurrently is the dispatcher's decision -- read-only batches do, anything mutating
+        runs in order -- so this method only has to keep the audit trail honest, which means
+        **one event per call**, exactly as if they had arrived separately.
+        """
+        calls = [call for call in batch if isinstance(call, dict)][:MAX_BATCH]
+        ctx = self._tool_context(state)
+        observations = await self.tools.invoke_batch(calls, ctx)
+
+        for call, observation in zip(calls, observations, strict=False):
+            self._checkpoint_if_mutating(call.get("tool"), observation, state)
+            self.events.append(
+                stream_id, "agent.step.tool_call",
+                {
+                    "tool": call.get("tool"),
+                    "args": call.get("args"),
+                    "observation": observation,
+                    "batched": True,
+                },
+                trust="untrusted_model_output",
+            )
+
+        results = [
+            {"tool": call.get("tool"), "observation": observation}
+            for call, observation in zip(calls, observations, strict=False)
+        ]
+        history.append({"assistant": content, "action": {"batch": calls}, "observation": results})
+        return AgentStep(
+            kind="observation",
+            payload={"tool": f"batch({len(results)})", "observation": {"batch": results}},
+            done=False,
+        )
 
     @staticmethod
     def _payload_may_be_at_fault(exc: Exception) -> bool:
@@ -361,7 +413,11 @@ class NativeAgentLoop(AgentLoop):
             parsed = json.loads(content[start : end + 1])
         except json.JSONDecodeError:
             return None
-        return parsed if isinstance(parsed, dict) and "tool" in parsed else None
+        if not isinstance(parsed, dict):
+            return None
+        # Either shape is a valid action: one call, or a batch of them. Requiring
+        # "tool" would silently reject every batch as unparsable.
+        return parsed if ("tool" in parsed or "batch" in parsed) else None
 
     async def _execute_tool(
         self, tool: Any, args: dict[str, Any], state: dict[str, Any]
@@ -372,16 +428,19 @@ class NativeAgentLoop(AgentLoop):
         hand it to the dispatcher, which owns policy-gated execution. Adding a capability
         is therefore a registration, not a change to this file (D-034).
         """
-        ctx = ToolContext(
+        observation = await self.tools.invoke(tool, args, self._tool_context(state))
+        self._checkpoint_if_mutating(tool, observation, state)
+        return observation
+
+    def _tool_context(self, state: dict[str, Any]) -> ToolContext:
+        """The identity and scope one turn's tool calls act under."""
+        return ToolContext(
             workspace=state.get("workspace"),
             approved=bool(state.get("approved", False)),
             subject_id=state.get("agent_profile_id"),
             workspace_lease_id=state.get("workspace_lease_id"),
             run_id=state.get("run_id"),
         )
-        observation = await self.tools.invoke(tool, args, ctx)
-        self._checkpoint_if_mutating(tool, observation, state)
-        return observation
 
     def _checkpoint_if_mutating(
         self, tool: Any, observation: dict[str, Any], state: dict[str, Any]

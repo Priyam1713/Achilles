@@ -563,7 +563,7 @@ Effort is rough and assumes the kernel stays as-is.
 | 2 | Run the harness tournament for real | ours | **done for four loops 2026-08-23** (F-054, F-055, F-056) | native **4/5 in 81 s**, **pi 4/5 in 195 s** (fastest per-task of anything measured), Goose **4/5 in 205 s**, OpenCode **1/5 in 1294 s** (four timeouts). The ranking function predicted both ends of the field: lightest context fastest, heaviest disqualified. Pi needed a different bridge — it has no MCP, so its adapter drives an in-process extension against a new `POST /tools/{name}` HTTP surface |
 | 3 | ~~Summarising `read` + ripgrep `grep`~~ | oh-my-pi | **done 2026-08-23** (`docs/FIXES.md` F-057) | Measured **74.8-91.5% smaller observations** on this repo's own files, with both grep engines asserted to return identical matches |
 | 4 | ~~Focus Chain (re-injected todo list)~~ | Cline | **done 2026-08-23** (`docs/FIXES.md` F-058) | Restated on a cadence *and* unconditionally after any elision, from a model-written plan; costs no generation |
-| 5 | Parallel tool dispatch | ForgeCode | ~2 days | Direct multiplier on wall time |
+| 5 | ~~Parallel tool dispatch~~ | ForgeCode | **done 2026-08-23** (`docs/FIXES.md` F-059) | Batch of up to 5; concurrent only when every call is non-mutating, so audit order and write safety are preserved |
 | 6 | Hash-anchored edits, per-model edit format | oh-my-pi + Aider | ~3 days | Biggest output-token saving; needs care to keep the refuse-don't-corrupt property |
 | 7 | Advisor role on the fast brain | oh-my-pi | ~3 days | Oversight without context tax; first concrete step toward `D-037` |
 | 8 | Cumulative diff sandbox | Plandex | ~1 week | Solves approval evidence + diff view together; may amend `D-021`/`D-028` |

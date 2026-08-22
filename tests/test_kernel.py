@@ -3688,8 +3688,11 @@ def test_action_schema_is_derived_from_the_registered_tools(tmp_path, monkeypatc
     schema = k.tool_dispatcher.action_schema()
     names = set(schema["properties"]["tool"]["enum"])
     assert names == set(k.tool_dispatcher.names()) | {"done"}
-    assert schema["required"] == ["tool"]
     assert schema["additionalProperties"] is False
+    # `tool` is no longer globally required: a batch action carries `batch` instead, and
+    # requiring `tool` would make every batch structurally invalid (F-059).
+    assert "required" not in schema
+    assert "batch" in schema["properties"]
 
 
 def test_loop_constrains_decoding_with_the_action_schema(tmp_path, monkeypatch):
@@ -4744,3 +4747,177 @@ def test_the_recorded_plan_is_restated_with_the_objective(tmp_path, monkeypatch)
     joined = " ".join(m["content"] for m in loop._build_messages(state))
     assert "[x] read config" in joined
     assert "[>] report" in joined
+
+
+# ---------------------------------------------------------------------------------------
+# Parallel tool dispatch (knowledge/harness-research.md adoption item 5, from ForgeCode).
+# Every turn costs a full generation at 6-52 tok/s, so three reads issued together remove
+# two generations outright. The safety property is the interesting half: concurrency is
+# allowed only where it cannot reorder mutations or their audit trail.
+# ---------------------------------------------------------------------------------------
+
+
+def test_action_schema_offers_a_bounded_batch(tmp_path, monkeypatch):
+    from sovereign_ai.tools.dispatcher import MAX_BATCH
+
+    k = kernel(tmp_path, monkeypatch)
+    schema = k.tool_dispatcher.action_schema()
+    batch = schema["properties"]["batch"]
+    assert batch["type"] == "array"
+    assert batch["maxItems"] == MAX_BATCH
+    assert set(batch["items"]["properties"]["tool"]["enum"]) == set(k.tool_dispatcher.names()) | {"done"}
+
+
+def test_read_only_batches_run_concurrently(tmp_path, monkeypatch):
+    """The whole point: independent reads must not be serialised."""
+    import time
+
+    from sovereign_ai.tools.base import ToolContext
+
+    k = kernel(tmp_path, monkeypatch)
+
+    class _SlowTool:
+        def __init__(self, name):
+            from sovereign_ai.tools.registry import ToolSpec
+
+            self.spec = ToolSpec(id=name, description="slow", capabilities=[], mutating=False)
+
+        async def run(self, args, ctx):
+            await asyncio.sleep(0.3)
+            return {"ok": self.spec.id}
+
+    for name in ("slow_a", "slow_b", "slow_c"):
+        k.tool_dispatcher.register(_SlowTool(name))
+
+    calls = [{"tool": "slow_a"}, {"tool": "slow_b"}, {"tool": "slow_c"}]
+    started = time.perf_counter()
+    results = asyncio.run(k.tool_dispatcher.invoke_batch(calls, ToolContext()))
+    elapsed = time.perf_counter() - started
+
+    assert [r["ok"] for r in results] == ["slow_a", "slow_b", "slow_c"]
+    assert elapsed < 0.7, f"three 0.3s reads took {elapsed:.2f}s -- they were serialised"
+
+
+def test_a_batch_containing_a_mutation_runs_in_order(tmp_path, monkeypatch):
+    """Two writes racing on one workspace is a correctness hazard, and it also scrambles
+    the order of the audit events and checkpoints meant to reconstruct what happened."""
+    from sovereign_ai.tools.base import ToolContext
+    from sovereign_ai.tools.registry import ToolSpec
+
+    k = kernel(tmp_path, monkeypatch)
+    order: list[str] = []
+
+    class _Recorder:
+        def __init__(self, name, mutating):
+            self.spec = ToolSpec(id=name, description="x", capabilities=[], mutating=mutating)
+
+        async def run(self, args, ctx):
+            order.append(f"start:{self.spec.id}")
+            await asyncio.sleep(0.05)
+            order.append(f"end:{self.spec.id}")
+            return {"ok": self.spec.id}
+
+    k.tool_dispatcher.register(_Recorder("reader", False))
+    k.tool_dispatcher.register(_Recorder("writer", True))
+
+    asyncio.run(
+        k.tool_dispatcher.invoke_batch(
+            [{"tool": "reader"}, {"tool": "writer"}], ToolContext()
+        )
+    )
+    # Strict interleaving would show start:reader, start:writer, ... if run concurrently.
+    assert order == ["start:reader", "end:reader", "start:writer", "end:writer"]
+
+
+def test_loop_executes_a_batch_and_records_one_event_per_call(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    (workspace / "items").mkdir(parents=True)
+    (workspace / "a.txt").write_text("alpha", encoding="utf-8")
+    (workspace / "b.txt").write_text("beta", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+
+    action = json.dumps(
+        {
+            "batch": [
+                {"tool": "read_file", "args": {"path": (workspace / "a.txt").as_posix()}},
+                {"tool": "read_file", "args": {"path": (workspace / "b.txt").as_posix()}},
+                {"tool": "list_directory", "args": {"path": workspace.as_posix()}},
+            ]
+        }
+    )
+    loop = NativeAgentLoop(
+        _RecordingInference([action]), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher,
+    )
+    step = asyncio.run(
+        loop.next_step({"run_id": "batch-1", "task": "read both", "workspace": str(workspace)})
+    )
+
+    results = step.payload["observation"]["batch"]
+    assert [r["tool"] for r in results] == ["read_file", "read_file", "list_directory"]
+    assert results[0]["observation"]["content"] == "alpha"
+    assert results[1]["observation"]["content"] == "beta"
+
+    # The audit trail must look exactly as if the calls had arrived separately.
+    events = [e for e in k.events.read_stream("agent-loop:batch-1")]
+    tool_calls = [e for e in events if e["event_type"] == "agent.step.tool_call"]
+    assert len(tool_calls) == 3
+    assert all(e["payload"]["batched"] is True for e in tool_calls)
+    assert [e["payload"]["tool"] for e in tool_calls] == [
+        "read_file",
+        "read_file",
+        "list_directory",
+    ]
+
+
+def test_a_batch_is_capped(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+    from sovereign_ai.tools.dispatcher import MAX_BATCH
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("alpha", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+
+    action = json.dumps(
+        {
+            "batch": [
+                {"tool": "read_file", "args": {"path": (workspace / "a.txt").as_posix()}}
+                for _ in range(MAX_BATCH + 4)
+            ]
+        }
+    )
+    loop = NativeAgentLoop(
+        _RecordingInference([action]), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher,
+    )
+    step = asyncio.run(
+        loop.next_step({"run_id": "batch-2", "task": "spam", "workspace": str(workspace)})
+    )
+    assert len(step.payload["observation"]["batch"]) == MAX_BATCH
+
+
+def test_single_actions_still_work_unchanged(tmp_path, monkeypatch):
+    """The batch form is additive: a model that only ever emits one action is unaffected."""
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("alpha", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+
+    action = json.dumps({"tool": "read_file", "args": {"path": (workspace / "a.txt").as_posix()}})
+    loop = NativeAgentLoop(
+        _RecordingInference([action]), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher,
+    )
+    step = asyncio.run(
+        loop.next_step({"run_id": "single-1", "task": "read", "workspace": str(workspace)})
+    )
+    assert step.payload["tool"] == "read_file"
+    assert step.payload["observation"]["content"] == "alpha"
