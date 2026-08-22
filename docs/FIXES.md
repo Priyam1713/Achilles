@@ -3276,6 +3276,45 @@ a different experiment.
   ruff clean), and the three new post-conditions are read-only so they pass with no execution
   backend — which is the point: they measure context handling, not execution.
 
+### F-061 — Added: the advisor role — a second model that can object, never approve
+
+- **Severity:** `medium` (oversight) · **Status:** `fixed`; **off by default**, deliberately.
+- **Motivating problem:** `knowledge/harness-research.md` adoption item 7, which is also
+  research wave 7's "classifier pre-screen" and the first concrete step toward `D-037`. The
+  observation behind all three: this machine runs a **49.57 tok/s fast brain that sits idle
+  while the 6.36 tok/s deep brain thinks**. A review from the cheap model is nearly free
+  *relative to the expensive one*.
+- **Fix:** `agents/advisor.py` — before an action executes, a second model is shown the task
+  and the proposed action and returns `{"severity": "none"|"note"|"stop", "concern": "..."}`.
+  A `stop` becomes a refused observation the planner must reason about; a `note` is recorded
+  as an event; `none` costs nothing but the call.
+- **The property that matters is negative, and is tested as such:** the advisor **can add an
+  objection and can never grant permission**. It is a language model, so its output is
+  untrusted exactly like the planner's. It cannot widen a `CapabilityGrant`, cannot substitute
+  for `PolicyEngine`, and an action policy refuses stays refused however enthusiastic the
+  advisor was. Friction in one direction only.
+- **Three failure modes, each decided deliberately rather than by accident:**
+  - **Unparsable review → `none`.** Treating garbage as a stop would let a confused reviewer
+    halt work it never actually assessed.
+  - **Unknown severity → `none`**, for the same reason.
+  - **Advisor backend down → `none` by default.** A reviewer that holds no authority must not
+    become an outage for the thing it reviews. An operator who wants fail-closed review sets
+    `timeout_severity="stop"` explicitly.
+- **Why it is off by default, stated as a cost not a preference:** it spends one extra
+  generation per turn. Against the deep brain that is cheap; when planner and advisor are the
+  *same* fast model it is roughly a doubling. Enabling it is a decision about which brains are
+  in play, not a free win — which is also why the tournament, which runs everything on the fast
+  brain, is the wrong instrument to measure its value.
+- **Verification:** 5 new tests, 222 passing overall, ruff clean. Two carry the weight:
+  `test_advisor_can_stop_an_action_and_the_planner_is_told_why` issues a real write grant, has
+  the advisor object, and asserts the file on disk is **unchanged** — the stop is real, not
+  cosmetic. `test_advisor_cannot_authorise_what_policy_refuses` pairs a maximally permissive
+  advisor with an ungranted subject and asserts the write is still denied.
+- **Not measured against outcomes, and the reason is structural:** its value is oversight, not
+  speed, and the tournament scores task completion. Measuring it needs an adversarial task set
+  — actions that *should* be stopped — which does not exist. Until then this is a mechanism
+  with proven semantics and unproven usefulness, and is recorded that way.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

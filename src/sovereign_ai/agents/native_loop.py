@@ -15,6 +15,7 @@ from sovereign_ai.tools.base import ToolContext
 from sovereign_ai.tools.dispatcher import MAX_BATCH, ToolDispatcher
 from sovereign_ai.tools.standard import build_file_tools
 
+from .advisor import Advisor
 from .base import AgentLoop, AgentStep
 from .context import (
     ContextBudget,
@@ -77,6 +78,7 @@ class NativeAgentLoop(AgentLoop):
         checkpoint_root: str | Path | None = None,
         budget: ContextBudget | None = None,
         focus_every: int = 4,
+        advisor: Advisor | None = None,
     ):
         self.inference = inference
         self.execution = execution
@@ -100,6 +102,10 @@ class NativeAgentLoop(AgentLoop):
         # re-injects every 6 messages; 4 here because our window is 16K, not 200K, so drift
         # arrives sooner.
         self.focus_every = focus_every
+        # Off unless a caller supplies one. It buys a second opinion for the price of a
+        # generation, which is cheap against the deep brain and roughly a doubling when
+        # planner and advisor are the same fast model (F-061).
+        self.advisor = advisor
 
     async def next_step(self, state: dict[str, Any]) -> AgentStep:
         state.setdefault("history", [])
@@ -169,6 +175,29 @@ class NativeAgentLoop(AgentLoop):
                 trust="untrusted_model_output",
             )
             return AgentStep(kind="done", payload={"summary": summary}, done=True)
+
+        if self.advisor is not None:
+            verdict = await self.advisor.review(str(state.get("task", "")), action)
+            if verdict.severity != "none":
+                self.events.append(
+                    stream_id, "agent.advisor.verdict",
+                    {"severity": verdict.severity, "concern": verdict.concern, "action": action},
+                    trust="untrusted_model_output",
+                )
+            if verdict.blocks:
+                # An objection, not an authorisation. The action does not run, and the
+                # planner is told why so it can choose differently -- but nothing here can
+                # ever let an action through that policy would refuse.
+                observation = {
+                    "error": f"stopped by advisor: {verdict.concern}",
+                    "advisor_stopped": True,
+                }
+                history.append({"assistant": content, "action": action, "observation": observation})
+                return AgentStep(
+                    kind="observation",
+                    payload={"tool": tool, "observation": observation},
+                    done=False,
+                )
 
         batch = action.get("batch")
         if isinstance(batch, list) and batch:

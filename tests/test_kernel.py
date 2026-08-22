@@ -4943,3 +4943,156 @@ def test_single_actions_still_work_unchanged(tmp_path, monkeypatch):
     )
     assert step.payload["tool"] == "read_file"
     assert step.payload["observation"]["content"] == "alpha"
+
+
+# ---------------------------------------------------------------------------------------
+# The advisor role (knowledge/harness-research.md adoption item 7, from oh-my-pi; also
+# research wave 7's "classifier pre-screen"). The property that matters most is negative:
+# it can add an objection and can never grant permission.
+# ---------------------------------------------------------------------------------------
+
+
+class _ScriptedAdvisorInference:
+    def __init__(self, reply: str, fail: bool = False):
+        self.reply = reply
+        self.fail = fail
+        self.calls = 0
+
+    async def chat(self, request, messages, model_overrides=None):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("advisor backend down")
+        return {"result": {"choices": [{"message": {"content": self.reply}}]}}
+
+
+def _advisor(reply, fail=False, **kwargs):
+    from sovereign_ai.agents.advisor import Advisor
+
+    return Advisor(_ScriptedAdvisorInference(reply, fail), **kwargs)
+
+
+def test_advisor_parses_a_verdict_and_defaults_safely():
+    from sovereign_ai.agents.advisor import Advisor
+
+    ok = asyncio.run(
+        _advisor('{"severity": "stop", "concern": "deletes the only copy"}').review("t", {})
+    )
+    assert ok.severity == "stop" and ok.blocks is True
+    assert "only copy" in ok.concern
+
+    # An unparsable review is not an objection: treating garbage as a stop would let a
+    # confused reviewer halt work it never actually assessed.
+    junk = asyncio.run(_advisor("I think maybe it is fine?").review("t", {}))
+    assert junk.severity == "none" and junk.blocks is False
+
+    # An unknown severity degrades to "none" rather than to a block.
+    weird = asyncio.run(_advisor('{"severity": "catastrophe"}').review("t", {}))
+    assert weird.severity == "none"
+    assert Advisor._parse("no json here") is None
+
+
+def test_a_broken_advisor_does_not_become_an_outage():
+    """It holds no authority, so losing it must not stop the work it reviews."""
+    verdict = asyncio.run(_advisor("", fail=True).review("t", {}))
+    assert verdict.blocks is False
+    assert "unavailable" in verdict.concern
+
+    # An operator who wants fail-closed review has to ask for it explicitly.
+    strict = asyncio.run(_advisor("", fail=True, timeout_severity="stop").review("t", {}))
+    assert strict.blocks is True
+
+
+def test_advisor_can_stop_an_action_and_the_planner_is_told_why(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "keep.txt").write_text("precious", encoding="utf-8")
+    k.workspaces.add(workspace, writable=True)
+    k.capability_grants.issue("agent-w", "write", "workspace", "operator", ttl_seconds=60)
+
+    action = json.dumps(
+        {"tool": "write_file", "args": {"path": (workspace / "keep.txt").as_posix(), "content": ""}}
+    )
+    loop = NativeAgentLoop(
+        _RecordingInference([action]), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher,
+        advisor=_advisor('{"severity": "stop", "concern": "this empties a file you were not asked to change"}'),
+    )
+    step = asyncio.run(
+        loop.next_step(
+            {
+                "run_id": "adv-1",
+                "task": "read keep.txt",
+                "workspace": str(workspace),
+                "agent_profile_id": "agent-w",
+            }
+        )
+    )
+
+    assert step.payload["observation"]["advisor_stopped"] is True
+    assert "empties a file" in step.payload["observation"]["error"]
+    # The action really did not run, even though the grant would have allowed it.
+    assert (workspace / "keep.txt").read_text(encoding="utf-8") == "precious"
+    events = [e["event_type"] for e in k.events.read_stream("agent-loop:adv-1")]
+    assert "agent.advisor.verdict" in events
+
+
+def test_advisor_cannot_authorise_what_policy_refuses(tmp_path, monkeypatch):
+    """The one property that must never regress: it adds friction in one direction only.
+    An enthusiastic advisor does not turn a denial into a permission."""
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    target = workspace / "new.txt"
+
+    action = json.dumps(
+        {"tool": "write_file", "args": {"path": target.as_posix(), "content": "x"}}
+    )
+    loop = NativeAgentLoop(
+        _RecordingInference([action]), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher,
+        # No grant issued for this subject, and the advisor is maximally permissive.
+        advisor=_advisor('{"severity": "none", "concern": "looks completely fine to me"}'),
+    )
+    step = asyncio.run(
+        loop.next_step(
+            {
+                "run_id": "adv-2",
+                "task": "write a file",
+                "workspace": str(workspace),
+                "agent_profile_id": "ungranted-subject",
+            }
+        )
+    )
+    assert step.payload["observation"]["denied"] is True
+    assert not target.exists()
+
+
+def test_a_quiet_verdict_costs_nothing_but_the_call(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("alpha", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+
+    advisor = _advisor('{"severity": "none", "concern": ""}')
+    action = json.dumps({"tool": "read_file", "args": {"path": (workspace / "a.txt").as_posix()}})
+    loop = NativeAgentLoop(
+        _RecordingInference([action]), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher, advisor=advisor,
+    )
+    step = asyncio.run(
+        loop.next_step({"run_id": "adv-3", "task": "read it", "workspace": str(workspace)})
+    )
+    assert step.payload["observation"]["content"] == "alpha"
+    assert advisor.inference.calls == 1
+    # A quiet verdict is not worth an event; only a note or a stop is.
+    events = [e["event_type"] for e in k.events.read_stream("agent-loop:adv-3")]
+    assert "agent.advisor.verdict" not in events
