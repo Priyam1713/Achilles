@@ -20,6 +20,7 @@ from .files import (
     ReadFileTool,
     WriteFileTool,
 )
+from .plan import UpdatePlanTool
 from .registry import ToolRegistry
 from .shell import RunCommandTool
 
@@ -37,6 +38,10 @@ def build_file_tools(
     three-tool loop wave 6 audited.
     """
     dispatcher = ToolDispatcher(registry)
+    # Registered first and unconditionally: keeping a plan needs no execution backend and
+    # no grant, and a loop that cannot restate its objective after compaction is the
+    # failure this tool exists to prevent.
+    dispatcher.register(UpdatePlanTool(dispatcher.plans))
     dispatcher.register(ReadFileTool(workspaces, execution))
     dispatcher.register(ListDirectoryTool(workspaces, execution))
     dispatcher.register(GlobTool(workspaces, execution))

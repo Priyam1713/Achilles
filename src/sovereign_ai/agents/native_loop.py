@@ -72,6 +72,7 @@ class NativeAgentLoop(AgentLoop):
         constrain_output: bool = True,
         checkpoint_root: str | Path | None = None,
         budget: ContextBudget | None = None,
+        focus_every: int = 4,
     ):
         self.inference = inference
         self.execution = execution
@@ -91,6 +92,10 @@ class NativeAgentLoop(AgentLoop):
         self.checkpoint_root = Path(checkpoint_root) if checkpoint_root else None
         self._shadows: dict[str, ShadowRepository] = {}
         self.budget = budget or ContextBudget()
+        # How often the objective (and the plan, if one exists) is restated. Cline
+        # re-injects every 6 messages; 4 here because our window is 16K, not 200K, so drift
+        # arrives sooner.
+        self.focus_every = focus_every
 
     async def next_step(self, state: dict[str, Any]) -> AgentStep:
         state.setdefault("history", [])
@@ -264,6 +269,33 @@ class NativeAgentLoop(AgentLoop):
             "--- end AGENTS.md ---\n"
         )
 
+    def _focus_message(
+        self, state: dict[str, Any], turns: int, compacted: bool
+    ) -> str | None:
+        """Restate the objective, and the plan if the agent recorded one.
+
+        Adapted from Cline's Focus Chain. The trigger matters as much as the content: this
+        fires on a cadence **and** unconditionally on any turn where history was elided,
+        because that is the exact moment a run can lose the thread while still having room
+        to keep acting. Costs no generation -- it is text the loop already has.
+        """
+        if turns == 0:
+            return None
+        due = compacted or (self.focus_every > 0 and turns % self.focus_every == 0)
+        if not due:
+            return None
+        plan = self.tools.plans.render(state.get("run_id")) if self.tools else ""
+        lines = [f"Reminder of the objective: {state.get('task', '')}"]
+        if plan:
+            lines.append("Your current plan:")
+            lines.append(plan)
+        if compacted:
+            lines.append(
+                "Earlier steps were elided to fit the context budget. Do not repeat work "
+                "the observations above already show as done."
+            )
+        return "\n".join(lines)
+
     def _build_messages(self, state: dict[str, Any]) -> list[dict[str, Any]]:
         system = SYSTEM_PROMPT.format(
             workspace=state.get("workspace") or "(none registered)",
@@ -285,6 +317,10 @@ class NativeAgentLoop(AgentLoop):
                 trust="execution_result",
             )
             state["_compaction_noted"] = elision["elided_turns"]
+
+        focus = self._focus_message(state, len(history), elision is not None)
+        if focus:
+            messages.append({"role": "user", "content": focus})
 
         for index, turn in enumerate(rendered):
             if elision is not None and index == self.budget.keep_leading_turns:

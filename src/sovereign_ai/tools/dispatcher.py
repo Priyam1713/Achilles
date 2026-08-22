@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from .base import Tool, ToolContext
+from .plan import PlanStore
 from .registry import ToolRegistry, ToolSpec
 
 
@@ -24,6 +25,11 @@ class ToolDispatcher:
     def __init__(self, registry: ToolRegistry | None = None):
         self.registry = registry or ToolRegistry()
         self._tools: dict[str, Tool] = {}
+        # Working state for in-flight runs, shared between the `update_plan` tool that
+        # writes it and the loop that re-injects it (`knowledge/harness-research.md`,
+        # Cline's Focus Chain). It lives here so both halves get the same instance without
+        # threading a second object through every constructor.
+        self.plans = PlanStore()
 
     def register(self, tool: Tool) -> None:
         self.registry.register(tool.spec)

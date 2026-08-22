@@ -3155,6 +3155,44 @@ a different experiment.
   and the tournament tasks all use small files, so it would mostly measure the ripgrep change.
   A task set with a large file is the honest way to measure this, and does not exist yet.
 
+### F-058 — Added: Focus Chain — the objective is restated after compaction
+
+- **Severity:** `medium` · **Status:** `fixed`.
+- **Motivating problem:** F-049 gave the loop deterministic history elision so a long task
+  fits a 16 K window. It never restated the objective afterwards, so a run could **forget what
+  it was doing while still having room to keep doing something** — the exact failure Cline's
+  Focus Chain describes, and which `knowledge/harness-research.md` listed as adoption item 4
+  precisely because it is the cheapest fix available for it.
+- **Fix:**
+  - `tools/plan.py` — an `update_plan` tool and a per-run `PlanStore`. The plan is **written
+    by the model, not generated for it**: Cline spends a turn producing a todo list up front,
+    and at 6-52 tok/s that is a whole generation before any work happens. As a tool, an agent
+    that wants a plan pays for one and an agent that does not keeps its turns.
+  - It accepts **both shapes a small model actually produces** — a bare list of strings, or
+    objects with their own status — because rejecting either would spend a turn teaching it a
+    schema.
+  - `NativeAgentLoop._focus_message()` restates the objective, and the plan if one exists, on
+    a cadence (default every 4 turns; Cline uses 6, but our window is 16 K rather than 200 K so
+    drift arrives sooner) **and unconditionally on any turn where history was elided**. The
+    second trigger is the important one: compaction is the moment the thread is lost, and the
+    message then also says explicitly not to repeat work the surviving observations show as
+    done.
+  - Costs **no generation**: it is text the loop already holds.
+  - `PlanStore` is in-memory and process-local on purpose. A plan is working state for one
+    run; what actually happened is already in the append-only journal, and persisting a
+    second, model-authored account of it would create a source of truth that can disagree
+    with the first.
+- **Verification:** 6 new tests. Cadence firing at the right turn and not before; unconditional
+  firing on compaction with the cadence *disabled*, so the two triggers are proven independent;
+  per-run scoping; both input shapes; and that `update_plan` needs no grant and no execution
+  backend — a loop that cannot restate its objective must not be the thing policy refuses.
+- **Caught by our own anti-drift test:** adding a tool to the plane and not to the MCP bridge
+  failed `test_mcp_bridge_exposes_the_whole_tool_plane` immediately, which is exactly what that
+  test was added for in F-054. `update_plan` is now bridged too. 212 passing, ruff clean.
+- **Not yet measured against task outcomes.** The tournament's five tasks are short enough that
+  compaction never triggers, so they cannot show this working or failing. A long-horizon task
+  is the honest way to measure it and does not exist in the set yet.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

@@ -4589,3 +4589,158 @@ def test_grep_degrades_to_the_portable_path_when_ripgrep_misbehaves(tmp_path, mo
     )
     assert result["count"] == 1
     assert result["engine"] == "python"
+
+
+# ---------------------------------------------------------------------------------------
+# Focus Chain (knowledge/harness-research.md adoption item 4, adapted from Cline).
+# F-049 elides history deterministically to fit a 16K window and nothing restated the
+# objective afterwards, so a long run could forget what it was doing while still having
+# room to keep doing something. These tests pin the fix and its trigger.
+# ---------------------------------------------------------------------------------------
+
+
+def test_update_plan_accepts_both_shapes_a_small_model_produces(tmp_path, monkeypatch):
+    from sovereign_ai.tools.base import ToolContext
+
+    k = kernel(tmp_path, monkeypatch)
+    ctx = ToolContext(run_id="plan-run")
+
+    bare = asyncio.run(
+        k.tool_dispatcher.invoke(
+            "update_plan", {"steps": ["read the config", "report the value"]}, ctx
+        )
+    )
+    assert bare["recorded"] == 2
+    assert "[ ] read the config" in bare["plan"]
+
+    structured = asyncio.run(
+        k.tool_dispatcher.invoke(
+            "update_plan",
+            {
+                "steps": [
+                    {"step": "read the config", "status": "done"},
+                    {"step": "report the value", "status": "active"},
+                ]
+            },
+            ctx,
+        )
+    )
+    assert structured["done"] == 1
+    assert "[x] read the config" in structured["plan"]
+    assert "[>] report the value" in structured["plan"]
+
+
+def test_update_plan_needs_no_grant_and_no_execution_backend(tmp_path, monkeypatch):
+    """A loop that cannot restate its objective is the failure this prevents, so it must
+    not be the thing policy refuses."""
+    from sovereign_ai.tools.base import ToolContext
+
+    k = kernel(tmp_path, monkeypatch)
+    result = asyncio.run(
+        k.tool_dispatcher.invoke("update_plan", {"steps": ["a step"]}, ToolContext())
+    )
+    assert result.get("denied") is None
+    assert result["recorded"] == 1
+
+
+def test_plans_are_scoped_per_run(tmp_path, monkeypatch):
+    from sovereign_ai.tools.base import ToolContext
+
+    k = kernel(tmp_path, monkeypatch)
+    asyncio.run(k.tool_dispatcher.invoke("update_plan", {"steps": ["run one"]}, ToolContext(run_id="a")))
+    asyncio.run(k.tool_dispatcher.invoke("update_plan", {"steps": ["run two"]}, ToolContext(run_id="b")))
+    assert "run one" in k.tool_dispatcher.plans.render("a")
+    assert "run one" not in k.tool_dispatcher.plans.render("b")
+    assert k.tool_dispatcher.plans.render("never-seen") == ""
+
+
+def test_loop_restates_the_objective_on_a_cadence(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=False)
+    loop = NativeAgentLoop(
+        _RecordingInference([]), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher, focus_every=3,
+    )
+    state = {
+        "run_id": "focus-1",
+        "task": "find the deploy key",
+        "workspace": str(workspace),
+        "history": [],
+    }
+
+    def rendered(turns):
+        state["history"] = [
+            {"assistant": f"r{i}", "action": {"tool": "read_file"}, "observation": {"path": str(i)}}
+            for i in range(turns)
+        ]
+        return " ".join(m["content"] for m in loop._build_messages(state))
+
+    assert "Reminder of the objective" not in rendered(2)
+    assert "Reminder of the objective: find the deploy key" in rendered(3)
+
+
+def test_loop_restates_the_objective_whenever_history_was_elided(tmp_path, monkeypatch):
+    """The cadence is not the only trigger: compaction is the exact moment a run loses the
+    thread, so it restates unconditionally there even if no cadence turn is due."""
+    from sovereign_ai.agents.context import ContextBudget
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=False)
+    loop = NativeAgentLoop(
+        _RecordingInference([]), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher,
+        budget=ContextBudget(keep_recent_turns=2, keep_leading_turns=1),
+        focus_every=0,  # cadence disabled: only compaction can trigger a restatement
+    )
+    state = {
+        "run_id": "focus-2",
+        "task": "find the deploy key",
+        "workspace": str(workspace),
+        "history": [
+            {"assistant": f"r{i}", "action": {"tool": "read_file"}, "observation": {"path": str(i)}}
+            for i in range(9)
+        ],
+    }
+    joined = " ".join(m["content"] for m in loop._build_messages(state))
+    assert "Reminder of the objective: find the deploy key" in joined
+    assert "Do not repeat work" in joined
+
+
+def test_the_recorded_plan_is_restated_with_the_objective(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+    from sovereign_ai.tools.base import ToolContext
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=False)
+    asyncio.run(
+        k.tool_dispatcher.invoke(
+            "update_plan",
+            {"steps": [{"step": "read config", "status": "done"}, {"step": "report", "status": "active"}]},
+            ToolContext(run_id="focus-3"),
+        )
+    )
+    loop = NativeAgentLoop(
+        _RecordingInference([]), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher, focus_every=2,
+    )
+    state = {
+        "run_id": "focus-3",
+        "task": "do the thing",
+        "workspace": str(workspace),
+        "history": [
+            {"assistant": "r0", "action": {"tool": "read_file"}, "observation": {}},
+            {"assistant": "r1", "action": {"tool": "read_file"}, "observation": {}},
+        ],
+    }
+    joined = " ".join(m["content"] for m in loop._build_messages(state))
+    assert "[x] read config" in joined
+    assert "[>] report" in joined

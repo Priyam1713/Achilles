@@ -188,6 +188,17 @@ async def glob(pattern: str, path: str = "") -> str:
     return _error_or(result, "\n".join(result.get("matches", [])) or "no matches")
 
 
+@mcp.tool()
+async def update_plan(steps: list[str], statuses: list[str] | None = None) -> str:
+    """Record or update the checklist for this task so it survives context compaction.
+
+    Cheap and non-mutating. Call it when the plan changes, not every turn. The loop
+    restates whatever is recorded here after history is elided, which is the moment a long
+    run otherwise loses track of what it was doing."""
+    result = await _run("update_plan", {"steps": steps, "statuses": statuses or []})
+    return _error_or(result, str(result.get("plan", "")))
+
+
 # --- execution -------------------------------------------------------------------------
 
 
