@@ -113,8 +113,13 @@ harness scaffolding. **We should not copy the omissions**: several of them (perm
 mode) are the kernel's whole reason to exist. But the *separation* is the lesson: scaffolding
 is ours, opinion is configurable.
 
-**Verdict: `trial` as the reference architecture for our loop's shape, and the harness to beat
-in the tournament.** It is MIT, TypeScript, and small enough to read end to end.
+**Verdict: `trial` as the reference architecture for our loop's shape — and now **measured**.
+Bridged to our governed tools (`docs/FIXES.md` F-056) on `qwen35-9b`, Pi **matched our native
+loop's 4/5 pass rate and beat it on wall time for three of five tasks** (5.55 s vs 6.56 s,
+4.68 s vs 5.45 s, 7.34 s vs 7.69 s), while paying subprocess startup our in-process loop does
+not. Against OpenCode's 1/5 with four 300 s timeouts, the two ends of the context-weight axis
+now bracket the field on the same hardware. It is MIT, TypeScript, and small enough to read end
+to end.
 
 ### oh-my-pi (`can1357/oh-my-pi`) — MIT — `primary-verified` repo
 
@@ -555,7 +560,7 @@ Effort is rough and assumes the kernel stays as-is.
 | # | Item | Source | Effort | Why this rank |
 | --- | --- | --- | --- | --- |
 | 1 | ~~Widen the MCP bridge from 3 to all 13 tools~~ | ours | **done 2026-08-23** (`docs/FIXES.md` F-054) | All 13 tools now dispatch through the same `ToolDispatcher` the native loop uses, with an anti-drift test |
-| 2 | Run the harness tournament for real | ours | **done for three loops 2026-08-23** (F-054, F-055) | native **4/5 in 134 s**, Goose **4/5 in ~206 s**, OpenCode **1/5 genuine in 1294 s** (four timeouts). OpenCode's context weight — big system prompt plus 13 MCP tool schemas every turn — is disqualifying at 49 tok/s, which is exactly what this file's ranking function predicted. **Pi remains unmeasured**: it is installed on this machine but omits MCP, so the bridge does not reach it |
+| 2 | Run the harness tournament for real | ours | **done for four loops 2026-08-23** (F-054, F-055, F-056) | native **4/5 in 81 s**, **pi 4/5 in 195 s** (fastest per-task of anything measured), Goose **4/5 in 205 s**, OpenCode **1/5 in 1294 s** (four timeouts). The ranking function predicted both ends of the field: lightest context fastest, heaviest disqualified. Pi needed a different bridge — it has no MCP, so its adapter drives an in-process extension against a new `POST /tools/{name}` HTTP surface |
 | 3 | Summarising `read` + parallel ripgrep `grep` | oh-my-pi | ~1 day | Immediate context savings; no new dependency |
 | 4 | Focus Chain (re-injected todo list) | Cline | ~1 day | Cheapest fix for compaction drift |
 | 5 | Parallel tool dispatch | ForgeCode | ~2 days | Direct multiplier on wall time |
@@ -585,10 +590,14 @@ and should be measured against the tournament baseline, individually.
   integration or an agent-to-agent one.
 - **Is Pi's 3× context advantage transferable, or an artifact of its provider mix?** The
   benchmark used frontier models; our regime is different and could amplify *or* erase it.
-- **How do we bridge a harness that has no MCP client?** Pi omits MCP by design, so the
-  `mcp_bridge` route that works for Goose does not reach it. Its in-process TypeScript hook
-  system is the obvious alternative, and would mean writing a hook that calls our HTTP API
-  rather than an MCP server — a different adapter shape than every other candidate needs.
+- ~~How do we bridge a harness that has no MCP client?~~ **Answered 2026-08-23** (F-056): an
+  in-process extension calling a new `POST /tools/{name}` HTTP endpoint. It turned out to be a
+  *better* bridge than MCP for a local harness — no second process, no stdio handshake, one
+  call per tool — and the endpoint is reusable by any client that cannot speak MCP.
+- **How much of Pi's speed is Pi, and how much is its own tools?** This measurement replaced
+  Pi's built-in tools with ours. Separating the harness's context economy from its tool
+  implementations needs a second run with its native tools, which forfeits the authority model
+  and so can only be a diagnostic, never a deployment.
 - **Why did the native loop beat Goose (F-054)?** Wall time is explainable (subprocess startup
   plus Goose's own loop), but the two task failures are not yet diagnosed. Until they are, the
   result is a scoreboard, not an explanation.

@@ -4295,3 +4295,148 @@ def test_opencode_loop_registers_only_when_the_binary_exists(tmp_path, monkeypat
     monkeypatch.setattr(kernel_app, "resolve_opencode_binary", lambda: "/usr/bin/opencode")
     present = kernel(tmp_path / "second", monkeypatch)
     assert "opencode" in present.agent_loops.names()
+
+
+# ---------------------------------------------------------------------------------------
+# The HTTP tool-invoke endpoint and the Pi adapter.
+#
+# Pi has no MCP client by design, so the bridge that reaches Goose and OpenCode cannot
+# reach it. It does have in-process extensions, so its extension calls POST /tools/{name}
+# instead -- which means that endpoint is now an authority surface and is tested like one.
+# ---------------------------------------------------------------------------------------
+
+
+def test_tool_invoke_endpoint_enforces_the_same_grant_rule(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    client = api_client(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    target = workspace / "http.txt"
+
+    denied = client.post(
+        "/tools/write_file",
+        json={
+            "args": {"path": str(target), "content": "x"},
+            "workspace": str(workspace),
+            "subject_id": "http-subject",
+        },
+    )
+    # A refusal must be a protocol error, not a 200 whose body mentions denial.
+    assert denied.status_code == 403
+    assert "denied" in denied.json()["detail"]
+    assert not target.exists()
+
+    k.capability_grants.issue("http-subject", "write", "workspace", "operator", ttl_seconds=60)
+    allowed = client.post(
+        "/tools/write_file",
+        json={
+            "args": {"path": str(target), "content": "x"},
+            "workspace": str(workspace),
+            "subject_id": "http-subject",
+        },
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["result"]["created"] is True
+    assert target.read_text(encoding="utf-8") == "x"
+
+
+def test_tool_invoke_endpoint_requires_a_session_and_a_real_tool(tmp_path, monkeypatch):
+    client = api_client(tmp_path, monkeypatch)
+    assert client.post("/tools/does_not_exist", json={"args": {}}).status_code == 404
+
+    unauthenticated = TestClient(create_app(str(ROOT / "configs")), base_url="http://127.0.0.1")
+    assert unauthenticated.post("/tools/read_file", json={"args": {}}).status_code == 401
+
+
+def test_tools_endpoint_publishes_a_usable_json_schema(tmp_path, monkeypatch):
+    """A protocol client declares our tools to its own model from this, so it has to be a
+    real schema rather than the prompt's worked example."""
+    client = api_client(tmp_path, monkeypatch)
+    tools = {t["id"]: t for t in client.get("/tools").json()["tools"]}
+
+    read = tools["read_file"]["input_schema"]
+    assert read["type"] == "object"
+    assert read["properties"]["path"]["type"] == "string"
+    assert read["properties"]["offset"]["type"] == "integer"
+
+    run = tools["run_command"]["input_schema"]
+    assert run["properties"]["argv"]["type"] == "array"
+    assert run["properties"]["mutates_state"]["type"] == "boolean"
+
+
+def _pi_loop(**kwargs):
+    from sovereign_ai.agents.pi_loop import PiAgentLoop
+
+    return PiAgentLoop(
+        "/nonexistent/pi",
+        "http://127.0.0.1:18080/v1",
+        "qwen35-9b",
+        kernel_url="http://127.0.0.1:7788",
+        session_token="test-token",
+        **kwargs,
+    )
+
+
+def test_pi_adapter_declares_a_generic_openai_compatible_provider():
+    """Deliberately not Pi's built-in llama.cpp provider: that integration drives the
+    router's management API and answered 404/503 against this build (F-056)."""
+    config = _pi_loop()._models_json()
+    provider = config["providers"]["sovereign"]
+    assert provider["api"] == "openai-completions"
+    assert provider["baseUrl"] == "http://127.0.0.1:18080/v1"
+    assert provider["compat"]["supportsDeveloperRole"] is False
+    assert [m["id"] for m in provider["models"]] == ["qwen35-9b"]
+
+
+def test_pi_adapter_environment_carries_identity_and_isolates_operator_config(tmp_path):
+    env = _pi_loop()._environment(
+        {"agent_profile_id": "subject-1", "workspace": "/tmp/ws", "run_id": "run-1"},
+        tmp_path / "agent",
+    )
+    assert env["SOAI_AGENT_PROFILE_ID"] == "subject-1"
+    assert env["SOAI_WORKSPACE"] == "/tmp/ws"
+    assert env["SOAI_SESSION_TOKEN"] == "test-token"
+    assert env["SOAI_KERNEL_URL"] == "http://127.0.0.1:7788"
+    # A run must not read or write the operator's own Pi config, sessions or credentials.
+    assert env["PI_CODING_AGENT_DIR"] == str(tmp_path / "agent")
+    # Nor make startup network calls on a machine whose premise is working without one.
+    assert env["PI_OFFLINE"] == "1"
+
+
+def test_pi_extension_ships_in_this_repository_and_uses_only_the_kernel():
+    """The extension is part of *our* authority model, not Pi's, so it lives here -- and
+    it must reach the kernel and nothing else."""
+    from sovereign_ai.agents.pi_loop import PI_EXTENSION
+
+    assert PI_EXTENSION.is_file(), f"missing {PI_EXTENSION}"
+    source = PI_EXTENSION.read_text(encoding="utf-8")
+    assert "SOAI_KERNEL_URL" in source
+    assert "/tools/" in source
+    # Tools are discovered, never hard-coded, so the extension cannot drift from the plane.
+    assert "GET /tools" in source or "listTools" in source
+
+
+def test_pi_adapter_reports_a_missing_binary_without_touching_the_workspace(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    step = asyncio.run(
+        _pi_loop().next_step(
+            {"task": "anything", "workspace": str(workspace), "agent_profile_id": "s"}
+        )
+    )
+    assert step.done and step.kind == "harness_error"
+    assert "not found" in step.payload["error"]
+    assert list(workspace.iterdir()) == []
+
+
+def test_pi_loop_registers_only_when_the_binary_exists(tmp_path, monkeypatch):
+    from sovereign_ai.kernel import app as kernel_app
+
+    monkeypatch.setattr(kernel_app, "resolve_pi_binary", lambda: None)
+    absent = kernel(tmp_path, monkeypatch)
+    assert "pi" not in absent.agent_loops.names()
+
+    monkeypatch.setattr(kernel_app, "resolve_pi_binary", lambda: "/usr/bin/pi")
+    present = kernel(tmp_path / "second", monkeypatch)
+    assert "pi" in present.agent_loops.names()

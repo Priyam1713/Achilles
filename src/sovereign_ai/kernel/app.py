@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from sovereign_ai.agents.goose_loop import GooseAgentLoop
 from sovereign_ai.agents.native_loop import NativeAgentLoop
 from sovereign_ai.agents.opencode_loop import OpenCodeAgentLoop, resolve_opencode_binary
+from sovereign_ai.agents.pi_loop import PiAgentLoop, resolve_pi_binary
 from sovereign_ai.agents.registry import AgentLoopRegistry
 from sovereign_ai.collaboration import CollaborationService, CollaborationStore
 from sovereign_ai.computer.controller import ComputerController
@@ -32,6 +33,7 @@ from sovereign_ai.watchers.bus import EventBus
 
 from .agent_profiles import AgentProfileStore
 from .approvals import ApprovalRequestStore
+from .auth import SessionAuth
 from .benchmarks import BenchmarkStore
 from .capability_grants import CapabilityGrantStore
 from .checkpoints import CheckpointStore
@@ -189,6 +191,23 @@ class SovereignKernel:
             agent_loops.register(
                 "opencode",
                 OpenCodeAgentLoop(opencode_binary, llama_cpp_engine.base_url, "qwen38-27b"),
+            )
+        # Pi cannot be reached through the MCP bridge -- it has no MCP client by design --
+        # so its adapter drives an in-process extension that calls the kernel's own HTTP
+        # API instead, and therefore needs the API's URL and session token rather than just
+        # the inference base URL.
+        pi_binary = resolve_pi_binary()
+        if pi_binary and llama_cpp_engine and llama_cpp_engine.base_url:
+            system = config.system.get("system", {})
+            agent_loops.register(
+                "pi",
+                PiAgentLoop(
+                    pi_binary,
+                    llama_cpp_engine.base_url,
+                    "qwen38-27b",
+                    kernel_url=f"http://{system.get('bind', '127.0.0.1')}:{system.get('port', 7788)}",
+                    session_token=SessionAuth(state / "session.token").token,
+                ),
             )
         computer = ComputerController()
         transactions = TransactionManager(state / "transactions")

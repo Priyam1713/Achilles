@@ -59,6 +59,40 @@ class ToolDispatcher:
             lines.append(line)
         return "\n".join(lines)
 
+    @staticmethod
+    def json_schema_for(spec: ToolSpec) -> dict[str, Any]:
+        """A JSON Schema for one tool's arguments, inferred from its example args.
+
+        `ToolSpec.schema["args"]` is written as a *worked example* because that is what a
+        small local model copies most reliably in a prompt. A protocol client needs a real
+        schema, so this derives one from the same source rather than maintaining a second
+        declaration that can drift from the first.
+
+        Types come from the example values; every field is optional because tools already
+        validate their own arguments and return a legible error, and an over-strict schema
+        turns a fixable mistake into a rejected call the model never sees the reason for.
+        """
+        args = spec.schema.get("args") or {}
+        properties: dict[str, Any] = {}
+        for name, example in args.items():
+            if isinstance(example, bool):
+                properties[name] = {"type": "boolean"}
+            elif isinstance(example, int):
+                properties[name] = {"type": "integer"}
+            elif isinstance(example, float):
+                properties[name] = {"type": "number"}
+            elif isinstance(example, list):
+                properties[name] = {"type": "array", "items": {"type": "string"}}
+            elif isinstance(example, dict):
+                properties[name] = {"type": "object", "additionalProperties": True}
+            else:
+                properties[name] = {"type": "string", "description": str(example)}
+        return {
+            "type": "object",
+            "properties": properties,
+            "additionalProperties": True,
+        }
+
     def action_schema(self, specs: list[ToolSpec] | None = None) -> dict[str, Any]:
         """A JSON schema for one agent action, derived from the registered tools.
 

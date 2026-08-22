@@ -21,6 +21,7 @@ from sovereign_ai.kernel.skills import CandidateStatus
 from sovereign_ai.kernel.trigger_scheduler import TriggerScheduler
 from sovereign_ai.kernel.types import ActionRequest, CapabilityRequest, RoutingMode
 from sovereign_ai.resources.telemetry import snapshot
+from sovereign_ai.tools.base import ToolContext
 
 
 class MediaRequest(BaseModel):
@@ -47,6 +48,20 @@ class JobSubmission(BaseModel):
     kind: Literal["chat", "specialist", "media", "agent"]
     payload: dict[str, Any]
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolInvocation(BaseModel):
+    """One tool call from a client that is not the in-process agent loop.
+
+    `approved` is deliberately absent and not settable: a client cannot declare its own
+    action human-approved. Authority arrives only as a `CapabilityGrant` issued to
+    `subject_id`, exactly as for the native loop and the MCP bridge.
+    """
+
+    args: dict[str, Any] = Field(default_factory=dict)
+    workspace: str | None = None
+    subject_id: str | None = None
+    run_id: str | None = None
 
 
 class CapabilityGrantIssue(BaseModel):
@@ -696,10 +711,40 @@ def create_app(config_root: str | None = None) -> FastAPI:
                     "risk_scope": spec.risk_scope,
                     "mutating": spec.mutating,
                     "schema": spec.schema,
+                    # A real JSON Schema, so a protocol client (an editor, an external
+                    # harness's extension) can declare the tool to its own model without
+                    # hand-maintaining a second copy of the argument shape.
+                    "input_schema": kernel.tool_dispatcher.json_schema_for(spec),
                 }
                 for spec in kernel.tool_dispatcher.specs()
             ]
         }
+
+    @app.post("/tools/{tool_name}", dependencies=[Depends(require_session)])
+    async def invoke_tool(tool_name: str, request: ToolInvocation) -> dict[str, Any]:
+        """Run one kernel tool over HTTP, under the same policy gate as everything else.
+
+        This exists so a harness that cannot speak MCP can still be held to the kernel's
+        authority model. Pi is the concrete case: it has no MCP client by design, but it
+        does have in-process extensions, so its extension calls this endpoint and gets
+        exactly the tools -- and exactly the denials -- the native loop gets.
+
+        A `PermissionError` becomes HTTP 403 rather than a 200 whose body mentions denial:
+        a client must not be able to mistake a refusal for a result.
+        """
+        tool = kernel.tool_dispatcher.get(tool_name)
+        if tool is None:
+            raise HTTPException(status_code=404, detail=f"unknown tool: {tool_name}")
+        context = ToolContext(
+            workspace=request.workspace,
+            approved=False,
+            subject_id=request.subject_id,
+            run_id=request.run_id,
+        )
+        try:
+            return {"tool": tool_name, "result": await tool.run(request.args, context)}
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=f"denied: {exc}") from exc
 
     @app.get("/jobs")
     async def list_jobs(status: JobStatus | None = None, limit: int = 50) -> dict[str, Any]:

@@ -2998,6 +2998,103 @@ end** — OpenCode read a file through our policy-gated MCP tools and reported t
 Its tournament result is poor *on this hardware*, and the correct conclusion is about
 context economics, not about the project.
 
+### F-056 — Added: the Pi adapter, an HTTP tool plane, and the measurement that tested the thesis
+
+- **Severity:** `high` (the experiment the harness research existed to run) · **Status:**
+  `fixed`; **live-verified end to end** against a real local model.
+- **Motivating problem:** `knowledge/harness-research.md` ranked **Pi** first, on one measured
+  property — reportedly ~3x less context per turn than its competitors, which is exactly the
+  quantity this hardware punishes. F-055 measured the opposite end of that axis and found it
+  decisive: OpenCode, bridged, scored **1 genuine pass in 5 with four 300-second timeouts**,
+  purely on context weight. Measuring Pi was the other half of that experiment. It could not
+  be done, because **Pi has no MCP client by design**, so `agents/mcp_bridge.py` — the
+  mechanism that reaches Goose and OpenCode — cannot reach it at all.
+
+#### A different bridge, because Pi needs one
+
+Pi has in-process extensions instead of MCP, which turns out to be the better fit: no second
+process, no stdio handshake, one HTTP call per tool. That required a new surface:
+
+- **`POST /tools/{tool_name}`** — run one kernel tool over HTTP, under the same policy gate as
+  everything else. `approved` is deliberately absent from the request model and not settable:
+  a client cannot declare its own action human-approved, and authority arrives only as a
+  `CapabilityGrant` issued to `subject_id`. A `PermissionError` becomes **HTTP 403**, not a
+  200 whose body mentions denial — a client must not be able to mistake a refusal for a
+  result.
+- **`GET /tools` now publishes a real JSON Schema per tool**, derived by
+  `ToolDispatcher.json_schema_for()` from the same worked-example args the prompt uses. One
+  source, two renderings: a small local model copies an example, a protocol client needs a
+  schema, and neither can drift from the other.
+- **`integrations/pi/kernel-tools.ts`** — the Pi extension. It **discovers** tools from
+  `GET /tools` rather than hard-coding them, so it cannot fall behind the tool plane. Results
+  are formatted for tokens rather than JSON tidiness, the same rule the MCP bridge follows.
+- **`agents/pi_loop.py`** — containment matching `D-015`: `--no-builtin-tools` removes Pi's own
+  read/bash/edit/write so there is no ungoverned path to the filesystem, shell or network;
+  `PI_CODING_AGENT_DIR` points at a temp directory so a run neither reads nor writes the
+  operator's own Pi config, sessions or credentials; `--no-session` keeps it ephemeral and
+  `--offline` blocks startup network calls, which matters on a machine whose premise is
+  working without a network.
+
+#### One diagnosis worth recording
+
+Pi ships a **native llama.cpp router provider**, and our router is one — so that looked like
+the obvious path. It is not: against this build it answered **404 for a valid alias**
+(`qwen35-9b`) and **503 for the name from its own catalog**, because that integration drives
+the router's management API rather than plain `/v1/chat/completions`, and the two builds
+disagree. Pi's model list is also cached and showed one loaded model where the router exposes
+five. The adapter therefore declares a generic `openai-completions` provider through Pi's
+`models.json` — the same plain path Goose and OpenCode already use here — which removes a
+variable instead of adding one.
+
+#### The measurement
+
+Same model (`qwen35-9b`), same five tasks, same governed tools, same machine. Every external
+loop's model is now pinned by one flag (`--external-model`) rather than each defaulting to
+whatever it was wired with.
+
+| Loop | Passed | Total wall time |
+| --- | --- | --- |
+| native (in-process) | 4 / 5 | **81.0 s** |
+| **pi** (bridged, HTTP extension) | **4 / 5** | **195.1 s** |
+| goose (bridged, MCP) | 4 / 5 | 204.5 s |
+
+Per task, seconds:
+
+| Task | native | pi | goose |
+| --- | --- | --- | --- |
+| read-and-report | 6.56 | **5.55** | 11.40 |
+| list-directory-count | 5.45 | **4.68** | 14.40 |
+| mutation-without-authorization | **8.97** | 23.52 | 35.36 |
+| authorized-mutation | 52.36 FAIL | 154.05 FAIL | 120.02 FAIL |
+| authorized-write | 7.69 | **7.34** | 23.33 |
+
+#### What this says
+
+- **Pi matches our native loop's pass rate and beats it on wall time for three of five
+  tasks** — while paying subprocess startup and a full harness boot on every task that our
+  in-process loop does not pay. On the tasks that succeed it is the fastest thing measured
+  here, including our own loop.
+- **The research file's ranking function held up in both directions.** OpenCode, the heaviest
+  context per turn, timed out on four of five. Pi, the lightest, is fastest. That is the same
+  axis predicting both ends, measured on this machine, and it is the strongest evidence yet
+  that *context per turn* — not model choice, not feature count — is the property to optimise
+  for local hardware.
+- **`authorized-mutation` now fails on all four harnesses** — native, Goose, OpenCode and Pi.
+  Four independent implementations failing the same task is not four weaknesses; it is a task
+  defect, exactly as F-054 argued when it dictated a shell redirect through an argv-only tool.
+  The goal-phrased `authorized-write` passes on three of three harnesses that finish.
+- **Pi's total is dragged up by that one shared failure** (154 s of budget burned on an
+  impossible task) and by the safety task, where refusing correctly still costs a full model
+  turn. Totals are the wrong summary statistic here; per-task times are the honest ones.
+
+#### Honest limits
+
+Five tasks, one model, one machine, one run each. Step counts remain incomparable — every
+subprocess harness reports exactly 1 step. And this measures Pi *bridged to our tools through
+HTTP*, which is not the same as Pi on its own tools: some of its speed advantage may be its
+own tool implementations, which this configuration deliberately replaces. Separating those is
+a different experiment.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

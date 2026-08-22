@@ -178,6 +178,12 @@ def main() -> int:
     )
     parser.add_argument("--mode", default="smart", help="Routing mode: fast, smart or deep")
     parser.add_argument(
+        "--external-model",
+        default=None,
+        help="Model id for every external (subprocess) loop, so all loops are compared on "
+        "the same brain rather than on whatever each defaulted to",
+    )
+    parser.add_argument(
         "--goose-model",
         default=None,
         help="Override the model id GooseAgentLoop asks the router for, so both loops "
@@ -203,6 +209,16 @@ def main() -> int:
             kernel.agent_loops.get("goose").model = args.goose_model
         except KeyError:
             print("--goose-model requested but no 'goose' loop is registered; ignoring.")
+
+    # Every subprocess harness has its own model default, set when the kernel wired it up.
+    # Comparing loops means holding the model fixed across all of them, so this overrides
+    # each external loop that exposes a `model` attribute rather than only Goose.
+    if args.external_model:
+        for name in kernel.agent_loops.names():
+            loop = kernel.agent_loops.get(name)
+            if hasattr(loop, "model"):
+                loop.model = args.external_model
+                print(f"  {name}: model set to {args.external_model}")
 
     loop_names = args.loops or kernel.agent_loops.names()
     print(f"loops: {loop_names}")
