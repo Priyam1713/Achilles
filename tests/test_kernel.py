@@ -4440,3 +4440,152 @@ def test_pi_loop_registers_only_when_the_binary_exists(tmp_path, monkeypatch):
     monkeypatch.setattr(kernel_app, "resolve_pi_binary", lambda: "/usr/bin/pi")
     present = kernel(tmp_path / "second", monkeypatch)
     assert "pi" in present.agent_loops.names()
+
+
+# ---------------------------------------------------------------------------------------
+# Context economy in the tools themselves (knowledge/harness-research.md, adoption item 3).
+# Both changes exist because the measured constraint on this machine is tokens per turn,
+# not model quality: F-056 showed the lightest-context harness fastest and the heaviest
+# timing out, on identical hardware.
+# ---------------------------------------------------------------------------------------
+
+
+def test_read_file_outlines_a_large_file_instead_of_dumping_it(tmp_path, monkeypatch):
+    from sovereign_ai.tools.base import ToolContext
+    from sovereign_ai.tools.files import ReadFileTool
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    body = ["import os", ""]
+    for i in range(200):
+        body += [f"def function_{i}():", f"    return {i}", ""]
+    target = workspace / "big.py"
+    target.write_text("\n".join(body), encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+
+    result = asyncio.run(
+        ReadFileTool(k.workspaces).run({"path": str(target)}, ToolContext(workspace=str(workspace)))
+    )
+    assert result["outlined"] is True
+    assert result["total_lines"] > 400
+    assert any("def function_0" in entry for entry in result["outline"])
+    # The whole point: the observation is a sketch, not the file.
+    assert len(result["content"]) < len(target.read_text(encoding="utf-8")) / 2
+    assert "offset/limit" in result["note"] or "re-read" in result["note"].lower()
+
+
+def test_read_file_still_returns_exact_text_for_a_requested_range(tmp_path, monkeypatch):
+    """Outlining must never cost the agent access to the real content."""
+    from sovereign_ai.tools.base import ToolContext
+    from sovereign_ai.tools.files import ReadFileTool
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    target = workspace / "big.py"
+    target.write_text("\n".join(f"line {i}" for i in range(1, 801)), encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+
+    ranged = asyncio.run(
+        ReadFileTool(k.workspaces).run(
+            {"path": str(target), "offset": 500, "limit": 3},
+            ToolContext(workspace=str(workspace)),
+        )
+    )
+    assert ranged.get("outlined") is None
+    assert ranged["content"] == "line 500\nline 501\nline 502"
+
+
+def test_small_files_are_returned_whole(tmp_path, monkeypatch):
+    from sovereign_ai.tools.base import ToolContext
+    from sovereign_ai.tools.files import ReadFileTool
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    target = workspace / "small.txt"
+    target.write_text("just\na\nfew\nlines", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+
+    result = asyncio.run(
+        ReadFileTool(k.workspaces).run({"path": str(target)}, ToolContext(workspace=str(workspace)))
+    )
+    assert result.get("outlined") is None
+    assert result["content"] == "just\na\nfew\nlines"
+
+
+def test_outline_finds_definitions_across_languages():
+    from sovereign_ai.tools.files import outline
+
+    sketch = outline(
+        "\n".join(
+            [
+                "def python_fn():",
+                "class PythonClass:",
+                "export function tsFn() {",
+                "pub fn rust_fn() {",
+                "func goFn() {",
+                "## A markdown heading",
+                "    not_a_definition = 1",
+            ]
+        )
+    )
+    joined = " ".join(sketch)
+    for expected in ["python_fn", "PythonClass", "tsFn", "rust_fn", "goFn", "markdown heading"]:
+        assert expected in joined
+    assert "not_a_definition" not in joined
+
+
+def test_grep_uses_ripgrep_when_available_and_agrees_with_the_fallback(tmp_path, monkeypatch):
+    """Both engines must return the same matches. A faster search that finds different
+    things is not an optimisation, it is a bug."""
+    from sovereign_ai.tools.base import ToolContext
+    from sovereign_ai.tools.files import GrepTool
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    (workspace / "pkg").mkdir(parents=True)
+    (workspace / "pkg" / "a.py").write_text("def target_function():\n    pass\n", encoding="utf-8")
+    (workspace / "pkg" / "b.py").write_text("# calls target_function here\n", encoding="utf-8")
+    (workspace / ".git").mkdir()
+    (workspace / ".git" / "c.py").write_text("target_function()\n", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+    ctx = ToolContext(workspace=str(workspace))
+
+    tool = GrepTool(k.workspaces)
+    real = asyncio.run(tool.run({"pattern": "target_function"}, ctx))
+
+    # Force the portable path and compare.
+    monkeypatch.setattr("sovereign_ai.tools.files.shutil.which", lambda name: None)
+    fallback = asyncio.run(tool.run({"pattern": "target_function"}, ctx))
+
+    def key(result):
+        return sorted((Path(m["path"]).name, m["line"]) for m in result["matches"])
+
+    assert key(real) == key(fallback)
+    # .git is excluded by both.
+    assert all(".git" not in m["path"] for m in real["matches"])
+    assert fallback["engine"] == "python"
+
+
+def test_grep_degrades_to_the_portable_path_when_ripgrep_misbehaves(tmp_path, monkeypatch):
+    """A missing or unusual ripgrep must degrade, never break the tool."""
+    from sovereign_ai.tools.base import ToolContext
+    from sovereign_ai.tools.files import GrepTool
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("findme\n", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+
+    monkeypatch.setattr(
+        "sovereign_ai.tools.files.GrepTool._ripgrep",
+        staticmethod(lambda *args, **kwargs: None),
+    )
+    result = asyncio.run(
+        GrepTool(k.workspaces).run({"pattern": "findme"}, ToolContext(workspace=str(workspace)))
+    )
+    assert result["count"] == 1
+    assert result["engine"] == "python"

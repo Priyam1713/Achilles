@@ -561,7 +561,7 @@ Effort is rough and assumes the kernel stays as-is.
 | --- | --- | --- | --- | --- |
 | 1 | ~~Widen the MCP bridge from 3 to all 13 tools~~ | ours | **done 2026-08-23** (`docs/FIXES.md` F-054) | All 13 tools now dispatch through the same `ToolDispatcher` the native loop uses, with an anti-drift test |
 | 2 | Run the harness tournament for real | ours | **done for four loops 2026-08-23** (F-054, F-055, F-056) | native **4/5 in 81 s**, **pi 4/5 in 195 s** (fastest per-task of anything measured), Goose **4/5 in 205 s**, OpenCode **1/5 in 1294 s** (four timeouts). The ranking function predicted both ends of the field: lightest context fastest, heaviest disqualified. Pi needed a different bridge — it has no MCP, so its adapter drives an in-process extension against a new `POST /tools/{name}` HTTP surface |
-| 3 | Summarising `read` + parallel ripgrep `grep` | oh-my-pi | ~1 day | Immediate context savings; no new dependency |
+| 3 | ~~Summarising `read` + ripgrep `grep`~~ | oh-my-pi | **done 2026-08-23** (`docs/FIXES.md` F-057) | Measured **74.8-91.5% smaller observations** on this repo's own files, with both grep engines asserted to return identical matches |
 | 4 | Focus Chain (re-injected todo list) | Cline | ~1 day | Cheapest fix for compaction drift |
 | 5 | Parallel tool dispatch | ForgeCode | ~2 days | Direct multiplier on wall time |
 | 6 | Hash-anchored edits, per-model edit format | oh-my-pi + Aider | ~3 days | Biggest output-token saving; needs care to keep the refuse-don't-corrupt property |

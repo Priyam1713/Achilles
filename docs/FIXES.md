@@ -3095,6 +3095,66 @@ HTTP*, which is not the same as Pi on its own tools: some of its speed advantage
 own tool implementations, which this configuration deliberately replaces. Separating those is
 a different experiment.
 
+### F-057 — Added: `read_file` outlines large files, and `grep` uses ripgrep
+
+- **Severity:** `medium` (context economy) · **Status:** `fixed`; **measured on this
+  repository's own files**, not estimated.
+- **Motivating problem:** `knowledge/harness-research.md` adoption item 3, and the two tools
+  F-056 made unavoidable. That measurement showed the lightest-context harness (Pi) fastest and
+  the heaviest (OpenCode) timing out on four of five tasks, on identical hardware — so the
+  ranking function is not a theory any more, it is the observed behaviour of this machine. Two
+  of our own tools were on the wrong side of it:
+  - **`read_file` dumped up to 20,000 characters** into a 16 K operating context. A single
+    large file could consume the whole window in one observation.
+  - **`grep` was a pure-Python `rglob` walk** with a per-file regex scan. Correct and
+    portable, and slow enough on a real repository to be felt on every search. oh-my-pi's
+    recorded finding is that an instant `grep` is one of the changes that lifts a weak model's
+    success rate, because a slow tool is a tool the model stops reaching for.
+- **Fix:**
+  - **Summarising read.** A file over 400 lines comes back as a **structural outline** —
+    `line: definition`, in file order — plus the line count, byte size, and an explicit note
+    telling the model how to get the real text. A caller that asks for `offset`/`limit` still
+    gets exact content, unchanged: outlining narrows the default observation, it never removes
+    access. This is SWE-agent's "concise feedback" principle applied to the tool that violated
+    it most.
+  - The outline is a **shallow cross-language heuristic**, deliberately not a parser: Python,
+    JS/TS (including arrow functions, interfaces, types, enums), Rust, Go, Java/C# and Markdown
+    headings. A real tree-sitter symbol map is a separate, larger adoption (Aider's repo map),
+    and this has to work on any file the agent opens, including ones no parser is installed
+    for.
+  - **ripgrep-backed grep**, with the skip-list translated into `--glob !dir/` and results
+    parsed from `--json`. The pure-Python path stays and runs whenever ripgrep is absent or
+    exits oddly: a missing or unusual `rg` must **degrade, never break the tool**. The result
+    reports which engine ran.
+- **Measured, on this repository's own source:**
+
+  | File | Size | Old observation | New | Saved |
+  | --- | --- | --- | --- | --- |
+  | `api/server.py` | 49,872 chars | 20,000 | 4,682 (80 definitions) | **76.6%** |
+  | `tools/files.py` | 20,424 chars | 20,000 | 1,701 (26 definitions) | **91.5%** |
+  | `tests/test_kernel.py` | 195,274 chars | 20,000 | 5,048 (80 definitions) | **74.8%** |
+
+  Three quarters to nine tenths of the observation, removed — while telling the model *more*
+  about what is in the file than a truncated dump did, because a 20,000-character prefix of a
+  195,000-character test file is mostly imports.
+- **Verification:** 6 new tests, 206 passing overall, ruff clean. The load-bearing ones:
+  - `test_grep_uses_ripgrep_when_available_and_agrees_with_the_fallback` runs **both engines
+    over the same tree and asserts identical matches**. A faster search that finds different
+    things is not an optimisation, it is a bug.
+  - `test_read_file_still_returns_exact_text_for_a_requested_range` pins that outlining costs
+    the agent nothing: `offset=500, limit=3` returns exactly those three lines.
+  - `test_grep_degrades_to_the_portable_path_when_ripgrep_misbehaves` forces the ripgrep helper
+    to fail and asserts the Python path still answers.
+- **What this does not do:** the outline is a heuristic and will miss definitions in languages
+  it does not pattern-match, which is why the note tells the model to fall back to `grep` or a
+  ranged read rather than implying the outline is complete. And this is a *tool-level* saving;
+  the system prompt and tool roster, which Pi's advantage mostly comes from, are still
+  untouched (`harness-research.md` adoption items 1 and 2 of the Pi row).
+- **Not yet re-measured in the tournament.** The unit tests establish correctness; whether the
+  saving changes task outcomes on the five-task set is a separate run that needs the router up,
+  and the tournament tasks all use small files, so it would mostly measure the ripgrep change.
+  A task set with a large file is the honest way to measure this, and does not exist yet.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

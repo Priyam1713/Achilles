@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +32,46 @@ SKIP_DIRS = {
     ".next",
     "target",
 }
+
+
+#: A file longer than this is outlined rather than dumped, unless the caller asked for an
+#: explicit line range. Chosen against a 16K operating context: a single 800-line file at
+#: ~12 tokens per line would consume more than half the window in one observation.
+OUTLINE_LINE_THRESHOLD = 400
+
+#: Lines that look like a definition worth putting in an outline. Deliberately a shallow
+#: heuristic across languages rather than a parser: a real tree-sitter map is a separate,
+#: larger adoption (Aider's repo map, `knowledge/harness-research.md`), and this has to work
+#: on any file the agent opens, including ones no parser is installed for.
+_DEFINITION = re.compile(
+    r"^\s*(?:"
+    r"(?:async\s+)?def\s+\w+"                      # python
+    r"|class\s+\w+"                                 # python, java, c#, ts
+    r"|(?:export\s+)?(?:async\s+)?function\s+\w+"    # js/ts
+    r"|(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*(?:async\s*)?\("  # js/ts arrow fns
+    r"|(?:export\s+)?(?:interface|type|enum)\s+\w+"  # ts
+    r"|(?:pub\s+)?(?:async\s+)?fn\s+\w+"            # rust
+    r"|func\s+\w+"                                  # go
+    r"|(?:public|private|protected)\s+[\w<>\[\]]+\s+\w+\s*\("  # java/c#
+    r"|#{1,3}\s+\S"                                 # markdown headings
+    r")"
+)
+
+
+def outline(text: str, limit: int = 80) -> list[str]:
+    """A structural sketch of a file: `line: definition`, in file order.
+
+    This is the cheap half of what an agent usually wants from a large file. Dumping the
+    whole thing to answer "what is in here" is the single most wasteful thing a tool can do
+    on a 16K context, and it is what this tool did before.
+    """
+    found: list[str] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if _DEFINITION.match(line):
+            found.append(f"{number}: {line.strip()[:160]}")
+            if len(found) >= limit:
+                break
+    return found
 
 MAX_READ_CHARS = 20_000
 MAX_WRITE_CHARS = 400_000
@@ -81,7 +124,10 @@ class ReadFileTool(_WorkspaceTool):
         risk_scope="workspace",
         schema={
             "args": {"path": "<absolute path>", "offset": 0, "limit": 0},
-            "note": "offset/limit are 1-indexed line bounds; omit both to read from the start",
+            "note": (
+                "offset/limit are 1-indexed line bounds; omit both to read from the start. "
+                "Files over 400 lines come back as an outline -- re-read with a range for text"
+            ),
         },
     )
 
@@ -106,11 +152,30 @@ class ReadFileTool(_WorkspaceTool):
                 "last_line": start + len(selected),
                 "total_lines": len(lines),
             }
+        total_lines = text.count("\n") + 1 if text else 0
+        if total_lines > OUTLINE_LINE_THRESHOLD:
+            # Outline instead of dump. The caller is told exactly how to get the real
+            # content, so this narrows the observation without hiding anything -- the tool
+            # equivalent of SWE-agent's "concise feedback" principle.
+            sketch = outline(text)
+            return {
+                "path": str(target),
+                "outlined": True,
+                "total_lines": total_lines,
+                "bytes": len(text.encode("utf-8")),
+                "outline": sketch,
+                "content": "\n".join(sketch),
+                "note": (
+                    f"{total_lines} lines: outlined rather than dumped. "
+                    f"Re-read with offset/limit for the actual text, "
+                    f"or use grep to find a specific line."
+                ),
+            }
         return {
             "path": str(target),
             "content": text[:MAX_READ_CHARS],
             "truncated": len(text) > MAX_READ_CHARS,
-            "total_lines": text.count("\n") + 1 if text else 0,
+            "total_lines": total_lines,
         }
 
 
@@ -332,6 +397,12 @@ class GrepTool(_WorkspaceTool):
         name_filter = str(args.get("glob") or "")
         max_results = max(1, min(int(args.get("max_results") or 100), 500))
 
+        ripgrep = shutil.which("rg")
+        if ripgrep:
+            found = self._ripgrep(ripgrep, pattern, root, name_filter, max_results)
+            if found is not None:
+                return found
+
         hits: list[dict[str, Any]] = []
         files_scanned = 0
         for candidate in sorted(root.rglob("*")):
@@ -363,4 +434,68 @@ class GrepTool(_WorkspaceTool):
             "matches": hits,
             "count": len(hits),
             "truncated": len(hits) >= max_results,
+            "engine": "python",
         }
+
+    @staticmethod
+    def _ripgrep(
+        ripgrep: str, pattern: str, root: Path, name_filter: str, max_results: int
+    ) -> dict[str, Any] | None:
+        """Search with ripgrep when it is installed.
+
+        The pure-Python walk below is correct and portable, and on a real repository it is
+        slow enough to be felt on every search -- `knowledge/harness-research.md` records
+        oh-my-pi's finding that `grep` returning instantly is one of the changes that lifts
+        a weak model's success rate, because a slow tool is a tool the model uses less.
+
+        Returns None on any failure so the portable path still runs: a missing or unusual
+        ripgrep must degrade, never break the tool.
+        """
+        argv = [
+            ripgrep,
+            "--json",
+            "--max-count",
+            str(max_results),
+            "--no-messages",
+        ]
+        for skip in sorted(SKIP_DIRS):
+            argv += ["--glob", f"!{skip}/"]
+        if name_filter:
+            argv += ["--glob", name_filter]
+        argv += ["--regexp", pattern, str(root)]
+        try:
+            completed = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        # 0 = matches, 1 = no matches; anything else means ripgrep itself objected.
+        if completed.returncode not in (0, 1):
+            return None
+
+        hits: list[dict[str, Any]] = []
+        files_scanned = 0
+        for line in completed.stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "begin":
+                files_scanned += 1
+            elif event.get("type") == "match" and len(hits) < max_results:
+                data = event["data"]
+                hits.append(
+                    {
+                        "path": data["path"].get("text", ""),
+                        "line": data["line_number"],
+                        "text": data["lines"].get("text", "").strip()[:300],
+                    }
+                )
+        return {
+            "root": str(root),
+            "pattern": pattern,
+            "files_scanned": files_scanned,
+            "matches": hits,
+            "count": len(hits),
+            "truncated": len(hits) >= max_results,
+            "engine": "ripgrep",
+        }
+
