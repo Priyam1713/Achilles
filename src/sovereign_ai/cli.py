@@ -14,6 +14,7 @@ from rich.table import Table
 from sovereign_ai.api.server import create_app
 from sovereign_ai.kernel.app import SovereignKernel
 from sovereign_ai.kernel.secrets import SecretStore
+from sovereign_ai.kernel.shadow_git import ShadowRepository
 from sovereign_ai.kernel.types import CapabilityRequest, RoutingMode
 from sovereign_ai.resources.telemetry import snapshot
 
@@ -194,6 +195,150 @@ def list_tools(config_root: str = "./configs") -> None:
         table.add_row(spec.id, spec.risk_scope, ", ".join(spec.capabilities), spec.description)
     console.print(table)
     console.print(f"[dim]{len(kernel.tool_dispatcher.names())} tools registered[/dim]")
+
+@app.command()
+def grant(
+    subject: str,
+    action: str = typer.Argument(..., help="write, execute, delete, read, network_get"),
+    scope: str = typer.Argument("workspace", help="workspace, memory, host, public_web"),
+    ttl_seconds: float = typer.Option(3600.0, help="How long this grant stays active"),
+    granted_by: str = typer.Option("cli-operator", help="Who is authorising this"),
+    config_root: str = "./configs",
+) -> None:
+    """Issue a time-bounded capability grant.
+
+    Without this there was no terminal path to let an agent write anything: `sovereign run`
+    correctly refuses a mutation from untrusted model output, and the only way to authorise
+    one was an HTTP call. A grant is deliberately narrow and expiring -- subject, action,
+    scope and a TTL -- which is the whole difference between authorising *this* and
+    authorising the agent.
+    """
+    kernel = SovereignKernel.build(config_root)
+    record = kernel.capability_grants.issue(
+        subject, action, scope, granted_by, ttl_seconds=ttl_seconds
+    )
+    console.print(
+        f"[green]granted[/green] {subject} -> {action}:{scope} "
+        f"[dim]expires in {ttl_seconds:.0f}s · id {record.id}[/dim]"
+    )
+
+
+@app.command()
+def grants(
+    subject: str | None = typer.Option(None, help="Filter to one subject"),
+    config_root: str = "./configs",
+) -> None:
+    """Show which authorisations are currently live."""
+    kernel = SovereignKernel.build(config_root)
+    if subject:
+        rows = kernel.capability_grants.active_for_subject(subject)
+    else:
+        # There is no store-wide listing: grants are looked up per subject on purpose, since
+        # "who holds authority right now" is a question about a subject, not a global feed.
+        subjects = {profile.id for profile in kernel.agent_profiles.list()}
+        rows = [g for s in sorted(subjects) for g in kernel.capability_grants.active_for_subject(s)]
+    if not rows:
+        console.print("[dim]no active grants[/dim] (pass --subject to check one directly)")
+        return
+    table = Table("subject", "action", "scope", "expires in", "granted by")
+    now = time.time()
+    for record in rows:
+        table.add_row(
+            record.subject_id,
+            record.action,
+            record.scope,
+            f"{max(0.0, record.expires_at - now):.0f}s",
+            record.granted_by,
+        )
+    console.print(table)
+
+
+@app.command()
+def approvals(
+    approve: str | None = typer.Option(None, help="Approval id to approve"),
+    deny: str | None = typer.Option(None, help="Approval id to deny"),
+    reason: str = typer.Option("", help="Why -- recorded with the resolution"),
+    resolver: str = typer.Option("cli-operator", help="Who is resolving"),
+    config_root: str = "./configs",
+) -> None:
+    """List or resolve pending approvals.
+
+    Wave 7 recorded that the approval card shows a risk badge and free text and not what it is
+    actually approving (`D-028`). This surface at least prints the full request, evidence
+    included, rather than a truncated summary -- an operator asked repeatedly to authorise
+    things they cannot see learns to say yes without reading.
+    """
+    kernel = SovereignKernel.build(config_root)
+    if approve and deny:
+        console.print("[red]Pass either --approve or --deny, not both.[/red]")
+        raise typer.Exit(code=2)
+    if approve or deny:
+        approval_id = approve or deny
+        resolved, spawned = kernel.roster.resolve_approval(
+            approval_id, resolver, bool(approve), reason or ("approved" if approve else "denied")
+        )
+        verdict = "[green]approved[/green]" if approve else "[red]denied[/red]"
+        console.print(f"{verdict} {approval_id} [dim]{resolved.status}[/dim]")
+        if spawned is not None:
+            console.print(f"[dim]unblocked job {spawned.id} ({spawned.kind})[/dim]")
+        return
+
+    pending = kernel.approvals.list_pending()
+    if not pending:
+        console.print("[dim]nothing is waiting on you[/dim]")
+        return
+    for record in pending:
+        console.print(f"[bold]{record.id}[/bold] [yellow]{record.risk}[/yellow]")
+        console.print(f"  subject : {record.subject_id}")
+        console.print(f"  action  : {record.action}:{record.scope}")
+        console.print(f"  reason  : {record.reason}")
+        if record.evidence:
+            console.print(f"  evidence: {json.dumps(record.evidence)[:800]}")
+        console.print(
+            f"  [dim]sovereign approvals --approve {record.id}   "
+            f"sovereign approvals --deny {record.id}[/dim]\n"
+        )
+
+
+@app.command()
+def checkpoints(
+    workspace: str = typer.Option(".", help="Workspace whose file history to inspect"),
+    restore: str | None = typer.Option(None, help="Checkpoint sha to restore the files to"),
+    limit: int = typer.Option(20, help="How many checkpoints to list"),
+    config_root: str = "./configs",
+) -> None:
+    """List or restore the file-state checkpoints an agent left behind.
+
+    These are shadow-git commits (`D-021`): a repository under `state/` that borrows the
+    workspace as its work tree. Restoring puts files back with `checkout <sha> -- .`, so the
+    later states stay in the log and the restore is itself undoable. Your own `.git` is never
+    a participant.
+    """
+    kernel = SovereignKernel.build(config_root)
+    root = Path(workspace).expanduser().resolve(strict=False)
+    shadow = ShadowRepository(kernel.config.state_dir, root)
+    if not ShadowRepository.available():
+        console.print("[red]git is not installed, so no checkpoints exist.[/red]")
+        raise typer.Exit(code=2)
+
+    if restore:
+        shadow.restore(restore)
+        console.print(f"[green]restored[/green] {root} to {restore[:12]}")
+        return
+
+    history = shadow.history(limit=limit)
+    if not history:
+        console.print(f"[dim]no checkpoints recorded for {root}[/dim]")
+        return
+    table = Table("checkpoint", "label")
+    for commit in history:
+        table.add_row(commit.sha[:12], commit.label)
+    console.print(table)
+    console.print(
+        f"[dim]restore with: sovereign checkpoints --workspace {root} "
+        f"--restore {history[0].sha[:12]}[/dim]"
+    )
+
 
 @app.command()
 def serve(config_root: str = "./configs") -> None:

@@ -2606,6 +2606,44 @@ not fabrication.
   no browser in this environment to confirm it against, and an unverified UI claim is exactly
   what research wave 8 was written to stop.
 
+### F-051 — Added: the terminal can now authorise, inspect and undo, not just start work
+
+- **Severity:** `medium` (usability of a safety mechanism) · **Status:** `fixed`;
+  **live-verified end to end** against a real local model.
+- **Motivating problem:** F-048 gave the system a front door, and then the front door led
+  straight into a wall. `sovereign run` correctly refuses a mutation from untrusted model
+  output, and there was **no terminal way to issue the grant that would allow one** — the only
+  path was a hand-written HTTP call, which is the exact complaint wave 7 made about the whole
+  product. F-049 added file-state checkpoints that nothing could list or restore.
+- **Fix — four commands:**
+  - `sovereign grant <subject> <action> <scope> --ttl-seconds` — issues a narrow, expiring
+    `CapabilityGrant`. The narrowness is the point: it authorises *this*, not the agent.
+  - `sovereign grants [--subject]` — what authority is live right now, with time remaining.
+  - `sovereign approvals [--approve ID | --deny ID]` — lists pending approvals **with their
+    evidence field printed**, not just a risk badge and truncated summary, and reports any job
+    the resolution unblocked.
+  - `sovereign checkpoints [--restore SHA]` — lists and restores the shadow-git snapshots left
+    by mutating tool calls.
+- **Live verification (llama.cpp router, `qwen35-9b`, one continuous session):**
+  1. `sovereign grant cli-operator write workspace --ttl-seconds 900` → grant issued.
+  2. `sovereign run 'Create a file hello.py ... containing exactly: print("hello from
+     achilles")'` → **2 steps, 5.3 s**: `write_file (bytes_written=28)`, then `done`.
+  3. `cat hello.py` → `print("hello from achilles")` — the model's edit, correct, on disk.
+  4. `sovereign checkpoints` → one entry, `cli-6e82de560282 after write_file`.
+  5. Corrupted the file by hand, `sovereign checkpoints --restore b612842ecdfa` → file content
+     restored exactly.
+  6. `ls -a` on the workspace → **no `.git` directory was ever created there**; the shadow
+     repository lives under the state directory, as designed.
+  That sequence exercises, in one pass, every mechanism added today: the tool plane (F-047),
+  the front door and schema-constrained decoding (F-048), AGENTS.md/compaction/shadow-git
+  (F-049), and these commands — with a real model, on the target hardware.
+- **Verification (deterministic):** 177 tests passing, ruff clean.
+- **What this does not fix:** these are commands, not an interactive TUI, and the approval
+  *evidence* they print is only as rich as what `RosterService` records today — `D-028`'s
+  requirement that an approval render the exact command or diff, the triggering rule and the
+  grant's expiry is **not** met by printing the existing record more fully. The desktop and
+  web surfaces still have none of this.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.
