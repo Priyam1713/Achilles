@@ -73,16 +73,24 @@ desktop app above is now the primary human product's first real slice, not just 
   already be present (an earlier check that found it absent had not sourced
   `~/.cargo/env` in a non-login shell); building Goose from source needed one additional
   system package (`libclang-dev`, for `bindgen`) and otherwise completed cleanly.
-  `GooseAgentLoop` runs the compiled binary with `--no-profile` and no extensions, so it
-  has genuinely zero filesystem/shell tool access — a deliberate scope decision, not an
-  oversight: real per-step tool use would mean bridging Goose's MCP extension mechanism
-  to the kernel's own policy-gated tools, a larger piece of work correctly identified but
-  not built this pass (see F-043's honest limits). Comparable evidence exists only for
-  what a zero-tool Goose can attempt at all. A real live run against both loops (real
-  local inference, no scripted responses) was genuinely inconclusive: three of four
-  tasks timed out on both loops because the only "coding"-capable local model,
-  `qwen38-27b`, is already known too slow under CPU offload (F-005/F-012); the fourth
-  passed on both loops but for different reasons (native was actually denied by policy;
+  `GooseAgentLoop` defaults to running the compiled binary with `--no-profile` and no
+  extensions (genuinely zero filesystem/shell tool access) unless `enable_tools=True` is
+  passed — a deliberate scope decision, not an oversight, made when the tool bridge
+  itself did not exist yet. It now does: `agents/mcp_bridge.py` (FIXES.md F-045) exposes
+  the same policy-gated `read_file`/`list_directory`/`run_command` tools to Goose via its
+  own `--with-extension` mechanism, held to the identical `PolicyEngine`/
+  `CapabilityGrant` gate the reference loop uses, live-verified through a real `goose`
+  invocation both for a successful read and a correctly-denied mutation attempt (the
+  target file reread from disk afterward to confirm, not just trusted from Goose's own
+  report). `enable_tools` still defaults off everywhere existing (`kernel/app.py`'s
+  registration included) since it needs the optional `harness` extra most installs will
+  not have; the earlier "comparable evidence exists only for what a zero-tool Goose can
+  attempt" limit from the first live run therefore still describes that run specifically,
+  not a remaining architectural gap. A real live run against both loops (real local
+  inference, no scripted responses) was genuinely inconclusive: three of four tasks timed
+  out on both loops because the only "coding"-capable local model, `qwen38-27b`, is
+  already known too slow under CPU offload (F-005/F-012); the fourth passed on both loops
+  but for different reasons (native was actually denied by policy;
   Goose simply had no tool to attempt anything with).
 - **Desktop product** — a real first vertical slice (F-044), reached only after the user
   installed Windows Rust/Node manually: two automated attempts had each hit a genuine

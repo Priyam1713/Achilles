@@ -3296,3 +3296,107 @@ def test_kernel_registers_goose_loop_only_when_binary_exists_on_disk(tmp_path, m
         assert "goose" in k.agent_loops.names()
     else:
         assert "goose" not in k.agent_loops.names()
+
+
+# --- MCP tool bridge (FIXES.md follow-on to F-043: Goose's real per-step tool access) ---
+#
+# agents/mcp_bridge.py exposes read_file/list_directory/run_command as MCP tools, calling
+# the exact same WorkspaceRegistry/ExecutionBroker primitives NativeAgentLoop already
+# uses. @mcp.tool() returns the wrapped function unchanged (verified against the
+# installed `mcp` package's own source), so these tests call the tool functions directly
+# rather than driving a real stdio MCP client/server pair -- a real live run through the
+# actual `goose` binary is the genuine end-to-end proof, done separately and reported in
+# FIXES.md, not reproduced here since it needs a live local model server.
+
+
+def _reset_mcp_bridge_kernel():
+    from sovereign_ai.agents import mcp_bridge
+
+    mcp_bridge._kernel = None
+    return mcp_bridge
+
+
+def test_mcp_bridge_read_file_denies_unregistered_path(tmp_path, monkeypatch):
+    kernel(tmp_path, monkeypatch)
+    bridge = _reset_mcp_bridge_kernel()
+    target = tmp_path / "secret.txt"
+    target.write_text("nope", encoding="utf-8")
+    with pytest.raises(PermissionError):
+        bridge.read_file(str(target))
+
+
+def test_mcp_bridge_read_file_returns_content_for_registered_workspace(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    bridge = _reset_mcp_bridge_kernel()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "data.txt").write_text("the secret number is 4217", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+
+    result = bridge.read_file(str(workspace / "data.txt"))
+    assert "4217" in result
+
+
+def test_mcp_bridge_list_directory_returns_sorted_entries(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    bridge = _reset_mcp_bridge_kernel()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "b.txt").write_text("", encoding="utf-8")
+    (workspace / "a.txt").write_text("", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+
+    result = bridge.list_directory(str(workspace))
+    assert result.split("\n") == ["a.txt", "b.txt"]
+
+
+def test_mcp_bridge_run_command_denied_without_capability_grant(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    bridge = _reset_mcp_bridge_kernel()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    monkeypatch.setenv("SOAI_MCP_AGENT_PROFILE_ID", "no-such-grant")
+    monkeypatch.setenv("SOAI_MCP_WORKSPACE", str(workspace))
+    with pytest.raises(PermissionError, match="Untrusted content cannot directly authorize"):
+        asyncio.run(bridge.run_command(["true"]))
+
+
+def test_mcp_bridge_run_command_with_grant_reaches_backend_selection(tmp_path, monkeypatch):
+    """Mirrors F-041's own honest-limits test pattern: a real CapabilityGrant must let the
+    call clear the policy gate (no PermissionError), even though this test environment
+    has no real OpenShell/Docker backend to actually run the command."""
+    k = kernel(tmp_path, monkeypatch)
+    bridge = _reset_mcp_bridge_kernel()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    k.capability_grants.issue("granted-agent", "execute", "workspace", "test", ttl_seconds=300)
+    monkeypatch.setenv("SOAI_MCP_AGENT_PROFILE_ID", "granted-agent")
+    monkeypatch.setenv("SOAI_MCP_WORKSPACE", str(workspace))
+    k.execution.openshell.available = lambda: False
+    k.execution.docker.available = lambda: False
+    # _get_kernel() otherwise builds its own independent SovereignKernel, separate from
+    # `k` -- the availability patches above would silently apply to a kernel this call
+    # never touches. Pre-seeding the module-level cache reuses `k` itself.
+    bridge._kernel = k
+
+    with pytest.raises(RuntimeError, match="No hardened execution backend available"):
+        asyncio.run(bridge.run_command(["true"]))
+
+
+def test_goose_agent_loop_extension_command_includes_identity_and_workspace():
+    from sovereign_ai.agents.goose_loop import GooseAgentLoop
+
+    state = {"agent_profile_id": "tournament-task", "workspace": "/tmp/ws"}
+    command = GooseAgentLoop._extension_command(state)
+    assert "SOAI_MCP_AGENT_PROFILE_ID=tournament-task" in command
+    assert "SOAI_MCP_WORKSPACE=/tmp/ws" in command
+    assert "sovereign_ai.agents.mcp_bridge" in command
+
+
+def test_goose_agent_loop_enable_tools_defaults_off():
+    from sovereign_ai.agents.goose_loop import GooseAgentLoop
+
+    loop = GooseAgentLoop("goose", "http://127.0.0.1:1/v1", "m")
+    assert loop.enable_tools is False

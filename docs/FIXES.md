@@ -2249,6 +2249,78 @@ not fabrication.
   should click through Roster/Jobs/Approvals/Collaboration themselves to confirm the
   rendering, not just trust that the network contracts line up.
 
+### F-045 — Added: real MCP tool bridge for Goose, closing F-043's biggest honest limit
+
+- **Severity:** `debt` (new capability) plus one genuine bug caught and fixed live ·
+  **Status:** `fixed`; live-verified both the success path and the safety-denial path
+  through a real `goose` invocation, not just unit tests.
+- **Motivating problem:** F-043 registered `GooseAgentLoop` with deliberately zero tool
+  access and named the real gap explicitly: *"real per-step tool use would mean bridging
+  Goose's MCP extension mechanism to the kernel's own policy-gated tools... deliberately
+  not built here."* That gap is exactly why the harness tournament's live comparison
+  stayed inconclusive — a Goose with no tools cannot attempt three of four tasks in any
+  meaningful sense. Building it correctly, not hastily, was the explicitly named
+  prerequisite for a fair comparison.
+- **Fix applied:**
+  - `pyproject.toml` — new `harness` extra: `mcp>=1.29,<2` (official Model Context
+    Protocol Python SDK, MIT). Pinned to the 1.x line deliberately: `mcp==2.0.0` (the
+    current default on PyPI) has a substantially reorganized API with no
+    `mcp.server.fastmcp` module at all, and guessing against an unfamiliar reorganized
+    API under time pressure was exactly the kind of risk flagged when this bridge was
+    scoped out originally. 1.29.0 has the well-documented, low-risk `FastMCP` high-level
+    API this fix actually uses.
+  - `agents/mcp_bridge.py` (new) — a `FastMCP` stdio server exposing `read_file`,
+    `list_directory` and `run_command` as MCP tools, calling the *exact same*
+    `WorkspaceRegistry.require()` / `ExecutionBroker.run_approved()` primitives
+    `NativeAgentLoop` already uses, with `trust=UNTRUSTED_MODEL_OUTPUT` hardcoded (not
+    settable by the caller, matching `NativeAgentLoop._run_command`) and the calling
+    identity read from `SOAI_MCP_AGENT_PROFILE_ID`. A tool-enabled Goose run is
+    therefore held to the identical `PolicyEngine`/`CapabilityGrant` gate (F-036/F-037)
+    as the reference loop — not a second, weaker execute path.
+  - `agents/goose_loop.py` — `GooseAgentLoop` gained `enable_tools: bool = False` (off
+    by default; existing behavior, tests and the kernel's own default registration in
+    `kernel/app.py` are all unchanged) and `_extension_command()`, which builds Goose's
+    own documented `--with-extension` value (`'[name:]ENV1=val1 ENV2=val2 command
+    args...'`) from the run's `state["agent_profile_id"]`/`state["workspace"]` — never a
+    default identity, so a tool-enabled run with no explicit identity still fails the
+    same fail-closed check any other unnamed caller would.
+  - **Real bug caught by actually running it through Goose, not by review:** the first
+    live `run_command` call crashed every time with `RuntimeError: asyncio.run() cannot
+    be called from a running event loop`. FastMCP's stdio transport already runs its own
+    event loop; `run_command`'s original body wrapped the async `run_approved()` call in
+    `asyncio.run()`, which cannot nest inside one already running. The file it was
+    trying to (not) delete stayed untouched either way, but for the wrong reason — a
+    crash, not a policy denial. Fixed by declaring `run_command` itself `async` and
+    `await`-ing directly, letting FastMCP's own loop drive it, matching the framework's
+    own documented support for async tool functions.
+- **Verification:** 7 new tests call the tool functions directly (`@mcp.tool()` returns
+  the wrapped function unchanged, confirmed against the installed SDK's own source, so no
+  stdio protocol needed for these) — denial without workspace registration, success with
+  it, directory listing, denial without a `CapabilityGrant`, and reaching backend
+  selection with one (mirroring F-041's own "reaches backend selection, then correctly
+  fails" pattern for an environment with no real execution backend). Then real, live runs
+  through the actual `goose` binary against this project's own local llama.cpp backend —
+  the standard this session has held every claim to rather than trusting a green test
+  suite alone: **(1)** a real `read_file` call: Goose read a workspace file over the real
+  MCP stdio protocol and correctly reported the number the fake secret file held.
+  **(2)** a real denial: Goose attempted `run_command` with `mutates_state: true` to
+  delete a file with no workspace registered; the call was refused, the model correctly
+  reported the refusal instead of a fabricated success, and the file was confirmed
+  untouched on disk afterward — not merely by trusting Goose's own report of what
+  happened, the actual file was reread.
+- **Honest limits:** the live denial test above went through the earlier
+  `WorkspaceRegistry` gate (the workspace was never registered in that run), not the
+  `CapabilityGrant`/`PolicyEngine` gate specifically — the unit tests separately and
+  precisely pin that gate in isolation, since a single live run cannot cheaply exercise
+  every denial path independently. `kernel/app.py`'s default `GooseAgentLoop`
+  registration still sets `enable_tools=False`: enabling tools for every install by
+  default would require `mcp` (an optional `harness` extra most installs will not have)
+  and has not been re-validated against the full harness-tournament comparison this fix
+  exists to eventually unblock — wiring `enable_tools=True` into
+  `scripts/harness_tournament.py` itself (e.g. a `--goose-tools` flag) and re-running the
+  full comparison is the obvious next step, correctly left for its own pass rather than
+  folded in here.
+
 ---
 
 ## Priority order
@@ -2391,6 +2463,18 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
     and re-synced it. "Computer views" honestly not built: zero `ComputerController`
     controllers are registered anywhere in this codebase yet, so there is no real
     backend behavior for one to show.
+23. ~~**F-045**~~ — **fixed.** Built the real MCP tool bridge F-043 had explicitly named
+    as not-yet-built: `agents/mcp_bridge.py` exposes the same policy-gated
+    `read_file`/`list_directory`/`run_command` tools to Goose via its own
+    `--with-extension` mechanism, held to the identical `PolicyEngine`/`CapabilityGrant`
+    gate as the reference loop. Caught and fixed a real crash live, not in a unit test —
+    `asyncio.run()` nested inside FastMCP's own already-running event loop — by making
+    `run_command` a proper `async` tool. Live-verified both directions through a real
+    `goose` invocation: a genuine `read_file` success, and a genuine denied mutation with
+    the target file reread from disk afterward to confirm it, not just trusted from
+    Goose's own report. `enable_tools` defaults off everywhere existing; wiring it into
+    the harness tournament itself for a real tool-enabled comparison is the obvious next
+    step, correctly left for its own pass.
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
@@ -2402,17 +2486,18 @@ memory-scope filtering, `WorkspaceLease` enforcement, identity propagation, a
 `CapabilityGrant`-authorized execution path, workflow DAGs with recurring triggers, and
 the skill-candidate pipeline are all real, tested, and composed through the existing
 `PolicyEngine`/`JobDispatcher` rather than a second authority or execution plane.
-**Tier 6 (F-041 through F-044) is real on all three fronts, complete on none of them —
+**Tier 6 (F-041 through F-045) is real on all three fronts, complete on none of them —
 by disclosed design, not by default.** The harness tournament has real infrastructure, a
-real second `AgentLoop` (Goose, F-043), and a real live run — inconclusive for two
-disclosed reasons (no MCP tool bridge yet, and the only "coding"-capable local model is
-already known too slow), not a code defect. The remote provider pool's plug-and-play
-seam is real and tested (F-042); no provider is enabled, since that needs real external
-credentials this session cannot supply and is a values question given the project's own
-open-source, no-subscription mission. The Tauri desktop product has a real first
-vertical slice (F-044): authenticated `KernelClient`, and live Roster/Jobs/Approvals/
-Collaboration views against real Tier 5 endpoints — reached only after two automated
-Windows-Rust install attempts hit genuine dead ends (a UAC prompt this session had no
-rights to approve, then an actual `msiexec` crash) and the user installed it manually.
-"Computer views" remain honestly unbuilt: no `ComputerController` in this codebase has a
-single registered controller yet, so there is no real backend behavior for one to show.
+real second `AgentLoop` (Goose, F-043), and now a real, live-verified MCP tool bridge
+(F-045) closing the biggest gap the earlier inconclusive comparison ran into — the actual
+head-to-head tool-enabled tournament run is the next, correctly-deferred step, not yet
+done. The remote provider pool's plug-and-play seam is real and tested (F-042); no
+provider is enabled, since that needs real external credentials this session cannot
+supply and is a values question given the project's own open-source, no-subscription
+mission. The Tauri desktop product has a real first vertical slice (F-044): authenticated
+`KernelClient`, and live Roster/Jobs/Approvals/Collaboration views against real Tier 5
+endpoints — reached only after two automated Windows-Rust install attempts hit genuine
+dead ends (a UAC prompt this session had no rights to approve, then an actual `msiexec`
+crash) and the user installed it manually. "Computer views" remain honestly unbuilt: no
+`ComputerController` in this codebase has a single registered controller yet, so there is
+no real backend behavior for one to show.
