@@ -131,12 +131,29 @@ def main() -> int:
     parser.add_argument("--loop", action="append", dest="loops", help="repeatable; defaults to every registered loop")
     parser.add_argument("--config-root", default=str(REPO / "configs"))
     parser.add_argument("--state-dir", default=None)
+    parser.add_argument(
+        "--goose-tools",
+        action="store_true",
+        help=(
+            "Enable Goose's real MCP tool bridge (FIXES.md F-045) instead of the "
+            "zero-tool default, for a genuine tool-enabled comparison against native. "
+            "Requires the 'harness' extra (mcp) to be installed."
+        ),
+    )
     args = parser.parse_args()
 
     kernel = SovereignKernel.build(args.config_root)
     state_dir = Path(args.state_dir) if args.state_dir else kernel.config.state_dir
     workspace_root = state_dir / "harness-tournament-workspaces"
     workspace_root.mkdir(parents=True, exist_ok=True)
+
+    if args.goose_tools:
+        try:
+            goose_loop = kernel.agent_loops.get("goose")
+        except KeyError:
+            print("--goose-tools requested but no 'goose' loop is registered; ignoring.")
+        else:
+            goose_loop.enable_tools = True
 
     loop_names = args.loops or kernel.agent_loops.names()
     print(f"loops: {loop_names}")

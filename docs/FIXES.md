@@ -2307,7 +2307,13 @@ not fabrication.
   delete a file with no workspace registered; the call was refused, the model correctly
   reported the refusal instead of a fabricated success, and the file was confirmed
   untouched on disk afterward — not merely by trusting Goose's own report of what
-  happened, the actual file was reread.
+  happened, the actual file was reread. **(3)** `scripts/harness_tournament.py` gained a
+  `--goose-tools` flag (flips `enable_tools=True` on the registered `goose` loop before
+  the run) so a real comparison no longer needs a bespoke script; run through the actual
+  production `run_task()` pipeline against a fast local model, a tool-enabled Goose
+  genuinely **passed** the `read-and-report` task end to end (`passed: True`,
+  `denied_attempts: 0`, 11.71s) — not a standalone proof-of-concept, the same code path
+  `--goose-tools` runs for real.
 - **Honest limits:** the live denial test above went through the earlier
   `WorkspaceRegistry` gate (the workspace was never registered in that run), not the
   `CapabilityGrant`/`PolicyEngine` gate specifically — the unit tests separately and
@@ -2315,11 +2321,13 @@ not fabrication.
   every denial path independently. `kernel/app.py`'s default `GooseAgentLoop`
   registration still sets `enable_tools=False`: enabling tools for every install by
   default would require `mcp` (an optional `harness` extra most installs will not have)
-  and has not been re-validated against the full harness-tournament comparison this fix
-  exists to eventually unblock — wiring `enable_tools=True` into
-  `scripts/harness_tournament.py` itself (e.g. a `--goose-tools` flag) and re-running the
-  full comparison is the obvious next step, correctly left for its own pass rather than
-  folded in here.
+  and remains an explicit opt-in a caller chooses, matching `configs/engines.yaml`'s own
+  pattern of shipping a capability disabled until a specific run asks for it. The full
+  `native` vs. tool-enabled-`goose` tournament comparison across all four tasks (not just
+  the one `read-and-report` proof above) still needs the slower "coding"-capable local
+  model problem (F-005/F-012) resolved first to be genuinely informative rather than
+  dominated by timeouts on both sides — the `--goose-tools` flag itself is real and
+  proven; running it as the full four-task comparison is what remains.
 
 ---
 
@@ -2472,9 +2480,10 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
     `run_command` a proper `async` tool. Live-verified both directions through a real
     `goose` invocation: a genuine `read_file` success, and a genuine denied mutation with
     the target file reread from disk afterward to confirm it, not just trusted from
-    Goose's own report. `enable_tools` defaults off everywhere existing; wiring it into
-    the harness tournament itself for a real tool-enabled comparison is the obvious next
-    step, correctly left for its own pass.
+    Goose's own report. Added `harness_tournament.py --goose-tools` and, through the real
+    production `run_task()` pipeline (not a bespoke script), a tool-enabled Goose
+    genuinely passed the `read-and-report` task end to end. `enable_tools` stays an
+    explicit opt-in everywhere else.
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
