@@ -5,7 +5,7 @@ from pathlib import Path
 
 from sovereign_ai.kernel.capability_grants import CapabilityGrantStore
 from sovereign_ai.kernel.policy import PolicyEngine
-from sovereign_ai.kernel.types import ActionRequest, TrustLabel
+from sovereign_ai.kernel.types import ActionRequest, PolicyDecision, RiskLevel, TrustLabel
 from sovereign_ai.resources.workspace_leases import WorkspaceLeaseStore
 
 from .base import ExecutionResult
@@ -28,6 +28,68 @@ class ExecutionBroker:
         self.capability_grants = capability_grants
         self.openshell = OpenShellBackend()
         self.docker = DockerBackend()
+
+    def authorize(
+        self,
+        *,
+        action: str,
+        scope: str,
+        description: str,
+        trust: TrustLabel = TrustLabel.TRUSTED_USER,
+        approved: bool = False,
+        mutates_state: bool = True,
+        uses_credentials: bool = False,
+        subject_id: str | None = None,
+        approval_message: str | None = None,
+    ) -> PolicyDecision:
+        """Grant-then-policy authorisation for one action, without executing anything.
+
+        Extracted from `run_approved` (unchanged in behaviour for its original caller) so
+        that the tool plane added in `knowledge/research.md` D-034 has exactly one way to
+        ask "may this subject do this?". Every new tool -- writing a file, deleting one,
+        generating media, writing memory, querying the web -- clears this before acting, so
+        widening what an agent can *do* never widens how authority is *decided*.
+
+        The precedence is the same one F-036/F-037 established for execution: a real,
+        unexpired, unrevoked `CapabilityGrant` naming exactly this action and scope already
+        cleared policy when it was issued, and is honoured directly. Otherwise
+        `PolicyEngine` decides, and for untrusted-sourced mutations its untrusted-content
+        gate can never return allowed -- which is why an agent cannot write a file without
+        either a grant or a human approval, and is the intended default rather than an
+        oversight.
+
+        Raises `PermissionError` on denial. Returns the `PolicyDecision` on success so a
+        caller can see the required verifier.
+        """
+        grant_authorized = bool(
+            subject_id
+            and self.capability_grants is not None
+            and self.capability_grants.is_active(subject_id, action, scope)
+        )
+        if grant_authorized:
+            return PolicyDecision(
+                allowed=True,
+                approval_required=False,
+                risk=RiskLevel.MEDIUM,
+                reason=f"active capability grant for {action}:{scope}",
+            )
+        decision = self.policy.evaluate(
+            ActionRequest(
+                action=action,
+                scope=scope,
+                trust=trust,
+                description=description,
+                mutates_state=mutates_state,
+                uses_credentials=uses_credentials,
+            )
+        )
+        if not decision.allowed:
+            raise PermissionError(decision.reason)
+        if decision.approval_required and not approved:
+            raise PermissionError(
+                approval_message or f"{action}:{scope} requires explicit approval"
+            )
+        return decision
 
     async def run_approved(
         self,
@@ -86,24 +148,16 @@ class ExecutionBroker:
         # authorize anything, making the whole roster/approval pipeline inert for
         # execution. `subject_id` alone is not enough to skip policy: only a real,
         # unexpired, unrevoked grant naming this exact action and scope does.
-        grant_authorized = bool(
-            subject_id
-            and self.capability_grants is not None
-            and self.capability_grants.is_active(subject_id, "execute", "workspace")
+        self.authorize(
+            action="execute",
+            scope="workspace",
+            description=" ".join(argv),
+            trust=trust,
+            approved=approved,
+            mutates_state=mutates_state,
+            subject_id=subject_id,
+            approval_message="Execution requires explicit approval",
         )
-        if not grant_authorized:
-            req = ActionRequest(
-                action="execute",
-                scope="workspace",
-                trust=trust,
-                description=" ".join(argv),
-                mutates_state=mutates_state,
-            )
-            decision = self.policy.evaluate(req)
-            if not decision.allowed:
-                raise PermissionError(decision.reason)
-            if decision.approval_required and not approved:
-                raise PermissionError("Execution requires explicit approval")
         if self.openshell.available():
             return await self.openshell.run(argv, canonical_cwd, sync_back=mutates_state)
         if self.docker.available():

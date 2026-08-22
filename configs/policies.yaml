@@ -40,6 +40,24 @@ risk_rules:
     risk: medium
     approval: false
 
+  # Added with the tool plane (knowledge/research.md D-034). Memory recall is a read and
+  # is rated like one; a memory *write* mutates state, so the untrusted-content gate in
+  # PolicyEngine still blocks an agent from writing memory without a grant or approval --
+  # that is the intended default, not an oversight (D-038).
+  - match: {action: "read", scope: "memory"}
+    risk: low
+    approval: false
+  - match: {action: "write", scope: "memory"}
+    risk: medium
+    approval: false
+  # Read-only web search through the locally deployed SearXNG. Deliberately distinct from
+  # network_post:untrusted above, which stays approval-gated: fetching public results is
+  # not the same risk as sending data outward. What comes back is untrusted_web content
+  # and cannot authorise anything (baseline invariant 4, D-037).
+  - match: {action: "network_get", scope: "public_web"}
+    risk: medium
+    approval: false
+
 trust_labels:
   - trusted_user
   - trusted_local

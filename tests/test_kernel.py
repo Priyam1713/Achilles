@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shutil
 import time
 from pathlib import Path
@@ -3400,3 +3401,212 @@ def test_goose_agent_loop_enable_tools_defaults_off():
 
     loop = GooseAgentLoop("goose", "http://127.0.0.1:1/v1", "m")
     assert loop.enable_tools is False
+
+
+# ---------------------------------------------------------------------------------------
+# The tool plane (knowledge/research.md research wave 8, D-034).
+#
+# Wave 8's reachability audit found ToolRegistry holding zero tools while ~290 GB of
+# specialist models sat installed and uncallable, and the agent loop limited to read_file /
+# list_directory / run_command. These tests exist so "installed" can never again be mistaken
+# for "reachable": they assert registration, that the new tools work end to end through the
+# real loop, and -- most importantly -- that widening what an agent can do did not widen how
+# authority is decided.
+# ---------------------------------------------------------------------------------------
+
+
+def test_tool_plane_is_registered_and_covers_the_capability_domains(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    names = set(k.tool_dispatcher.names())
+
+    # Files and search: the minimum for a coding agent.
+    assert {"read_file", "write_file", "edit_file", "grep", "glob", "run_command"} <= names
+    # The domains wave 8 found unreachable.
+    assert {
+        "invoke_specialist",
+        "generate_media",
+        "search_memory",
+        "remember",
+        "web_search",
+    } <= names
+    # The registry itself is no longer an empty dictionary behind a ranking algorithm.
+    assert len(k.tools.discover("edit a python file", limit=10)) > 0
+    assert k.tool_dispatcher.describe().count("\n") >= len(names) - 1
+
+
+def test_agent_loop_writes_a_file_only_with_a_capability_grant(tmp_path, monkeypatch):
+    """The whole point of the tool plane: a real edit, still refused by default.
+
+    Untrusted model output plus a mutation is exactly what PolicyEngine's untrusted-content
+    gate blocks, so the first attempt must fail even though the workspace is writable. The
+    second attempt differs only by an active CapabilityGrant -- the same mechanism F-037
+    established for execution, now covering file writes.
+    """
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    target = workspace / "generated.txt"
+
+    action = json.dumps(
+        {
+            "tool": "write_file",
+            "args": {"path": target.as_posix(), "content": "written by the agent\n"},
+        }
+    )
+    fake = _FakeInference([action, '{"tool": "done", "summary": "stopped after denial"}'])
+    loop = NativeAgentLoop(fake, k.execution, k.workspaces, k.events, tools=k.tool_dispatcher)
+    state = {
+        "run_id": "tool-run-1",
+        "task": "create a file",
+        "workspace": str(workspace),
+        "agent_profile_id": "agent-writer",
+    }
+
+    denied = asyncio.run(loop.next_step(state))
+    assert denied.payload["observation"]["denied"] is True
+    assert not target.exists(), "a denied write must not touch the filesystem"
+
+    # Now issue exactly the grant the policy path demands, and nothing more.
+    k.capability_grants.issue(
+        "agent-writer", "write", "workspace", "test-operator", ttl_seconds=60
+    )
+    fake._replies = [action, '{"tool": "done", "summary": "wrote the file"}']
+    state["history"] = []
+    allowed = asyncio.run(loop.next_step(state))
+
+    assert allowed.payload["observation"]["created"] is True
+    # Reread from disk rather than trusting the tool's own report.
+    assert target.read_text(encoding="utf-8") == "written by the agent\n"
+
+
+def test_edit_file_refuses_an_ambiguous_match(tmp_path, monkeypatch):
+    from sovereign_ai.tools.base import ToolContext
+    from sovereign_ai.tools.files import EditFileTool
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    target = workspace / "dup.py"
+    target.write_text("x = 1\nx = 1\n", encoding="utf-8")
+    k.capability_grants.issue(
+        "agent-editor", "write", "workspace", "test-operator", ttl_seconds=60
+    )
+
+    tool = EditFileTool(k.workspaces, k.execution)
+    ctx = ToolContext(workspace=str(workspace), subject_id="agent-editor")
+
+    ambiguous = asyncio.run(
+        tool.run({"path": str(target), "old_string": "x = 1", "new_string": "x = 2"}, ctx)
+    )
+    assert ambiguous["occurrences"] == 2
+    assert target.read_text(encoding="utf-8") == "x = 1\nx = 1\n", "refused edit must not write"
+
+    unique = asyncio.run(
+        tool.run({"path": str(target), "old_string": "x = 1\nx = 1", "new_string": "x = 2"}, ctx)
+    )
+    assert unique["replacements"] == 1
+    assert target.read_text(encoding="utf-8") == "x = 2\n"
+
+
+def test_grep_and_glob_are_first_class_read_tools(tmp_path, monkeypatch):
+    """Searching is a read, and should be gated like one -- not smuggled through the
+    execution policy as a shell command, which is all this project could do before."""
+    from sovereign_ai.tools.base import ToolContext
+    from sovereign_ai.tools.files import GlobTool, GrepTool
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    (workspace / "pkg").mkdir(parents=True)
+    (workspace / "pkg" / "a.py").write_text("def target_function():\n    pass\n", encoding="utf-8")
+    (workspace / "pkg" / "b.txt").write_text("target_function mentioned here\n", encoding="utf-8")
+    (workspace / ".git").mkdir()
+    (workspace / ".git" / "c.py").write_text("target_function()\n", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+    ctx = ToolContext(workspace=str(workspace))
+
+    hits = asyncio.run(GrepTool(k.workspaces).run({"pattern": r"def target_\w+"}, ctx))
+    assert hits["count"] == 1
+    assert hits["matches"][0]["line"] == 1
+
+    scoped = asyncio.run(
+        GrepTool(k.workspaces).run({"pattern": "target_function", "glob": "*.py"}, ctx)
+    )
+    # .git is skipped, so the only .py match is the real source file.
+    assert [m["path"] for m in scoped["matches"]] == [str(workspace / "pkg" / "a.py")]
+
+    found = asyncio.run(GlobTool(k.workspaces).run({"pattern": "**/*.py"}, ctx))
+    assert found["matches"] == [str(workspace / "pkg" / "a.py")]
+
+
+def test_tools_refuse_paths_outside_an_approved_workspace(tmp_path, monkeypatch):
+    from sovereign_ai.tools.base import ToolContext
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+
+    ctx = ToolContext(workspace=str(workspace), subject_id="agent-x")
+    observation = asyncio.run(k.tool_dispatcher.invoke("read_file", {"path": str(outside)}, ctx))
+    assert observation["denied"] is True
+    assert "approved" in observation["error"]
+
+
+def test_search_memory_tool_puts_retrieval_back_in_the_loop(tmp_path, monkeypatch):
+    """D-038: ContextBuilder existed and no request path ever called it."""
+    from sovereign_ai.tools.base import ToolContext
+
+    k = kernel(tmp_path, monkeypatch)
+    k.memory.put(
+        kind="note",
+        content="the deploy key lives in the operator's keyring, never in the repo",
+        source="operator",
+        trust="trusted_user",
+    )
+    ctx = ToolContext(subject_id="agent-reader")
+    found = asyncio.run(k.tool_dispatcher.invoke("search_memory", {"query": "deploy key"}, ctx))
+    assert found["count"] >= 1
+    assert "keyring" in found["items"][0]["content"]
+    assert found["items"][0]["trust"] == "trusted_user"
+
+
+def test_remember_is_denied_without_a_grant_and_labelled_untrusted_with_one(
+    tmp_path, monkeypatch
+):
+    from sovereign_ai.tools.base import ToolContext
+
+    k = kernel(tmp_path, monkeypatch)
+    ctx = ToolContext(subject_id="agent-writer")
+
+    denied = asyncio.run(
+        k.tool_dispatcher.invoke("remember", {"content": "I decided this is true"}, ctx)
+    )
+    assert denied["denied"] is True
+
+    k.capability_grants.issue("agent-writer", "write", "memory", "test-operator", ttl_seconds=60)
+    stored = asyncio.run(
+        k.tool_dispatcher.invoke("remember", {"content": "I decided this is true"}, ctx)
+    )
+    # The agent does not get to choose its own trust label.
+    assert stored["trust"] == "untrusted_model_output"
+    rows = k.memory.search_lexical("decided")
+    assert rows and rows[0]["trust"] == "untrusted_model_output"
+
+
+def test_web_search_authorises_then_fails_legibly_when_the_engine_is_down(tmp_path, monkeypatch):
+    """The SearXNG this project deploys had no client at all until the tool plane. When it
+    is not running, the agent should get an actionable observation, not a stack trace."""
+    from sovereign_ai.tools.base import ToolContext
+    from sovereign_ai.tools.capabilities import WebSearchTool
+
+    k = kernel(tmp_path, monkeypatch)
+    tool = WebSearchTool(k.execution, base_url="http://127.0.0.1:9", timeout_s=2.0)
+    result = asyncio.run(tool.run({"query": "sovereign ai"}, ToolContext(subject_id="agent-x")))
+    assert "unreachable" in result["error"]
+    assert "docker-compose" in result["error"]

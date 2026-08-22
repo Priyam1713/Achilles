@@ -22,7 +22,9 @@ from sovereign_ai.resources.residency import ResidencyCoordinator
 from sovereign_ai.resources.scheduler import ResourceScheduler
 from sovereign_ai.resources.workspace_leases import WorkspaceLeaseStore
 from sovereign_ai.specialists import SpecialistBroker, SpecialistSupervisor
+from sovereign_ai.tools.dispatcher import ToolDispatcher
 from sovereign_ai.tools.registry import ToolRegistry
+from sovereign_ai.tools.standard import build_standard_tools
 from sovereign_ai.transactions.manager import TransactionManager
 from sovereign_ai.verification.engine import VerificationEngine
 from sovereign_ai.watchers.bus import EventBus
@@ -79,6 +81,7 @@ class SovereignKernel:
     event_bus: EventBus
     gpu: GPUArbiter
     tools: ToolRegistry
+    tool_dispatcher: ToolDispatcher
     memory_graph: MemoryGraph
     residency: ResidencyCoordinator
     collaboration: CollaborationService
@@ -134,9 +137,23 @@ class SovereignKernel:
         text_vector = SpecialistVectorRetriever(specialists, vector_store)
         context = ContextBuilder(memory, text_vector=text_vector)
         verification = VerificationEngine()
+        tools = ToolRegistry()
+        tool_dispatcher = build_standard_tools(
+            registry=tools,
+            workspaces=workspaces,
+            execution=execution,
+            specialists=specialists,
+            media=media,
+            memory=memory,
+            context=context,
+            search_url=str(
+                config.system.get("search", {}).get("searxng_url", "http://127.0.0.1:8888")
+            ),
+        )
         agent_loops = AgentLoopRegistry()
         agent_loops.register(
-            "native", NativeAgentLoop(inference, execution, workspaces, events)
+            "native",
+            NativeAgentLoop(inference, execution, workspaces, events, tools=tool_dispatcher),
         )
         # D-015: Goose is genuinely optional -- most installs of this project will never
         # have built it (it needs a Rust/Cargo toolchain most users won't have either),
@@ -157,7 +174,6 @@ class SovereignKernel:
         computer = ComputerController()
         transactions = TransactionManager(state / "transactions")
         event_bus = EventBus()
-        tools = ToolRegistry()
         memory_graph = MemoryGraph(state / "memory-graph.db")
         collaboration = CollaborationService(
             CollaborationStore(state / "collaboration.db"), config.collaboration
@@ -204,6 +220,7 @@ class SovereignKernel:
             event_bus,
             gpu,
             tools,
+            tool_dispatcher,
             memory_graph,
             residency,
             collaboration,

@@ -2378,6 +2378,72 @@ not fabrication.
   still Windows-plus-WSL to *install* (`D-035`), still has no release, tag, changelog or signed
   artifact (`D-040`'s remaining half), and the tool plane is still empty (`D-034`, F-047).
 
+### F-047 — Fixed: the tool plane was empty, so 19 of 21 capability domains were unreachable
+
+- **Severity:** `critical` (the project's central capability gap) · **Status:** `fixed` for
+  the registration and dispatch half; individual specialist adapters remain their own work.
+- **Motivating problem:** research wave 8's reachability audit. `ToolRegistry` was
+  instantiated at `kernel/app.py:160` and **never had a single tool registered into it** —
+  "contextual tool discovery" was a working ranking algorithm over an empty dictionary. The
+  agent loop hard-coded three tools (`read_file`, `list_directory`, `run_command`) and had no
+  path to the specialist broker, the media broker, memory or the web. `ContextBuilder` was
+  constructed and called by nothing. SearXNG was deployed by `infra/docker-compose.yml` and
+  queried by no code in `src/`. The result: ~290 GB of installed specialist models, and every
+  capability domain except text reasoning and shell execution unreachable by an agent.
+- **Fix — a real tool plane (`knowledge/research.md` D-034):**
+  - `tools/base.py` — `Tool` and an explicit `ToolContext` (workspace, approval, subject,
+    lease, run). A tool never reaches back into the kernel for the caller's identity; the
+    caller states it and is judged against that statement.
+  - `tools/files.py` — `read_file` (now with line ranges), `list_directory`, `write_file`,
+    `edit_file`, `delete_file`, `grep`, `glob`. Searching is a **read**, gated like one,
+    instead of a shell execution through whatever `grep` the host happened to have.
+  - `tools/shell.py` — `run_command`, behaviour unchanged, moved into the plane.
+  - `tools/capabilities.py` — `invoke_specialist` (routed by *capability*, so the kernel's
+    hardware-aware scheduler still picks the checkpoint), `generate_media`, `search_memory`,
+    `remember`, `web_search`.
+  - `tools/dispatcher.py` — owns instances, keeps the registry in sync, renders the
+    prompt-facing description, and converts a `PermissionError` into a structured
+    `{"denied": true}` observation the agent can reason about rather than a crash.
+  - `tools/standard.py` — `build_file_tools` (any loop, no kernel needed) and
+    `build_standard_tools` (everything the kernel can reach).
+  - `agents/native_loop.py` — no longer knows what a tool *is*. It parses one action and
+    dispatches; the system prompt is generated from the registry, and
+    `ToolRegistry.discover` finally has something to rank, which keeps the roster small in a
+    16K context.
+  - `execution/broker.py` — new `authorize()`, extracted from `run_approved` **without
+    changing its behaviour**, so every tool clears the same grant-then-policy check a shell
+    command always has. Widening what an agent can do did not widen how authority is decided.
+  - `configs/policies.yaml` — `read:memory`, `write:memory`, `network_get:public_web`.
+    `network_get` is deliberately distinct from the already-approval-gated
+    `network_post:untrusted`: fetching public results is not the risk of sending data out.
+- **Verification:** 8 new tests, all passing, plus the 153 pre-existing ones (161 total,
+  ruff clean). The load-bearing ones:
+  - `test_agent_loop_writes_a_file_only_with_a_capability_grant` — the same write action is
+    **denied by default** (untrusted model output + mutation hits `PolicyEngine`'s
+    untrusted-content gate) and succeeds only once a `CapabilityGrant` for `write:workspace`
+    exists. The denial case asserts the file **does not exist on disk**; the success case
+    **rereads the file from disk** rather than trusting the tool's own report.
+  - `test_edit_file_refuses_an_ambiguous_match` — a non-unique `old_string` is refused and
+    the file is left byte-identical.
+  - `test_tools_refuse_paths_outside_an_approved_workspace` — knowing a path still grants
+    nothing.
+  - `test_remember_is_denied_without_a_grant_and_labelled_untrusted_with_one` — the agent
+    does not choose its own trust label.
+- **Deliberate deviation from `D-021`, recorded rather than silent:** that decision named
+  Codex's `apply_patch` envelope as the edit format. `edit_file` implements exact-string
+  search/replace with a uniqueness check instead. Aider's own evidence is that edit format
+  should be chosen per model, and unique-match replacement is the format a 9B-class local
+  model gets right most often — no line numbers to miscount, no hunk headers to fabricate —
+  while a uniqueness check turns an ambiguous edit into a refusal rather than a wrong edit.
+  The context-anchored patch envelope remains open work, not a closed decision.
+- **What this does not fix:** `invoke_specialist` can now *reach* every worker, but seven of
+  fourteen workers still have no handler and return HTTP 501 (`moss_audio`, `sam`, `ui_tars`,
+  `fairchem`, `medgemma`, `ace_step`), so audio reasoning, segmentation, GUI grounding,
+  materials, medical and music are reachable-but-unimplemented rather than unreachable.
+  `ComputerController` still has zero registered controllers, so there is still no browser or
+  desktop control. `web_search` returns untrusted content into the same context as the
+  planner, which is exactly what `D-037`'s quarantine is for and has not been built yet.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.
