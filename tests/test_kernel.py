@@ -389,6 +389,51 @@ def test_loopback_only_middleware_rejects_foreign_host(tmp_path, monkeypatch):
     assert genuine.status_code == 200
 
 
+def test_loopback_only_middleware_rejects_foreign_origin(tmp_path, monkeypatch):
+    """FIXES.md F-004: an Origin header that does not match this installation (and is not
+    a recognized desktop-app origin) must be refused, same as a foreign Host."""
+    client = api_client(tmp_path, monkeypatch)
+    rebound = client.get("/health", headers={"Origin": "https://attacker.example.com"})
+    assert rebound.status_code == 400
+    assert "access-control-allow-origin" not in rebound.headers
+
+
+def test_loopback_only_middleware_allows_desktop_app_origin_with_cors_headers(tmp_path, monkeypatch):
+    """The Tauri desktop client's webview origin (Tier 6 desktop product) is never the
+    same as the kernel API's own host:port, on any platform Tauri supports -- it needs an
+    explicit, still-precise CORS allowance rather than being rejected as a foreign origin,
+    and the response must carry real CORS headers or the webview's fetch() cannot read it."""
+    client = api_client(tmp_path, monkeypatch)
+    response = client.get("/health", headers={"Origin": "http://localhost:1420"})
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:1420"
+
+
+def test_loopback_only_middleware_answers_desktop_app_preflight(tmp_path, monkeypatch):
+    """No route defines OPTIONS, so the desktop app's CORS preflight must be answered by
+    the middleware itself rather than falling through to a 404/405."""
+    client = api_client(tmp_path, monkeypatch)
+    response = client.options(
+        "/roster/approvals/some-id/resolve",
+        headers={"Origin": "http://localhost:1420", "Access-Control-Request-Method": "POST"},
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:1420"
+    assert "POST" in response.headers["access-control-allow-methods"]
+
+
+def test_loopback_only_middleware_rejects_preflight_from_foreign_origin(tmp_path, monkeypatch):
+    """A preflight is only ever answered for a recognized desktop-app origin -- an
+    arbitrary origin's OPTIONS request must still be refused, not accidentally granted
+    the same short-circuit."""
+    client = api_client(tmp_path, monkeypatch)
+    response = client.options(
+        "/health", headers={"Origin": "https://attacker.example.com"}
+    )
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
+
+
 def test_create_collaboration_identity_is_not_upsert(tmp_path, monkeypatch):
     """FIXES.md F-003: creation must fail closed on a duplicate id, not silently redefine
     an existing identity's kind/trust/agent configuration."""

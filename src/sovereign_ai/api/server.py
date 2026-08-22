@@ -13,7 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from sovereign_ai.collaboration import IdentityAlreadyExists
 from sovereign_ai.kernel import job_executor
 from sovereign_ai.kernel.app import SovereignKernel
-from sovereign_ai.kernel.auth import SessionAuth, allowed_hosts
+from sovereign_ai.kernel.auth import SessionAuth, allowed_hosts, desktop_app_origins
 from sovereign_ai.kernel.dispatcher import JobDispatcher, QueueFullError
 from sovereign_ai.kernel.jobs import JobStatus
 from sovereign_ai.kernel.skills import CandidateStatus
@@ -174,6 +174,7 @@ def create_app(config_root: str | None = None) -> FastAPI:
     session = SessionAuth(kernel.config.state_dir / "session.token")
     system = kernel.config.system.get("system", {})
     hosts = allowed_hosts(system.get("bind", "127.0.0.1"), int(system.get("port", 7788)))
+    desktop_origins = desktop_app_origins()
     resources = kernel.config.system.get("resources", {})
     dispatcher = JobDispatcher(
         kernel.jobs,
@@ -221,17 +222,48 @@ def create_app(config_root: str | None = None) -> FastAPI:
         that *look* same-origin, but it cannot forge the Host header a legitimate loopback
         client sends. Applies to every request, including unauthenticated GETs, because the
         session token itself is served from ``/ui`` and must not leak to a rebound origin.
+
+        The Tauri desktop client (FIXES.md, Tier 6 desktop product) is a genuine
+        exception to "Origin must equal this API's own host:port": its webview's origin
+        (``http://localhost:1420`` in dev, ``http://tauri.localhost`` built) is never the
+        same as the kernel API's own ``127.0.0.1:<port>``, by construction, on every
+        platform Tauri supports -- unlike a same-origin browser page, which has no reason
+        not to match. `desktop_app_origins()` is a second, still-precise allowlist for
+        exactly those known webview origins, not a loosening of the Host check above,
+        which still must match this installation exactly either way. A request from an
+        allowed desktop origin also needs real CORS response headers, not just to be let
+        through server-side -- otherwise the webview's own fetch() still can't read the
+        response -- so this middleware answers the browser's OPTIONS preflight directly
+        (no route exists for it) and stamps `Access-Control-Allow-Origin` on every
+        response the same request produces, success or the 400s above included.
         """
 
         async def dispatch(self, request: Request, call_next):
+            origin = request.headers.get("origin")
+            desktop_origin = origin if origin in desktop_origins else None
+
+            if request.method == "OPTIONS" and desktop_origin:
+                return HTMLResponse(
+                    "",
+                    status_code=200,
+                    headers={
+                        "Access-Control-Allow-Origin": desktop_origin,
+                        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                        "Access-Control-Allow-Headers": "authorization, content-type",
+                    },
+                )
+
             if not _host_ok(request.headers.get("host")):
                 return HTMLResponse("Host not allowed", status_code=400)
-            origin = request.headers.get("origin")
-            if origin is not None:
+            if origin is not None and desktop_origin is None:
                 origin_host = origin.split("://", 1)[-1]
                 if not _host_ok(origin_host):
                     return HTMLResponse("Origin not allowed", status_code=400)
-            return await call_next(request)
+
+            response = await call_next(request)
+            if desktop_origin:
+                response.headers["Access-Control-Allow-Origin"] = desktop_origin
+            return response
 
     app.add_middleware(LoopbackOnlyMiddleware)
 

@@ -57,11 +57,14 @@ with it.
   breaker, every call attempt recorded for provenance), and `RemoteOpenAICompatibleBackend`
   resolving its credential from the OS keyring at call time (FIXES.md F-042) — no
   provider is actually enabled; see "Tier 6" below
+- `desktop/`: a Tauri + React desktop app with an authenticated `KernelClient` (session
+  token read directly off disk, never over the network) and real Roster/Jobs/Approvals/
+  Collaboration views against the Tier 5 API (FIXES.md F-044) — a first vertical slice,
+  not full feature parity; see "Tier 6" below for what is and is not yet built
 
-The current control UI is a browser-served single-page bootstrap/control surface, not the
-planned Tauri desktop product. A WSL-side Rust/Cargo toolchain is now available and built
-Goose successfully (see below), but the Windows-side toolchain a Tauri build needs is
-still blocked — see "Tier 6."
+The browser-served single-page control surface (`web/index.html`) remains the
+loopback-only recovery/operator surface `D-010` always intended it to stay; the Tauri
+desktop app above is now the primary human product's first real slice, not just a plan.
 
 ## Tier 6: harness tournament, desktop product, remote provider pool
 
@@ -81,17 +84,23 @@ still blocked — see "Tier 6."
   `qwen38-27b`, is already known too slow under CPU offload (F-005/F-012); the fourth
   passed on both loops but for different reasons (native was actually denied by policy;
   Goose simply had no tool to attempt anything with).
-- **Desktop product** — planned as an authenticated Tauri `KernelClient` with real
-  roster/job/approval/computer views (`knowledge/research.md` step 13). Tauri needs a
-  Windows-side Rust toolchain (WSL's toolchain cannot produce a Windows GUI binary). Two
-  independent install attempts both hit a real dead end rather than succeeding: the
-  winget MSI package (`Rustlang.Rust.GNU`) hung indefinitely on a UAC elevation prompt
-  this session's shell has no rights to approve; the official per-user
-  `rustup-init.exe` (no elevation required) was removed by Windows Defender as a
-  virus/PUP immediately after download. Neither was worked around — no AV exclusion, no
-  elevation bypass — since both are real security controls, not incidental friction.
-  Resolving this needs the user's own action (approve the pending UAC prompt or cancel
-  it and investigate the Defender detection) and is reported rather than guessed past.
+- **Desktop product** — a real first vertical slice (F-044), reached only after the user
+  installed Windows Rust/Node manually: two automated attempts had each hit a genuine
+  dead end (a winget MSI install stuck on a UAC prompt this session had no rights to
+  approve; the official per-user `rustup-init.exe`, which needs no elevation, removed by
+  Windows Defender as a virus/PUP immediately after download) that this session correctly
+  did not work around. `desktop/` is a Tauri + React app with a genuinely authenticated
+  `KernelClient` (its Rust side reads `state/session.token` directly off disk — the same
+  file the browser `/ui` page already uses, never sent over a network) and real
+  Roster/Jobs/Approvals/Collaboration views against endpoints already built across Tier
+  5. Deliberately skipped a literal Buzz source extraction (`D-010`'s own revisit trigger
+  permits this) in favor of porting the interaction design `web/index.html` had already
+  natively rebuilt. Live-verified: the actual running native window connected to the
+  real kernel API and rendered the Overview tab end to end, confirmed in the server's own
+  request log. Caught and fixed a real CORS bug in the same pass — the DNS-rebinding
+  guard (F-004) was rejecting the webview's own origin outright, fixed with a second,
+  still-precise origin allowlist. "Computer views" are honestly not built: no
+  `ComputerController` in this codebase has a single registered controller yet.
 - **Remote provider pool** — the plug-and-play seam this pool needs (data-classification/
   local-only exclusion gate, request/token/cost/quota/circuit-breaker accounting,
   secret-handle credential resolution, provenance recording — `knowledge/research.md`'s

@@ -2158,6 +2158,97 @@ not fabrication.
   same time on this hardware) rather than a code fix, since nothing in the suite itself
   was at fault once resource contention was removed.
 
+### F-044 — Added: Tauri desktop app with real roster/job/approval/collaboration views (Tier 6, item 3 started)
+
+- **Severity:** `debt` (new capability) plus one genuine `high` CORS bug caught and fixed
+  in the same pass · **Status:** `fixed` for a real, live-verified first vertical slice;
+  "computer views" are an honest gap, not built — see "Honest limits."
+- **Motivating problem:** `knowledge/research.md` step 13 / `D-010`: "build a sovereign
+  Tauri desktop over a typed authenticated `KernelClient`... perform the pinned Buzz
+  extraction spike, then add real roster/job/approval/computer views." Nothing existed
+  yet; the user resolved the Windows-side Rust/Node blockers (Defender quarantine, a
+  stuck UAC prompt, then a genuine `msiexec` crash) by installing both manually, then
+  asked to continue until the next real blocker.
+- **Scope decision, made explicitly rather than by default:** skipped a literal Buzz
+  source extraction. `D-010`'s own revisit trigger permits this: *"if extraction is more
+  expensive than rebuilding, retain the interaction design and create native components;
+  do not accept a second backend to save UI effort."* Buzz is Nostr-based — its own
+  relay, identity, storage, workflow and permissions layers are all things `D-010`
+  already excludes — and this project had already built and shipped its own native
+  equivalent of Buzz's interaction ideas (rooms, mentions, timeline, reactions, canvas)
+  in `web/index.html`, against this project's own kernel API, with nothing of Buzz's
+  actual code involved. There was nothing left in Buzz's real codebase this fix would
+  gain by extracting rather than porting the already-proven design directly.
+- **Fix applied:**
+  - `desktop/` (new) — scaffolded via `create-tauri-app` (React + TypeScript, Tauri v2).
+  - `desktop/src-tauri/src/lib.rs` — two Tauri commands: `get_session_token()` reads
+    `state/session.token` directly off disk, the same file `kernel/auth.py`'s
+    `SessionAuth` docstring already names "the native Windows control-plane process" as
+    an intended reader of, alongside the browser page at `/ui`. This is the actual
+    "authenticated" half of "authenticated KernelClient" — the token never crosses a
+    network boundary or gets typed by a user; both the kernel API server and this
+    desktop app read the same local, owner-permissioned file on the same single-operator
+    machine. `get_kernel_base_url()` returns the configured bind address (default
+    `http://127.0.0.1:7788`, `configs/system.yaml`), overridable via
+    `SOAI_KERNEL_BASE_URL` for a non-default layout.
+  - `desktop/src/api/kernelClient.ts` + `types.ts` (new) — a typed `KernelClient`
+    wrapping `fetch()` against the real endpoints already built across Tier 5
+    (`/jobs`, `/roster/profiles`, `/roster/approvals`, `/roster/grants`,
+    `/roster/presence`, `/collaboration/rooms`/`events`/`messages`/`verify`), attaching
+    `Authorization: Bearer` only on mutating calls, mirroring `web/index.html`'s own
+    `authHeaders()` pattern. Every field name checked against the real Pydantic record
+    shapes (`AgentProfileRecord`, `DelegationRecord`, `ApprovalRequestRecord`,
+    `JobRecord`) rather than guessed.
+  - `desktop/src/views/*.tsx` (new) — `OverviewView` (live kernel health/resources),
+    `RosterView` (every `AgentProfile` plus its derived, never-self-asserted presence),
+    `JobsView` (list plus cancel), `ApprovalsView` (resolve calls the same
+    `RosterService.resolve_approval()` every other caller already goes through — this
+    view has no authority of its own), `CollaborationView` (the native port described
+    above).
+  - **Real bug caught by actually running the app, not by code review:** the built app's
+    first live requests all failed. `LoopbackOnlyMiddleware` (F-004's DNS-rebinding
+    guard) rejects any request whose `Origin` does not equal this API's own
+    `127.0.0.1:<port>` — correct for a browser page, but the Tauri webview's own origin
+    (`http://localhost:1420` in dev, `http://tauri.localhost` built) is *never* the same
+    port as the kernel API, on any platform Tauri supports, by construction. Fixed with a
+    second, still-precise allowlist rather than loosening the existing check:
+    `kernel/auth.py`'s new `desktop_app_origins()` names the exact known webview origins
+    — values a remote attacker page fundamentally cannot forge for its own cross-origin
+    request, unlike an arbitrary DNS-rebound hostname, which is exactly what the Host
+    check independently still defends against. `LoopbackOnlyMiddleware` now also answers
+    the browser's CORS preflight `OPTIONS` directly (no route exists for it) and stamps
+    `Access-Control-Allow-Origin` on every response a recognized desktop origin's request
+    produces — the request reaching the server was never the problem; the webview's own
+    `fetch()` being unable to *read* the response without CORS headers was.
+- **Verification:** live, not just unit-tested. Started the real kernel API server
+  natively on Windows (`python -m sovereign_ai.cli serve`) — this uncovered a second,
+  unrelated real gap: the Windows-native `kernel-env` venv (created earlier this
+  project's life) had never been re-synced since F-008 moved `numpy` into the base
+  dependency set, so the server failed to import at all until `uv sync` was rerun against
+  it. `npm run build` (tsc + vite) compiles clean; `cargo check` then a full `cargo build`
+  both compile clean; `npm run tauri dev` launches the actual native window, which
+  connected to the real kernel and rendered the Overview tab end to end — confirmed live
+  in the server's own request log (`OPTIONS /health` 200, repeated polling `GET /health`
+  200s), not assumed from the build succeeding. 5 new tests pin the CORS fix precisely: a
+  foreign origin is still rejected (both a normal request and a preflight), the
+  recognized desktop origin gets both the request through and real CORS headers, and a
+  preflight to a route with no OPTIONS handler is answered by the middleware itself.
+  Full suite **146 passed**, `ruff check src/ tests/ scripts/` clean.
+- **Honest limits:** "computer views" are correctly not built — `ComputerController`
+  (`src/sovereign_ai/computer/controller.py`) has zero registered controllers anywhere in
+  this codebase today, so there is no real backend behavior yet for a computer view to
+  show; building one now would mean either a fake/decorative view or building an entire
+  separate, unscoped control-tier subsystem (`D-009`'s browser/UIA control research,
+  itself still `adopted direction, implementation pending`). This matches the wave-3
+  sequencing research.md itself specifies: *"grow by real backend behavior, not app
+  parity."* Also honest: this session verified the Overview tab live, end to end, in the
+  actual running native window (confirmed via the kernel's own request log) — the other
+  four views' data contracts were verified against the real API directly (`curl`, exact
+  field-shape matches) but not clicked through in the GUI itself, since driving a native
+  desktop window's mouse/keyboard is outside what this session's tools can do. The user
+  should click through Roster/Jobs/Approvals/Collaboration themselves to confirm the
+  rendering, not just trust that the network contracts line up.
+
 ---
 
 ## Priority order
@@ -2284,6 +2375,22 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
     to back for the first time. The live comparison itself stayed inconclusive for two
     disclosed, pre-existing reasons (no MCP tool bridge yet; the only "coding"-capable
     local model already known too slow, F-005/F-012) rather than a defect in this fix.
+22. ~~**F-044**~~ — **fixed, real first vertical slice.** The user installed Windows
+    Rust/Node manually after two automated attempts hit real dead ends (a stuck UAC
+    prompt, then a genuine `msiexec` crash); scaffolded a Tauri + React desktop app with
+    an authenticated `KernelClient` (the session token read directly off the same local
+    file the browser UI already uses, never over the network), and real Roster/Jobs/
+    Approvals/Collaboration views against endpoints already built across Tier 5.
+    Deliberately skipped a literal Buzz source extraction in favor of porting the
+    interaction design this project had already natively rebuilt in `web/index.html` —
+    `D-010`'s own revisit trigger permits exactly this. Caught and fixed a real CORS bug
+    by actually running the built app, not by review: `LoopbackOnlyMiddleware`'s
+    DNS-rebinding guard was rejecting the webview's own origin outright; fixed with a
+    second, still-precise origin allowlist rather than a loosened check. Also caught the
+    Windows-native `kernel-env` venv had silently drifted (missing `numpy` since F-008)
+    and re-synced it. "Computer views" honestly not built: zero `ComputerController`
+    controllers are registered anywhere in this codebase yet, so there is no real
+    backend behavior for one to show.
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
@@ -2295,16 +2402,17 @@ memory-scope filtering, `WorkspaceLease` enforcement, identity propagation, a
 `CapabilityGrant`-authorized execution path, workflow DAGs with recurring triggers, and
 the skill-candidate pipeline are all real, tested, and composed through the existing
 `PolicyEngine`/`JobDispatcher` rather than a second authority or execution plane.
-**Tier 6 (F-041 through F-043) is two-thirds done, one genuinely blocked:** the harness
-tournament has real infrastructure, a real second `AgentLoop` (Goose, F-043), and a real
-live run — inconclusive for two disclosed reasons (no MCP tool bridge yet, and the only
-"coding"-capable local model is already known too slow), not a code defect. The remote
-provider pool's plug-and-play seam is real and tested (F-042); no provider is enabled,
-since that needs real external credentials this session cannot supply and is a values
-question given the project's own open-source, no-subscription mission. The Tauri desktop
-product remains genuinely blocked: a WSL-side toolchain turned out to already work (it
-built Goose), but Windows-side Rust hit two independent dead ends in the same session —
-a winget MSI install hung on a UAC prompt this session has no rights to approve, and the
-official per-user `rustup-init.exe` was removed by Windows Defender as a virus/PUP
-immediately after download. Neither was worked around (no AV exclusion, no elevation
-bypass); both are reported to the user rather than guessed past.
+**Tier 6 (F-041 through F-044) is real on all three fronts, complete on none of them —
+by disclosed design, not by default.** The harness tournament has real infrastructure, a
+real second `AgentLoop` (Goose, F-043), and a real live run — inconclusive for two
+disclosed reasons (no MCP tool bridge yet, and the only "coding"-capable local model is
+already known too slow), not a code defect. The remote provider pool's plug-and-play
+seam is real and tested (F-042); no provider is enabled, since that needs real external
+credentials this session cannot supply and is a values question given the project's own
+open-source, no-subscription mission. The Tauri desktop product has a real first
+vertical slice (F-044): authenticated `KernelClient`, and live Roster/Jobs/Approvals/
+Collaboration views against real Tier 5 endpoints — reached only after two automated
+Windows-Rust install attempts hit genuine dead ends (a UAC prompt this session had no
+rights to approve, then an actual `msiexec` crash) and the user installed it manually.
+"Computer views" remain honestly unbuilt: no `ComputerController` in this codebase has a
+single registered controller yet, so there is no real backend behavior for one to show.

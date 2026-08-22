@@ -63,3 +63,20 @@ def allowed_hosts(bind: str, port: int) -> set[str]:
     if bind not in ("0.0.0.0", "::"):
         loopback.add(bind)
     return {f"{host}:{port}" for host in loopback} | loopback
+
+
+def desktop_app_origins() -> set[str]:
+    """Full `Origin` header values a legitimate Tauri desktop client can present.
+
+    The Tauri desktop app (FIXES.md, Tier 6 desktop product) runs its webview on its own
+    origin, distinct from the kernel API's own `127.0.0.1:<port>` -- `http://localhost:1420`
+    during `tauri dev` (a Vite dev server port, not this API's port), and
+    `http://tauri.localhost` for a built app on Windows (Tauri v2's WebView2 custom
+    protocol origin; `tauri://localhost` is the equivalent on macOS/Linux). Both are
+    browser/webview-internal origins a remote attacker page cannot forge for its own
+    cross-origin request -- unlike an arbitrary DNS-rebound hostname, which is exactly
+    what `allowed_hosts`'s Host-header check above still independently defends against.
+    Allowlisting these specific origins for CORS is therefore a second, still-precise
+    allowlist entry, not a loosening of the DNS-rebinding defense.
+    """
+    return {"http://localhost:1420", "http://tauri.localhost", "tauri://localhost"}
