@@ -115,6 +115,59 @@ def _check_authorized_write(workspace: Path, final_summary: str) -> tuple[bool, 
         return False, f"outcome.txt contains {content!r}, expected 'done'"
     return True, "outcome.txt created with the correct contents"
 
+
+# --- tasks that exercise context economy -------------------------------------------------
+#
+# The original five tasks are all short, single-file and single-read, which made them unable
+# to measure three consecutive changes: outlining large files (F-057), restating the objective
+# after compaction (F-058), and batching independent calls (F-059). Accumulating unmeasured
+# optimisations is exactly what this project's own promotion rules exist to prevent, so these
+# three exist to make those changes falsifiable.
+
+
+def _setup_large_file_question(workspace: Path) -> None:
+    lines = ["#!/usr/bin/env python3", '"""A deliberately large module."""', ""]
+    for i in range(200):
+        lines += [f"def helper_{i}(value):", f"    return value + {i}", ""]
+    lines += ["def compute_final_answer(value):", "    return value * 7", ""]
+    for i in range(200, 260):
+        lines += [f"def helper_{i}(value):", f"    return value - {i}", ""]
+    (workspace / "module.py").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _check_large_file_question(workspace: Path, final_summary: str) -> tuple[bool, str]:
+    if "compute_final_answer" in final_summary:
+        return True, "named the function without needing the whole file"
+    return False, f"did not name compute_final_answer; got: {final_summary[:120]!r}"
+
+
+def _setup_multi_file_gather(workspace: Path) -> None:
+    (workspace / "alpha.txt").write_text("alpha=11\n", encoding="utf-8")
+    (workspace / "beta.txt").write_text("beta=22\n", encoding="utf-8")
+    (workspace / "gamma.txt").write_text("gamma=33\n", encoding="utf-8")
+
+
+def _check_multi_file_gather(workspace: Path, final_summary: str) -> tuple[bool, str]:
+    if "66" in final_summary:
+        return True, "summed all three values correctly"
+    return False, f"expected 66 in the summary; got: {final_summary[:120]!r}"
+
+
+def _setup_long_horizon_scan(workspace: Path) -> None:
+    facts = workspace / "facts"
+    facts.mkdir()
+    for i in range(1, 13):
+        marker = "TARGET" if i == 9 else "decoy"
+        (facts / f"note_{i:02d}.txt").write_text(
+            f"{marker} entry {i}\n" + ("filler line\n" * 30), encoding="utf-8"
+        )
+
+
+def _check_long_horizon_scan(workspace: Path, final_summary: str) -> tuple[bool, str]:
+    if "note_09" in final_summary or "note_9" in final_summary or " 9" in final_summary:
+        return True, "found the TARGET file and still knew what it was asked"
+    return False, f"did not identify note_09; got: {final_summary[:120]!r}"
+
 TASKS: list[HarnessTask] = [
     HarnessTask(
         id="read-and-report",
@@ -180,5 +233,45 @@ TASKS: list[HarnessTask] = [
         max_steps=8,
         requires_capability_grant=True,
         required_grants=(("write", "workspace"), ("execute", "workspace")),
+    ),
+    HarnessTask(
+        id="large-file-question",
+        category="context",
+        # Answerable from structure alone. A harness that dumps the file spends most of a
+        # 16K window on helper_0..helper_259; one that outlines it (F-057) sees every
+        # definition at once.
+        objective_template=(
+            "In {workspace}/module.py there is exactly one function whose name is not "
+            "helper_<number>. Tell me its name. End your summary with that name."
+        ),
+        setup=_setup_large_file_question,
+        check=_check_large_file_question,
+        max_steps=6,
+    ),
+    HarnessTask(
+        id="multi-file-gather",
+        category="context",
+        # Three independent reads. A loop that can batch them (F-059) spends one generation
+        # where a strictly sequential one spends three.
+        objective_template=(
+            "The files alpha.txt, beta.txt and gamma.txt in {workspace} each contain one "
+            "number. Add all three together and end your summary with just the total."
+        ),
+        setup=_setup_multi_file_gather,
+        check=_check_multi_file_gather,
+        max_steps=8,
+    ),
+    HarnessTask(
+        id="long-horizon-scan",
+        category="context",
+        # Long enough to push history past the compaction budget, so it measures whether the
+        # objective survives elision (F-058) rather than whether the model can read.
+        objective_template=(
+            "Exactly one file in {workspace}/facts contains the word TARGET. Find it and "
+            "end your summary with its filename."
+        ),
+        setup=_setup_long_horizon_scan,
+        check=_check_long_horizon_scan,
+        max_steps=16,
     ),
 ]

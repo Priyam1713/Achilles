@@ -3233,6 +3233,49 @@ a different experiment.
   single-read. Measuring the model's willingness needs a task that rewards it, which does not
   exist in the set yet.
 
+### F-060 — Added: tasks that can actually measure context economy, and what they measured
+
+- **Severity:** `medium` (methodology) · **Status:** `fixed` for two of the three things it
+  set out to measure; the third is an honest negative result.
+- **Motivating problem:** F-057, F-058 and F-059 each shipped with the same caveat — *not yet
+  measured against task outcomes* — because the tournament's five tasks were short,
+  single-file and single-read. Three consecutive unmeasured optimisations is precisely the
+  failure this project's own promotion rules exist to prevent, so the next thing built was not
+  the next feature but the instrument.
+- **Fix — three tasks, each targeting one change:**
+  - `large-file-question` — a 780-line module of `helper_0..helper_259` with exactly one
+    differently-named function. Answerable from structure alone, so it rewards outlining
+    (F-057) and punishes dumping.
+  - `multi-file-gather` — three independent one-line files to sum. Rewards issuing the reads
+    together (F-059).
+  - `long-horizon-scan` — twelve padded files, one containing a marker, with a 16-step budget.
+    Intended to push history past the compaction budget and measure whether the objective
+    survives elision (F-058).
+- **Measured live** (`qwen35-9b`, native loop, same machine): **7 of 8 tasks passed, 108.4 s
+  total**, with all three new tasks passing.
+
+  | Task | Result | Steps | Wall time |
+  | --- | --- | --- | --- |
+  | large-file-question | PASS | 5 | 16.94 s |
+  | multi-file-gather | PASS | **2** | 8.72 s |
+  | long-horizon-scan | PASS | 2 | 7.17 s |
+
+- **Batching is real and the model chooses it unprompted.** `multi-file-gather` completed in
+  **two steps** — one batch turn and one `done` — and the claim was verified against the event
+  journal rather than inferred from the step count: **9 `agent.step.tool_call` events carry
+  `batched: true`**, including the three `multi-file-gather` reads issued in one turn and a
+  `grep`+`list_directory` pair on another task. A 9B model reached for the batch form on its
+  own, which is the part that could not be assumed.
+- **The honest negative result: `long-horizon-scan` does not measure what it was built to
+  measure.** The model solved it in two steps by reaching for `grep` instead of reading twelve
+  files, so history never approached the compaction budget and **Focus Chain (F-058) was never
+  exercised**. The task is a fine test of tool selection and a failed test of long-horizon
+  drift. Recorded rather than quietly re-scored: designing a task that forces a long horizon
+  without also being artificial is harder than it looks, and **F-058 remains unmeasured**.
+- **Verification:** the runner drives all eight tasks under scripted inference (218 passing,
+  ruff clean), and the three new post-conditions are read-only so they pass with no execution
+  backend — which is the point: they measure context handling, not execution.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

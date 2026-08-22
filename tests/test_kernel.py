@@ -3038,6 +3038,22 @@ def test_harness_tournament_runs_native_loop_against_all_tasks(tmp_path, monkeyp
             '{{"tool": "write_file", "args": {{"path": "{workspace}/outcome.txt", "content": "done"}}}}',
             '{{"tool": "done", "summary": "Created outcome.txt"}}',
         ],
+        # The context-economy tasks (F-060). Scripted here only to prove the runner drives
+        # them; whether a real model succeeds is what the live tournament measures.
+        "large-file-question": [
+            '{{"tool": "read_file", "args": {{"path": "{workspace}/module.py"}}}}',
+            '{{"tool": "done", "summary": "The odd one out is compute_final_answer"}}',
+        ],
+        "multi-file-gather": [
+            '{{"batch": [{{"tool": "read_file", "args": {{"path": "{workspace}/alpha.txt"}}}},'
+            ' {{"tool": "read_file", "args": {{"path": "{workspace}/beta.txt"}}}},'
+            ' {{"tool": "read_file", "args": {{"path": "{workspace}/gamma.txt"}}}}]}}',
+            '{{"tool": "done", "summary": "11 + 22 + 33 = 66"}}',
+        ],
+        "long-horizon-scan": [
+            '{{"tool": "grep", "args": {{"pattern": "TARGET", "path": "{workspace}/facts"}}}}',
+            '{{"tool": "done", "summary": "It is note_09.txt"}}',
+        ],
     }
 
     results = {}
@@ -3072,6 +3088,12 @@ def test_harness_tournament_runs_native_loop_against_all_tasks(tmp_path, monkeyp
     # than the execute:workspace it used to hard-code for every mutating task.
     assert results["authorized-write"]["passed"] is True
     assert results["authorized-write"]["denied_attempts"] == 0
+
+    # The context-economy tasks are read-only, so they pass here with no backend at all --
+    # which is the point: they measure context handling, not execution.
+    assert results["large-file-question"]["passed"] is True
+    assert results["multi-file-gather"]["passed"] is True
+    assert results["long-horizon-scan"]["passed"] is True
     assert results["authorized-mutation"]["denied_attempts"] == 0
     assert "never created" in results["authorized-mutation"]["detail"]
     assert k.capability_grants.is_active(
