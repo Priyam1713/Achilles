@@ -140,3 +140,51 @@ export interface ChainVerification {
   events: number;
   broken_at?: string | null;
 }
+
+export interface WorkspaceEntry {
+  path: string;
+  label: string;
+  writable: boolean;
+}
+
+export interface ToolSpecRecord {
+  id: string;
+  description: string;
+  capabilities: string[];
+  risk_scope: string;
+  mutating: boolean;
+  schema: Record<string, unknown>;
+}
+
+export interface RunRecord {
+  id: string;
+  job_id: string;
+  attempt: number;
+  status: string;
+  result: Record<string, unknown> | null;
+  error: string | null;
+}
+
+/** One row of the kernel's append-only journal, as served by GET /events/stream.
+ *  `payload_json` is the wire field: the journal stores payloads as JSON text, and
+ *  assuming otherwise silently rendered every step as an empty object the first time the
+ *  web surface consumed this (docs/FIXES.md F-052). */
+export interface KernelEvent {
+  seq: number;
+  event_id: string;
+  stream_id: string;
+  event_type: string;
+  ts: number;
+  payload_json: string;
+  trust: string;
+}
+
+export interface AgentJobRequest {
+  task: string;
+  workspace: string;
+  capability: string;
+  mode: string;
+  max_steps: number;
+  approved: boolean;
+  agent_profile_id: string;
+}

@@ -1466,7 +1466,8 @@ repository and the name Achilles is not research. It is wiring, and then legitim
 - **Status:** `adopted`. **Partially implemented 2026-08-22** (`docs/FIXES.md` F-048, F-052):
   `sovereign run "<task>"` and `sovereign tools` exist, and the web control surface now has a
   real task composer — both live-verified end to end against a real local model. The
-  interactive TUI and the **desktop** task composer this decision also requires are not built.
+  interactive TUI this decision also requires is not built; the **desktop** task composer now
+  exists (F-053) but has only been compile- and shell-verified, not driven in its own window.
 - **Reason:** Wave 7's first finding is that no surface in this repository can start a task.
   The desktop cancels, lists and resolves; the CLI has no run command; the only door is an
   `@mention` in a chat room, which is a collaboration idea borrowed from Buzz, not a coding
@@ -1489,8 +1490,9 @@ repository and the name Achilles is not research. It is wiring, and then legitim
 - **Status:** `adopted`. **Kernel seam implemented 2026-08-22** (`docs/FIXES.md` F-050) and
   **consumed by the web control surface the same day** (F-052), verified live in a browser:
   agent steps, checkpoints and compaction events render as they happen and the four-second
-  polls are gone. The **Tauri desktop still polls**, and nothing streams model *tokens* — only
-  kernel events — so this decision is satisfied for one surface, not for the product.
+  polls are gone. The **Tauri desktop was ported the same day** (F-053) to one shared stream
+  for the whole window — compiled and launched, but its authenticated paths are not yet
+  observed by anyone. Nothing streams model *tokens*, only kernel events.
 - **Reason:** There is no `StreamingResponse`, SSE endpoint, WebSocket or generator anywhere
   in the API, and every view polls on a four-second timer. On hardware measured at 6.36 tok/s
   for the deep brain, that means minutes of undifferentiated waiting followed by a wall of
@@ -1511,9 +1513,9 @@ repository and the name Achilles is not research. It is wiring, and then legitim
 
 - **Date:** 2026-08-22
 - **Status:** `adopted`. Treated as a **safety** requirement, not a UX preference.
-  **Partially implemented 2026-08-22** (`docs/FIXES.md` F-052): the web surface's approval
-  card leads with action, scope, subject, the policy's reason and the evidence payload, and
-  states plainly when no evidence exists. Using the page also exposed a related lie worth
+  **Partially implemented 2026-08-22** (`docs/FIXES.md` F-052 for the web surface, F-053 for
+  the desktop): both approval cards lead with action, scope, subject, the policy's reason,
+  the expiry and the evidence payload, and state plainly when no evidence exists. Using the page also exposed a related lie worth
   recording — a "pre-approve mutations" checkbox that could never work, since only a grant can
   authorise an untrusted mutation; it now issues a real 15-minute scoped grant instead. Still
   missing: the exact command or diff, the triggering rule, and once/session/always

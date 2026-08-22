@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AgentJobRequest,
   AgentProfileRecord,
   ApprovalRequestRecord,
   CapabilityGrantRecord,
@@ -9,7 +10,11 @@ import type {
   DelegationRecord,
   HealthResponse,
   JobRecord,
+  KernelEvent,
   PresenceRecord,
+  RunRecord,
+  ToolSpecRecord,
+  WorkspaceEntry,
 } from "./types";
 
 /**
@@ -79,6 +84,128 @@ export class KernelClient {
 
   cancelJob(jobId: string): Promise<JobRecord> {
     return this.request("DELETE", `/jobs/${encodeURIComponent(jobId)}`);
+  }
+
+  listJobRuns(jobId: string): Promise<{ runs: RunRecord[] }> {
+    return this.request("GET", `/jobs/${encodeURIComponent(jobId)}/runs`);
+  }
+
+  /** Start an agent task. The desktop had no way to do this at all: it could cancel, list
+   *  and resolve, but not begin (research wave 7, X-01). */
+  submitAgentJob(payload: AgentJobRequest): Promise<JobRecord> {
+    return this.request("POST", "/jobs", { kind: "agent", payload });
+  }
+
+  // --- What the machine will let an agent touch -----------------------------------
+
+  listWorkspaces(): Promise<{ workspaces: WorkspaceEntry[] }> {
+    return this.request("GET", "/workspaces");
+  }
+
+  listTools(): Promise<{ tools: ToolSpecRecord[] }> {
+    return this.request("GET", "/tools");
+  }
+
+  /** Issue a narrow, expiring capability grant.
+   *
+   *  This is the only way an agent is ever allowed to mutate anything: PolicyEngine's
+   *  untrusted-content gate can never return allowed for a model-proposed mutation, so an
+   *  "approved" flag on the request cannot authorise one, no matter what a checkbox says
+   *  (docs/FIXES.md F-036, F-052). Authority has to come from a human, scoped and
+   *  time-bounded. */
+  issueGrant(
+    subjectId: string,
+    action: string,
+    scope: string,
+    ttlSeconds: number,
+    reason: string,
+  ): Promise<CapabilityGrantRecord> {
+    return this.request("POST", "/roster/grants", {
+      subject_id: subjectId,
+      action,
+      scope,
+      ttl_seconds: ttlSeconds,
+      reason,
+    });
+  }
+
+  // --- Live kernel events -----------------------------------------------------------
+
+  /** Follow the kernel journal over server-sent events.
+   *
+   *  Uses streaming `fetch` rather than `EventSource` because the session token travels in
+   *  an Authorization header and `EventSource` cannot set one -- a URL gets logged, cached
+   *  and shared in ways a header does not. Returns an abort function.
+   *
+   *  The server bounds each stream's lifetime on purpose (an unbounded one holds uvicorn's
+   *  graceful shutdown open), so a clean close is normal, not an error: the caller
+   *  reconnects from `cursor` and misses no event. */
+  streamEvents(
+    cursor: number,
+    onEvent: (event: KernelEvent) => void,
+    onState: (state: "live" | "reconnecting", detail?: string) => void,
+  ): () => void {
+    const controller = new AbortController();
+    let attempt = 0;
+    let stopped = false;
+    let at = cursor;
+
+    const run = async () => {
+      while (!stopped) {
+        try {
+          const response = await fetch(`${this.baseUrl}/events/stream?after=${at}`, {
+            headers: { Authorization: `Bearer ${this.token}` },
+            signal: controller.signal,
+          });
+          if (!response.ok || !response.body) throw new Error(`stream ${response.status}`);
+          onState("live");
+          attempt = 0;
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let split;
+            while ((split = buffer.indexOf("\n\n")) >= 0) {
+              const frame = buffer.slice(0, split);
+              buffer = buffer.slice(split + 2);
+              let payload: KernelEvent | null = null;
+              for (const line of frame.split("\n")) {
+                if (line.startsWith("data: ")) {
+                  try {
+                    payload = JSON.parse(line.slice(6)) as KernelEvent;
+                  } catch {
+                    payload = null;
+                  }
+                }
+              }
+              if (payload) {
+                at = payload.seq;
+                onEvent(payload);
+              }
+            }
+          }
+        } catch (error) {
+          if (stopped || controller.signal.aborted) return;
+          const delay = Math.min(30000, 1000 * 2 ** attempt);
+          attempt += 1;
+          onState("reconnecting", `${Math.round(delay / 1000)}s`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+        if (stopped) return;
+        // A clean close is the server's bounded stream expiring; reconnect immediately.
+        onState("reconnecting", "resuming");
+      }
+    };
+    void run();
+
+    return () => {
+      stopped = true;
+      controller.abort();
+    };
   }
 
   // --- Roster: agent profiles, delegations, approvals, grants, presence -----------

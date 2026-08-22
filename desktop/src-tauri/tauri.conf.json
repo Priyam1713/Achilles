@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Local Sovereign AI",
+        "title": "Achilles — local sovereign kernel",
         "width": 1280,
         "height": 840
       }

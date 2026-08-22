@@ -436,3 +436,310 @@ body {
   letter-spacing: 0.12em;
   border-top: 1px solid var(--line);
 }
+
+/* ---------------------------------------------------------------------------------------
+   Added with the desktop port of the control surface (docs/FIXES.md F-053).
+   The window was five read-only tables on a hard-coded dark palette with no keyboard
+   affordances; research wave 7 rated that a severity-1 gap for the project's primary human
+   product. These styles cover the composer, the live step log, the evidence card, and the
+   accessibility basics the whole app was missing.
+   --------------------------------------------------------------------------------------- */
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--panel);
+  color: var(--text);
+  padding: 10px 14px;
+  z-index: 20;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.skip:focus {
+  left: 12px;
+  top: 12px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* The header grew a connection state and live gauges: on a machine whose deep brain runs
+   at ~6 tok/s, hiding latency is the wrong instinct -- render it instead (D-029). */
+.top {
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.brand small {
+  display: block;
+  letter-spacing: 0;
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.dot.live {
+  background: #6ee7a0;
+}
+.dot.reconnecting {
+  background: #ffd98f;
+}
+.dot.offline {
+  background: #ff8f8f;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dot.live {
+    animation: soai-pulse 2.4s ease-in-out infinite;
+  }
+}
+@keyframes soai-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.gauges {
+  display: flex;
+  gap: 18px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.gauge b {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.gauge small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.tabs {
+  flex-wrap: wrap;
+  padding: 0 24px 12px;
+}
+
+.work-grid {
+  display: grid;
+  gap: 16px;
+  align-items: start;
+}
+@media (min-width: 1000px) {
+  .work-grid {
+    grid-template-columns: minmax(340px, 430px) 1fr;
+  }
+}
+
+label {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin: 12px 0 5px;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  background: #080a0e;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 9px 10px;
+  color: var(--text);
+  font: inherit;
+}
+
+textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.field-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.field-row > * {
+  flex: 1 1 110px;
+}
+
+.checkline {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 14px;
+  color: var(--text);
+  font-size: 13px;
+}
+.checkline input {
+  width: auto;
+}
+
+.small {
+  font-size: 11px;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+button.primary {
+  margin-top: 14px;
+  background: #1d2937;
+  border: 1px solid #2f4358;
+  color: #dbe8ff;
+  border-radius: 10px;
+  padding: 10px 18px;
+  font-size: 13px;
+  cursor: pointer;
+}
+button.primary:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.steps {
+  max-height: 52vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #080a0e;
+}
+
+.step {
+  display: flex;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #151a22;
+  align-items: flex-start;
+}
+.step:last-child {
+  border-bottom: none;
+}
+.step-n {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+  text-align: right;
+  font-size: 12px;
+}
+.step-body {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.step-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+/* A denial is the kernel refusing an action. Burying it is how an operator learns to stop
+   reading, so it is the loudest thing in the log. */
+.step.denied .step-title {
+  color: #ff9b9b;
+}
+.step.error .step-title {
+  color: #ffd98f;
+}
+.step.done .step-title {
+  color: #a9f0c0;
+}
+.step.note .step-title {
+  color: var(--accent);
+}
+
+.empty {
+  color: #677486;
+  text-align: center;
+  padding: 26px 10px;
+  font-size: 12px;
+}
+
+.approval-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+  background: #080a0e;
+}
+.approval-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.kv {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 6px 12px;
+  margin: 12px 0;
+  font-size: 12px;
+}
+.kv dt {
+  color: var(--muted);
+}
+.kv dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.kv pre {
+  margin: 0;
+  background: #0c0f14;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px;
+  overflow: auto;
+  font-size: 11px;
+}
+.approval-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+button.approve,
+button.deny,
+button.row-action {
+  border-radius: 9px;
+  padding: 8px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: #12171f;
+  color: var(--text);
+}
+button.approve {
+  border-color: #294a35;
+  color: #a9f0c0;
+}
+button.deny {
+  border-color: #5b3333;
+  color: #ffb5b5;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.reason-input {
+  margin-top: 4px;
+}

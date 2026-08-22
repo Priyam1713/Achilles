@@ -2731,6 +2731,67 @@ not fabrication.
   resume, search or fork; no notifications; no first-run or hardware-autotune experience; and
   nothing streams model *tokens*, only kernel events.
 
+### F-053 — Added: the desktop can start work, streams, and shows an approval's evidence
+
+- **Severity:** `high` · **Status:** `fixed` in code, **partially verified**: TypeScript
+  compiles, the bundle builds, the app launches, and the shell was driven in a browser — but
+  the authenticated data paths inside the Tauri window were not verified by this session,
+  because the window cannot be observed from here. Stated plainly rather than implied.
+- **Motivating problem:** F-052 rebuilt the *web* surface and left the Tauri desktop — the
+  primary human product under `D-010` — behind the loopback recovery page. It still had five
+  read-only tables, a four-second `setInterval` in every view, no way to start work, an
+  approval card that showed a risk badge and free text and nothing about what it was
+  approving, a first-connection failure that was terminal, and no keyboard or screen-reader
+  affordances anywhere.
+- **Fix:**
+  - `views/WorkView.tsx` — the composer the desktop never had (`D-026`): workspace picker fed
+    by `GET /workspaces`, task, capability, mode, step budget, and a live run log that renders
+    each step as it arrives with its own elapsed time. Denials render loudly; checkpoint,
+    compaction and decoding-degraded events render as what they are.
+  - `api/kernelClient.ts` — `streamEvents()`, using streaming `fetch` because the session
+    token travels in a header and `EventSource` cannot set one. Reconnects with exponential
+    backoff, resumes from its cursor, and treats a clean close as normal rather than an error
+    (the server bounds stream lifetime on purpose, F-052). Also `submitAgentJob`,
+    `listJobRuns`, `listWorkspaces`, `listTools`, `issueGrant`.
+  - `App.tsx` — **one** stream for the whole window, shared by every view, replacing the
+    per-view timers (`D-027`). Only the resource gauges stay on a timer, at 15 s, because
+    VRAM does not emit events. Adds a connection pill with live/reconnecting state, live
+    GPU/VRAM/RAM/disk gauges (`D-029`), a pending-approval count on the tab, a skip link, a
+    proper ARIA tablist with roving `tabIndex` and arrow-key navigation, and — closing X-09 —
+    a **retry button**, since a failed first connection used to leave the window dead until
+    it was restarted.
+  - `views/ApprovalsView.tsx` — the evidence card (`D-028`): action, scope, subject, the
+    reason policy gave, the expiry, and the evidence payload. When there is no evidence it
+    says so — *"approving means trusting the request text alone"* — rather than looking
+    complete. Refreshes off the event stream instead of a timer.
+  - `views/ToolsView.tsx` — the tool plane with each tool's risk scope and whether it can
+    mutate, plus the live journal. Before F-047 this view would have been empty, which is
+    exactly why it is worth showing.
+  - The window and document are named **Achilles** (`D-018`).
+  - Same grant correction as the web surface: the checkbox issues a real 15-minute
+    `write:workspace` grant through `POST /roster/grants` and says that an agent cannot
+    authorise its own mutation.
+- **Verification:**
+  - `npm run build` (`tsc && vite build`) — **clean**, 39 modules, no type errors.
+  - `npm run tauri dev` — the app compiled and launched (`Running target\debug\desktop.exe`).
+  - The shell was then driven in a browser against the Vite dev server, where `invoke()` does
+    not exist, which exercises the failure path deliberately: the panel renders *"Could not
+    reach the kernel"* with the underlying error, the command to start it, and a working
+    **Retry connection** button. Measured in that live page: **7 tabs with correct roving
+    `tabIndex` (`[0,-1,-1,…]`), a real `tabpanel`, a live region, a skip link, and zero
+    unlabelled controls.** Arrow-key navigation moves selection *and* focus
+    (Work → Approvals → Tools → back), verified by dispatching real key events.
+  - Python suite unaffected: 182 passing, ruff clean.
+- **What is explicitly not verified here:** everything behind `invoke()` — the composer
+  submitting a job, steps streaming into the window, the grant control, the evidence card
+  with real data. Those paths are the same code the web surface uses and that surface was
+  verified live, but the *desktop* rendering of them was not observed by this session. Someone
+  has to look at the window.
+- **What this does not fix:** there is still **no diff view** anywhere, so an edit is
+  described rather than shown; no session resume, fork or search; no notifications when a long
+  run finishes; no first-run or hardware-autotune experience; the desktop has no light theme
+  (the web surface does); and nothing streams model *tokens*, only kernel events.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.
