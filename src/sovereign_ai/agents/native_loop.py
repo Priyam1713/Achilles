@@ -61,6 +61,7 @@ class NativeAgentLoop(AgentLoop):
         workspaces: WorkspaceRegistry,
         events: EventStore,
         tools: ToolDispatcher | None = None,
+        constrain_output: bool = True,
     ):
         self.inference = inference
         self.execution = execution
@@ -70,6 +71,10 @@ class NativeAgentLoop(AgentLoop):
         # the three read-only tools research wave 8 audited; a loop built by the kernel is
         # handed the full plane, specialists and all (D-034).
         self.tools = tools or build_file_tools(workspaces, execution)
+        self.constrain_output = constrain_output
+        # None = not yet known, True = backend honoured the schema, False = it did not and
+        # this loop has degraded to prose parsing for the rest of its life.
+        self._constraint_supported: bool | None = None
 
     async def next_step(self, state: dict[str, Any]) -> AgentStep:
         state.setdefault("history", [])
@@ -87,12 +92,34 @@ class NativeAgentLoop(AgentLoop):
             capability=state.get("capability", "coding"),
             mode=RoutingMode(state.get("mode", "smart")),
         )
+        messages = self._build_messages(state)
         try:
-            result = await self.inference.chat(request, self._build_messages(state))
+            result = await self._chat(request, messages, constrained=self._constrain_now())
         except Exception as exc:
-            return AgentStep(
-                kind="inference_error", payload={"error": f"{type(exc).__name__}: {exc}"}, done=True
-            )
+            # A backend that cannot honour a decoding constraint should cost one retry and
+            # a recorded degradation, not the run (D-020: the prose parser survives only as
+            # a fallback, and its use is recorded rather than treated as normal operation).
+            if self._constrain_now() and self._payload_may_be_at_fault(exc):
+                self._constraint_supported = False
+                self.events.append(
+                    stream_id, "agent.decoding.degraded",
+                    {"reason": f"{type(exc).__name__}: {exc}", "fallback": "prose_json_scrape"},
+                    trust="execution_result",
+                )
+                try:
+                    result = await self._chat(request, messages, constrained=False)
+                except Exception as retry_exc:
+                    return AgentStep(
+                        kind="inference_error",
+                        payload={"error": f"{type(retry_exc).__name__}: {retry_exc}"},
+                        done=True,
+                    )
+            else:
+                return AgentStep(
+                    kind="inference_error",
+                    payload={"error": f"{type(exc).__name__}: {exc}"},
+                    done=True,
+                )
 
         content = self._extract_content(result)
         action = self._parse_action(content)
@@ -126,6 +153,60 @@ class NativeAgentLoop(AgentLoop):
             trust="untrusted_model_output",
         )
         return AgentStep(kind="observation", payload={"tool": tool, "observation": observation}, done=False)
+
+    @staticmethod
+    def _payload_may_be_at_fault(exc: Exception) -> bool:
+        """Should a failed turn be retried without the decoding constraint?
+
+        Only when the request itself could plausibly be the reason. A backend that is
+        unhealthy, unroutable or over quota failed *before* it looked at the payload, and
+        retrying it with a different body just doubles the time to a failure that was going
+        to happen anyway -- which is exactly what it did to a workflow test the first time
+        this retry existed. Default to retrying, because an unrecognised error might be a
+        rejected `response_format`, and one wasted call is cheaper than a loop that cannot
+        run on a backend without constrained decoding.
+        """
+        message = str(exc).lower()
+        pre_request = (
+            "unhealthy",
+            "no inference route",
+            "specialist adapter required",
+            "refused",
+            "circuit breaker",
+        )
+        return not any(marker in message for marker in pre_request)
+
+    def _constrain_now(self) -> bool:
+        return bool(self.constrain_output) and self._constraint_supported is not False
+
+    async def _chat(
+        self, request: CapabilityRequest, messages: list[dict[str, Any]], *, constrained: bool
+    ) -> dict[str, Any]:
+        """One model turn, optionally with the action schema enforced during decoding.
+
+        Measured on this machine before this existed: a live run of a four-step task on the
+        9B fast brain spent **two of its four turns emitting a reply the loop could not
+        parse** (F-048). Every one of those costs a full generation at 6-52 tok/s. Passing
+        the schema through `model_overrides` -- which the broker already splats into the
+        backend call -- makes a malformed action structurally impossible on a backend that
+        supports it, rather than something to retry into.
+        """
+        overrides: dict[str, Any] | None = None
+        if constrained:
+            overrides = {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "agent_action",
+                        "strict": True,
+                        "schema": self.tools.action_schema(),
+                    },
+                }
+            }
+        result = await self.inference.chat(request, messages, overrides)
+        if constrained and self._constraint_supported is None:
+            self._constraint_supported = True
+        return result
 
     def _tool_prompt(self, state: dict[str, Any]) -> str:
         """Show a relevant subset of tools, not the whole universe.

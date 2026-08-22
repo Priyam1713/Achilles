@@ -3610,3 +3610,88 @@ def test_web_search_authorises_then_fails_legibly_when_the_engine_is_down(tmp_pa
     result = asyncio.run(tool.run({"query": "sovereign ai"}, ToolContext(subject_id="agent-x")))
     assert "unreachable" in result["error"]
     assert "docker-compose" in result["error"]
+
+
+# ---------------------------------------------------------------------------------------
+# Constrained decoding (D-020, F-048). Measured on this machine before it existed: a live
+# four-step task on the 9B fast brain spent two of its four turns emitting a reply the loop
+# could not parse. These tests pin the mechanism and, more importantly, the honest
+# degradation path -- a backend that cannot honour the schema must cost one retry and a
+# recorded event, never the run.
+# ---------------------------------------------------------------------------------------
+
+
+class _RecordingInference:
+    """Captures the model_overrides the loop passes, so the schema itself is assertable."""
+
+    def __init__(self, replies: list[str], fail_when_constrained: bool = False):
+        self._replies = list(replies)
+        self.overrides: list[dict | None] = []
+        self.fail_when_constrained = fail_when_constrained
+
+    async def chat(self, request, messages, model_overrides=None):
+        self.overrides.append(model_overrides)
+        if self.fail_when_constrained and model_overrides:
+            raise RuntimeError("backend does not support response_format")
+        content = (
+            self._replies.pop(0) if self._replies else '{"tool": "done", "summary": "done"}'
+        )
+        return {"result": {"choices": [{"message": {"content": content}}]}}
+
+
+def test_action_schema_is_derived_from_the_registered_tools(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    schema = k.tool_dispatcher.action_schema()
+    names = set(schema["properties"]["tool"]["enum"])
+    assert names == set(k.tool_dispatcher.names()) | {"done"}
+    assert schema["required"] == ["tool"]
+    assert schema["additionalProperties"] is False
+
+
+def test_loop_constrains_decoding_with_the_action_schema(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=False)
+
+    fake = _RecordingInference(['{"tool": "done", "summary": "nothing to do"}'])
+    loop = NativeAgentLoop(fake, k.execution, k.workspaces, k.events, tools=k.tool_dispatcher)
+    step = asyncio.run(loop.next_step({"run_id": "c-1", "task": "t", "workspace": str(workspace)}))
+
+    assert step.kind == "done"
+    sent = fake.overrides[0]
+    assert sent["response_format"]["type"] == "json_schema"
+    enum = sent["response_format"]["json_schema"]["schema"]["properties"]["tool"]["enum"]
+    assert "read_file" in enum and "done" in enum
+
+
+def test_loop_degrades_legibly_when_a_backend_rejects_the_schema(tmp_path, monkeypatch):
+    """The prose parser survives only as a fallback, and its use is recorded as a
+    degradation rather than treated as normal operation (D-020)."""
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=False)
+
+    fake = _RecordingInference(
+        ['{"tool": "done", "summary": "fell back"}', '{"tool": "done", "summary": "second"}'],
+        fail_when_constrained=True,
+    )
+    loop = NativeAgentLoop(fake, k.execution, k.workspaces, k.events, tools=k.tool_dispatcher)
+    state = {"run_id": "c-2", "task": "t", "workspace": str(workspace)}
+
+    step = asyncio.run(loop.next_step(state))
+    assert step.kind == "done", "a rejected constraint must not fail the run"
+    assert fake.overrides[0] is not None and fake.overrides[1] is None
+
+    events = [e["event_type"] for e in k.events.read_stream("agent-loop:c-2")]
+    assert "agent.decoding.degraded" in events
+
+    # The loop remembers, so the next turn does not pay for the same rejection again.
+    state["history"] = []
+    asyncio.run(loop.next_step(state))
+    assert fake.overrides[2] is None

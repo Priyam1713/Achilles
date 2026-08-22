@@ -59,6 +59,31 @@ class ToolDispatcher:
             lines.append(line)
         return "\n".join(lines)
 
+    def action_schema(self, specs: list[ToolSpec] | None = None) -> dict[str, Any]:
+        """A JSON schema for one agent action, derived from the registered tools.
+
+        This is what makes `D-020` enforceable rather than aspirational: constrained
+        decoding needs a schema, and a schema written by hand drifts from the tool plane
+        the moment a tool is added. Deriving it from the registry means the set of tool
+        names a model is *allowed to emit* is, by construction, the set that exists.
+
+        `args` is deliberately loose. The goal of constraining decode is to guarantee a
+        parseable action, not to encode every tool's argument rules -- tools validate
+        their own arguments and return a legible error, which a model can act on, whereas
+        an over-tight grammar produces a truncated or looping generation, which it cannot.
+        """
+        names = [*(spec.id for spec in (specs if specs is not None else self.specs())), "done"]
+        return {
+            "type": "object",
+            "properties": {
+                "tool": {"type": "string", "enum": names},
+                "args": {"type": "object"},
+                "summary": {"type": "string"},
+            },
+            "required": ["tool"],
+            "additionalProperties": False,
+        }
+
     async def invoke(
         self, name: Any, args: dict[str, Any] | None, ctx: ToolContext
     ) -> dict[str, Any]:

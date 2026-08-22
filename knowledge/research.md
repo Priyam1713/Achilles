@@ -1326,8 +1326,12 @@ repository and the name Achilles is not research. It is wiring, and then legitim
 ### D-020 — Tool calls are grammar-constrained, not parsed out of prose
 
 - **Date:** 2026-08-22
-- **Status:** `adopted` principle; GBNF through the pinned llama.cpp router is the
-  implementation.
+- **Status:** `adopted`; **implemented and live-verified 2026-08-22** (`docs/FIXES.md`
+  F-048). The implementation is a JSON schema derived from the registered tools and passed
+  through `model_overrides`, rather than a hand-written GBNF file: llama.cpp accepts it, and
+  deriving it from `ToolDispatcher` means it cannot drift from the tool plane. Measured on
+  `qwen35-9b`: unparsable turns went from **2 of 4 to 0**, and the same task from 4 steps /
+  8.3 s to 2 steps / 4.1-4.6 s.
 - **Reason:** `NativeAgentLoop` currently locates an action by taking the outermost `{`…`}`
   span of the model's reply and attempting `json.loads`. Every failure costs a full turn at
   6–52 tok/s, and small models fail this far more often than large ones — which is precisely
@@ -1448,7 +1452,10 @@ repository and the name Achilles is not research. It is wiring, and then legitim
 ### D-026 — Every surface must be able to start work, and the terminal is the primary one
 
 - **Date:** 2026-08-22
-- **Status:** `adopted`.
+- **Status:** `adopted`. **Partially implemented 2026-08-22** (`docs/FIXES.md` F-048):
+  `sovereign run "<task>"` and `sovereign tools` exist and are live-verified end to end
+  against a real local model. The interactive TUI and the desktop task composer this decision
+  also requires are not built.
 - **Reason:** Wave 7's first finding is that no surface in this repository can start a task.
   The desktop cancels, lists and resolves; the CLI has no run command; the only door is an
   `@mention` in a chat room, which is a collaboration idea borrowed from Buzz, not a coding
@@ -1612,7 +1619,11 @@ repository and the name Achilles is not research. It is wiring, and then legitim
 ### D-034 — A capability is not delivered until an agent can invoke it
 
 - **Date:** 2026-08-22
-- **Status:** `adopted` as the project's definition of done.
+- **Status:** `adopted` as the project's definition of done. **Tool plane implemented
+  2026-08-22** (`docs/FIXES.md` F-047): 13 tools registered, covering files, search,
+  execution, specialists, media, memory and web. Seven specialist workers still return
+  HTTP 501 and `ComputerController` still has no controllers, so those domains are now
+  *reachable-but-unimplemented* rather than unreachable.
 - **Reason:** Wave 8's reachability table found nineteen of twenty-one capability domains
   unreachable by the agent loop: `ToolRegistry` holds zero tools, `ComputerController` holds
   zero controllers, seven of fourteen workers return HTTP 501, SearXNG is deployed with no

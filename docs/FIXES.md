@@ -2444,6 +2444,76 @@ not fabrication.
   desktop control. `web_search` returns untrusted content into the same context as the
   planner, which is exactly what `D-037`'s quarantine is for and has not been built yet.
 
+### F-048 — Fixed: no surface could start work, and half the model's turns were unparsable
+
+- **Severity:** `high` (adoption-blocking, plus a measured 50% waste of generation) ·
+  **Status:** `fixed`; **live-verified against a real local model on this machine**, not only
+  unit-tested.
+- **Motivating problem, part 1 (research wave 7, X-01):** nothing in this repository could
+  *start* work. `JobsView` cancels, `RosterView` lists, `ApprovalsView` resolves, and the CLI
+  had `preflight`, `route`, `serve`, `workspace`, `secret` and `dump-manifest` — no run
+  command. The only door into the system was an `@mention` in a collaboration room or a
+  hand-written HTTP request.
+- **Motivating problem, part 2 (research wave 6, D-020):** `NativeAgentLoop` recovered a tool
+  call by scanning the model's prose for the outermost `{`…`}` span and hoping `json.loads`
+  succeeded — on llama.cpp, which has had constrained decoding compiled in the entire time.
+- **Fix:**
+  - `sovereign run "<task>" --workspace <dir>` — the front door (`D-026`). Prints each step as
+    it happens with per-step timing rather than after the run, because on hardware measured at
+    6–52 tok/s an undifferentiated wait is the worst possible presentation of our slowest
+    property (`D-029`). Refuses an unregistered workspace with the exact command to fix it.
+    Denials print in red, loudly, because a denial is the kernel refusing an action and
+    burying it teaches an operator to stop reading.
+  - `sovereign tools` — lists what an agent can actually invoke, which before F-047 would have
+    printed nothing at all.
+  - `ToolDispatcher.action_schema()` derives a JSON schema for one action **from the
+    registered tools**, so the set of names a model may emit is by construction the set that
+    exists; it cannot drift from the tool plane.
+  - `NativeAgentLoop` passes that schema through `model_overrides`, which
+    `InferenceBroker.chat` already splats into the backend call — no broker change, no new
+    dependency.
+  - Honest degradation: a backend that rejects the constraint costs **one** retry and an
+    `agent.decoding.degraded` event, and the loop remembers, so it never pays for the same
+    rejection twice. The prose parser survives strictly as that fallback.
+- **Live verification (llama.cpp router at 127.0.0.1:18080, `qwen35-9b` Q6_K, capability
+  `tool_routing`, mode `fast`, same task each time):**
+
+  | | steps | wall time | unparsable turns |
+  | --- | --- | --- | --- |
+  | before (prose scraping) | 4 | 8.3 s | **2 of 4** |
+  | after (schema-constrained), run 1 | 2 | 4.6 s | 0 |
+  | after (schema-constrained), run 2 | 2 | 4.1 s | 0 |
+
+  Same model, same hardware, same task, correct answer (`ANSWER=42`, read from a real file
+  through the new `read_file` tool) in every case. Half of this model's generation was being
+  thrown away, and the fix was a schema the runtime already supported.
+- **Also verified live, incidentally:** an earlier run of the same task showed `run_command`
+  correctly **denied** ("Untrusted content cannot directly authorize mutation") and
+  `list_directory` correctly **denied** for `/tmp` (outside any approved workspace) — the
+  authority model behaving exactly as designed while a real model probed at it.
+- **Verification (deterministic):** 3 new tests covering schema derivation, the constraint
+  actually being sent, and the degradation path recording an event and not repeating itself.
+- **Operational finding, recorded rather than fixed:** running the kernel *from inside WSL*
+  with its state directory on the Windows drive (`/mnt/d/...`) fails with SQLite
+  `disk I/O error` when WAL mode is enabled, which is a known DrvFs limitation. The supported
+  layout (Windows-native control plane, WSL for runtimes) is unaffected, and the test suite
+  passes because it uses ext4 temporary directories. Anyone running the CLI from WSL must set
+  `SOVEREIGN_STATE_DIR` to an ext4 path. This belongs in the cross-platform work (`D-035`).
+- **Second operational finding, caught by this work:** the test suite is **not hermetic with
+  respect to a running kernel**. `test_workflow_http_start_creates_and_dispatches_the_first_step`
+  asserts a `chat` job reaches `failed` within 20 seconds "because there is no real inference
+  backend in this environment" — but with this project's own llama.cpp router running (as it
+  was during the live verification above), the job routes to `qwen38-27b`, starts loading a
+  16 GB model, and is still `running` when the poll loop gives up. The test is correct about
+  the sandbox and wrong about a developer's actual machine: anyone running `pytest` while
+  their own kernel is up will see this failure. Recorded here rather than papered over by
+  loosening the assertion, because the honest fix is for the suite to state and control its
+  backend assumption.
+- **What this does not fix:** the constraint is only as good as the backend. It is verified on
+  llama.cpp; other engines fall back to prose parsing and say so. `sovereign run` is a
+  terminal *command*, not the interactive TUI `D-026` also calls for, and nothing streams
+  tokens yet (`D-027`).
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.
