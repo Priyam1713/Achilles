@@ -153,7 +153,14 @@ class SovereignKernel:
         agent_loops = AgentLoopRegistry()
         agent_loops.register(
             "native",
-            NativeAgentLoop(inference, execution, workspaces, events, tools=tool_dispatcher),
+            NativeAgentLoop(
+                inference,
+                execution,
+                workspaces,
+                events,
+                tools=tool_dispatcher,
+                checkpoint_root=state,
+            ),
         )
         # D-015: Goose is genuinely optional -- most installs of this project will never
         # have built it (it needs a Rust/Cargo toolchain most users won't have either),

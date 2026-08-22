@@ -138,6 +138,7 @@ class WriteFileTool(_WorkspaceTool):
         description="Create or overwrite a text file inside an approved writable workspace",
         capabilities=["coding", "editing", "files"],
         risk_scope="workspace",
+        mutating=True,
         schema={
             "args": {"path": "<absolute path>", "content": "<full file text>"},
             "note": "mutating: needs an active write grant or human approval",
@@ -182,6 +183,7 @@ class EditFileTool(_WorkspaceTool):
         description="Replace an exact string in a file (must match exactly once unless replace_all)",
         capabilities=["coding", "editing", "files"],
         risk_scope="workspace",
+        mutating=True,
         schema={
             "args": {
                 "path": "<absolute path>",
@@ -233,6 +235,7 @@ class DeleteFileTool(_WorkspaceTool):
         description="Delete a file inside an approved writable workspace",
         capabilities=["files", "editing"],
         risk_scope="workspace",
+        mutating=True,
         schema={
             "args": {"path": "<absolute path>"},
             "note": "high risk: policy requires explicit human approval",

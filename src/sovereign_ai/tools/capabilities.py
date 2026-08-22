@@ -94,6 +94,7 @@ class GenerateMediaTool(Tool):
         description="Generate an image, video or music clip through the media runtime",
         capabilities=["media", "image", "video", "music", "creative"],
         risk_scope="workspace",
+        mutating=True,
         schema={
             "args": {"capability": "image_generation", "settings": {"prompt": "<text>"}},
             "note": "mutating and GPU-exclusive: needs a write grant or approval, and can take minutes",

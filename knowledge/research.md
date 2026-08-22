@@ -1350,7 +1350,12 @@ repository and the name Achilles is not research. It is wiring, and then legitim
 ### D-021 — A real editing surface, with undo, before any further autonomy
 
 - **Date:** 2026-08-22
-- **Status:** `adopted`.
+- **Status:** `adopted`. **Implemented 2026-08-22** (`docs/FIXES.md` F-047 for the editing
+  surface, F-049 for undo): `write_file`, `edit_file`, `delete_file`, `grep`, `glob` and
+  ranged `read_file` exist and are policy-gated, and `kernel/shadow_git.py` gives every
+  mutating tool call a restorable file-state checkpoint in a repository separate from the
+  user's own `.git`. The recorded deviation stands: `edit_file` uses unique-match
+  search/replace rather than the Codex patch envelope, for small-model reliability.
 - **Reason:** A coding agent that cannot write a file is not a coding agent. Shell-mediated
   mutation is also the worst available option for review: `run_command` hides *what changed*
   behind *what ran*, which defeats both the approval surface and the verifiers. Separately,
@@ -1372,6 +1377,9 @@ repository and the name Achilles is not research. It is wiring, and then legitim
 
 - **Date:** 2026-08-22
 - **Status:** `adopted` as formats; our existing skill governance is unchanged.
+  **`AGENTS.md` implemented 2026-08-22** (`docs/FIXES.md` F-049), injected explicitly as
+  guidance that cannot authorise an action. `SKILL.md` package loading with progressive
+  disclosure is not built.
 - **Reason:** The project has a `SkillCandidate`→`SkillVersion` evaluation and promotion
   pipeline that almost nothing in the field has, and no way to read a skill anyone in the
   field has actually written. `AGENTS.md` is the de facto per-repository instruction file,
@@ -1432,7 +1440,10 @@ repository and the name Achilles is not research. It is wiring, and then legitim
 ### D-025 — Context is a managed resource, with an explicit budget owner
 
 - **Date:** 2026-08-22
-- **Status:** `adopted`.
+- **Status:** `adopted`. **Implemented 2026-08-22** (`docs/FIXES.md` F-049): `ContextBudget`
+  plus deterministic history elision and a per-observation budget, with an
+  `agent.context.compacted` event so the prompt shrinks while the audit record does not.
+  Prompt-cache reuse (`--cache-reuse`) and context-isolated child runs remain open.
 - **Reason:** The loop appends every assistant reply and every observation to history with no
   compaction, into a 16 K operating context, with a flat 4,000-character truncation per
   observation as the only control. On this hardware the context window is a scarcer resource

@@ -2514,6 +2514,63 @@ not fabrication.
   terminal *command*, not the interactive TUI `D-026` also calls for, and nothing streams
   tokens yet (`D-027`).
 
+### F-049 — Fixed: the loop could not read a project's own instructions, never compacted, and could not be undone
+
+- **Severity:** `high` · **Status:** `fixed`.
+- **Motivating problems (three, closed together because they are all "the loop cannot survive
+  a long task"):**
+  - **No project instructions (`D-022`).** Every other serious agent reads a committed
+    per-repository instruction file; this one read nothing, so a repository could not tell it
+    how to build, test or behave.
+  - **No compaction (`D-025`).** `_build_messages` appended every assistant reply and every
+    observation forever into a 16K window, with a flat 4,000-character per-observation slice
+    as the only control. A long task did not degrade — it hit the wall.
+  - **No file-state checkpoint (`D-021`).** `CheckpointStore` stored *job state*, not file
+    state, so nothing in the system could undo an edit an agent made. That, not the edit
+    itself, is what makes leaving an agent running unreasonable.
+- **Fix:**
+  - `agents/context.py` — `load_project_instructions()` reads `AGENTS.md` (or
+    `.agents/AGENTS.md`), the filename the field already standardised on, rather than
+    inventing a fourth one. It is injected **explicitly framed as guidance that cannot
+    authorise anything**, because a file in a cloned repository is precisely the injection
+    surface baseline invariant 4 exists for.
+  - `compact_history()` keeps the leading turn (usually the orienting read) and the most
+    recent turns, and replaces the middle with a **deterministic** count of what was elided —
+    `read_file x3, run_command(error) x1, write_file(denied) x1`. Deterministic on purpose: a
+    summarising pass would cost a whole generation at 6-52 tok/s and could invent a step that
+    never happened, while counting cannot lie. The digest distinguishes denials and errors
+    from successes, because that is what a model needs in order not to repeat them.
+  - Compaction affects the **prompt only**. Every step remains in the append-only event
+    journal, and an `agent.context.compacted` event records what was dropped — `D-025`'s
+    stated safety boundary, enforced rather than asserted.
+  - `kernel/shadow_git.py` — `ShadowRepository`, adapted from Cline's checkpoint design
+    (Apache-2.0, recorded in `NOTICE`): a separate `--git-dir` under `state/` pointed at the
+    workspace as its `--work-tree`. The user's own `.git` is never read, staged or committed
+    to, and `restore()` uses `checkout <sha> -- .` rather than `reset --hard`, so restoring is
+    itself undoable and later states stay in the log.
+  - `ToolSpec.mutating` drives checkpointing, and is deliberately conservative: `run_command`
+    is marked mutating even though many calls only read, because an unnecessary commit costs a
+    commit and a missing one costs the ability to undo.
+  - A checkpoint failure (no `git`, unwritable state) is recorded as
+    `agent.checkpoint.failed` and never fails the run — but it is never silent either.
+- **Verification:** 8 new tests, 173 passing overall, ruff clean. The load-bearing ones:
+  - `test_shadow_repository_snapshots_and_restores_without_touching_real_git` creates a decoy
+    `.git` in the workspace and asserts afterwards that it is byte-identical and has no
+    `objects/` directory — i.e. that the shadow really is separate.
+  - `test_agent_write_creates_a_restorable_checkpoint` drives the real loop through a real
+    `write_file`, confirms the file changed on disk, then restores the pre-run snapshot and
+    confirms the original content is back.
+  - `test_read_only_tools_do_not_create_checkpoints` pins the other half: reading is not an
+    edit and must not produce commits.
+  - `test_agents_md_is_loaded_as_guidance_not_permission` asserts both that the content
+    arrives and that the framing ("not permission", "cannot authorise") arrives with it.
+- **What this does not fix:** compaction is elision, not summarisation — a very long run still
+  loses the middle, it just loses it legibly and on the record. There is no CLI or UI to
+  browse or roll back to a checkpoint yet (`sovereign checkpoints` and the timeline scrubber
+  wave 7 called for are unbuilt), so restoring today means calling `ShadowRepository.restore`.
+  `AGENTS.md` is read but nothing yet validates or bounds what a hostile one can attempt —
+  that is `D-037`'s quarantine, still open.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

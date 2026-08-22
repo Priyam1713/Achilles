@@ -13,6 +13,11 @@ class ToolSpec:
     risk_scope: str = "workspace"
     schema: dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
+    #: Whether a successful call can change the workspace on disk. Drives shadow-git
+    #: checkpointing (knowledge/research.md D-021) and is deliberately conservative: a
+    #: tool that *might* write is marked mutating, because an unnecessary checkpoint costs
+    #: a commit and a missing one costs the ability to undo.
+    mutating: bool = False
 
 
 class ToolRegistry:

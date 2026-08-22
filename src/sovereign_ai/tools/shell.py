@@ -21,6 +21,7 @@ class RunCommandTool(Tool):
         description="Run a command in the sandboxed workspace (tests, git, linters, builds)",
         capabilities=["coding", "execution", "shell"],
         risk_scope="workspace",
+        mutating=True,
         schema={
             "args": {"argv": ["<program>", "<arg>"], "mutates_state": False},
             "note": "set mutates_state true for anything that writes; that needs a grant or approval",

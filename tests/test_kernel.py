@@ -3695,3 +3695,234 @@ def test_loop_degrades_legibly_when_a_backend_rejects_the_schema(tmp_path, monke
     state["history"] = []
     asyncio.run(loop.next_step(state))
     assert fake.overrides[2] is None
+
+
+# ---------------------------------------------------------------------------------------
+# Project instructions, context budget and file-state checkpoints (D-022, D-025, D-021).
+# ---------------------------------------------------------------------------------------
+
+
+def test_agents_md_is_loaded_as_guidance_not_permission(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "AGENTS.md").write_text(
+        "# House rules\nAlways run the tests with `pytest -q`.\n", encoding="utf-8"
+    )
+    k.workspaces.add(workspace, writable=False)
+
+    fake = _RecordingInference(['{"tool": "done", "summary": "ok"}'])
+    loop = NativeAgentLoop(fake, k.execution, k.workspaces, k.events, tools=k.tool_dispatcher)
+    state = {"run_id": "agents-md", "task": "t", "workspace": str(workspace)}
+    messages = loop._build_messages(state)
+    system = messages[0]["content"]
+
+    assert "Always run the tests with `pytest -q`" in system
+    # It arrives explicitly framed as guidance that cannot authorise anything.
+    assert "not permission" in system
+    assert "cannot authorise" in system
+
+
+def test_missing_agents_md_changes_nothing(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=False)
+    loop = NativeAgentLoop(
+        _RecordingInference([]), k.execution, k.workspaces, k.events, tools=k.tool_dispatcher
+    )
+    system = loop._build_messages({"run_id": "no-md", "task": "t", "workspace": str(workspace)})[0]
+    assert "AGENTS.md" not in system["content"]
+
+
+def test_compact_history_elides_the_middle_and_reports_what_it_dropped():
+    from sovereign_ai.agents.context import ContextBudget, compact_history
+
+    budget = ContextBudget(keep_recent_turns=2, keep_leading_turns=1)
+    history = [
+        {"assistant": f"reply {i}", "action": {"tool": tool}, "observation": obs}
+        for i, (tool, obs) in enumerate(
+            [
+                ("read_file", {"path": "a"}),
+                ("grep", {"count": 1}),
+                ("grep", {"count": 0}),
+                ("run_command", {"error": "boom"}),
+                ("write_file", {"denied": True, "error": "denied: nope"}),
+                ("read_file", {"path": "b"}),
+                ("read_file", {"path": "c"}),
+            ]
+        )
+    ]
+    rendered, note = compact_history(history, budget)
+
+    assert len(rendered) == 3
+    assert rendered[0]["assistant"] == "reply 0"
+    assert [turn["assistant"] for turn in rendered[1:]] == ["reply 5", "reply 6"]
+    assert note["elided_turns"] == 4
+    # The digest distinguishes a denial and an error from a success, because that is what a
+    # model needs to not repeat them.
+    assert note["tools"] == {
+        "grep": 2,
+        "run_command(error)": 1,
+        "write_file(denied)": 1,
+    }
+
+
+def test_short_history_is_left_alone():
+    from sovereign_ai.agents.context import ContextBudget, compact_history
+
+    history = [{"assistant": "one", "action": {"tool": "read_file"}, "observation": {}}]
+    rendered, note = compact_history(history, ContextBudget())
+    assert rendered == history and note is None
+
+
+def test_loop_compacts_a_long_history_and_records_it(tmp_path, monkeypatch):
+    from sovereign_ai.agents.context import ContextBudget
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=False)
+    loop = NativeAgentLoop(
+        _RecordingInference([]),
+        k.execution,
+        k.workspaces,
+        k.events,
+        tools=k.tool_dispatcher,
+        budget=ContextBudget(keep_recent_turns=2, keep_leading_turns=1),
+    )
+    state = {
+        "run_id": "compact-1",
+        "task": "long task",
+        "workspace": str(workspace),
+        "history": [
+            {"assistant": f"r{i}", "action": {"tool": "read_file"}, "observation": {"path": str(i)}}
+            for i in range(10)
+        ],
+    }
+    messages = loop._build_messages(state)
+    joined = " ".join(m["content"] for m in messages)
+
+    assert "7 earlier steps elided" in joined
+    assert "r9" in joined and "r0" in joined and "r5" not in joined
+    events = [e["event_type"] for e in k.events.read_stream("agent-loop:compact-1")]
+    assert "agent.context.compacted" in events
+
+
+def test_observation_budget_truncates_without_hiding_that_it_did():
+    from sovereign_ai.agents.context import ContextBudget, truncate_observation
+
+    text = truncate_observation({"content": "x" * 5000}, ContextBudget(max_observation_chars=100))
+    assert len(text) < 200
+    assert "chars]" in text
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is required for shadow checkpoints")
+def test_shadow_repository_snapshots_and_restores_without_touching_real_git(tmp_path):
+    from sovereign_ai.kernel.shadow_git import ShadowRepository
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    real_git_marker = workspace / ".git"
+    real_git_marker.mkdir()
+    (real_git_marker / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    target = workspace / "code.py"
+    target.write_text("original\n", encoding="utf-8")
+
+    shadow = ShadowRepository(tmp_path / "state", workspace)
+    first = shadow.snapshot("before")
+    assert first is not None
+
+    target.write_text("modified\n", encoding="utf-8")
+    second = shadow.snapshot("after")
+    assert second is not None and second.sha != first.sha
+
+    shadow.restore(first.sha)
+    assert target.read_text(encoding="utf-8") == "original\n"
+
+    # The user's own repository was never a participant.
+    assert (real_git_marker / "HEAD").read_text(encoding="utf-8") == "ref: refs/heads/main\n"
+    assert not (real_git_marker / "objects").exists()
+    assert len(shadow.history()) == 2
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is required for shadow checkpoints")
+def test_agent_write_creates_a_restorable_checkpoint(tmp_path, monkeypatch):
+    """D-021 end to end: an agent edit can be undone, which is what makes leaving one
+    running reasonable in the first place."""
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+    from sovereign_ai.kernel.shadow_git import ShadowRepository
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "code.py").write_text("original\n", encoding="utf-8")
+    k.workspaces.add(workspace, writable=True)
+    k.capability_grants.issue("agent-w", "write", "workspace", "operator", ttl_seconds=60)
+
+    state_dir = tmp_path / "shadow-state"
+    shadow = ShadowRepository(state_dir, workspace)
+    baseline = shadow.snapshot("baseline")
+    assert baseline is not None
+
+    action = json.dumps(
+        {
+            "tool": "write_file",
+            "args": {"path": (workspace / "code.py").as_posix(), "content": "rewritten\n"},
+        }
+    )
+    loop = NativeAgentLoop(
+        _RecordingInference([action]),
+        k.execution,
+        k.workspaces,
+        k.events,
+        tools=k.tool_dispatcher,
+        checkpoint_root=state_dir,
+    )
+    step = asyncio.run(
+        loop.next_step(
+            {
+                "run_id": "ckpt-1",
+                "task": "rewrite",
+                "workspace": str(workspace),
+                "agent_profile_id": "agent-w",
+            }
+        )
+    )
+    assert step.payload["observation"].get("error") is None
+    assert (workspace / "code.py").read_text(encoding="utf-8") == "rewritten\n"
+
+    events = [e for e in k.events.read_stream("agent-loop:ckpt-1")]
+    created = [e for e in events if e["event_type"] == "agent.checkpoint.created"]
+    assert created, "a mutating tool call must leave a restorable checkpoint"
+
+    shadow.restore(baseline.sha)
+    assert (workspace / "code.py").read_text(encoding="utf-8") == "original\n"
+
+
+def test_read_only_tools_do_not_create_checkpoints(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("hello", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+
+    action = json.dumps({"tool": "read_file", "args": {"path": (workspace / "a.txt").as_posix()}})
+    loop = NativeAgentLoop(
+        _RecordingInference([action]),
+        k.execution,
+        k.workspaces,
+        k.events,
+        tools=k.tool_dispatcher,
+        checkpoint_root=tmp_path / "shadow-state",
+    )
+    asyncio.run(loop.next_step({"run_id": "ckpt-2", "task": "read", "workspace": str(workspace)}))
+    events = [e["event_type"] for e in k.events.read_stream("agent-loop:ckpt-2")]
+    assert "agent.checkpoint.created" not in events
