@@ -48,35 +48,58 @@ with it.
   (FIXES.md F-031), plus mailbox/presence read-models over existing events, leases and job
   state (FIXES.md F-032) — see "Persistent agency" below for what's still open in this domain
 - harness tournament scoring infrastructure (`scripts/harness_tasks.py`/
-  `harness_tournament.py`, FIXES.md F-041), run for real against `native`, the only
-  currently-registered `AgentLoop` — see "Tier 6" below for why the actual multi-harness
-  comparison is still blocked
+  `harness_tournament.py`, FIXES.md F-041), run for real against `native` and, once a
+  WSL-side Rust/Cargo toolchain became available mid-session, a real compiled `goose`
+  binary registered as a second `AgentLoop` (FIXES.md F-043) — see "Tier 6" below for
+  what that comparison does and does not yet prove
+- remote provider pool plug-and-play seam: `EngineSpec`/`CapabilityRequest` local-only
+  exclusion gate, `RemoteQuotaLedger` (request/token/cost budgets plus a circuit
+  breaker, every call attempt recorded for provenance), and `RemoteOpenAICompatibleBackend`
+  resolving its credential from the OS keyring at call time (FIXES.md F-042) — no
+  provider is actually enabled; see "Tier 6" below
 
 The current control UI is a browser-served single-page bootstrap/control surface, not the
-planned Tauri desktop product — building it needs a Rust/Cargo toolchain confirmed absent
-from this machine (both the WSL and Windows sides), the same blocker DeepSeek Harness and
-Goose hit for the harness tournament above.
+planned Tauri desktop product. A WSL-side Rust/Cargo toolchain is now available and built
+Goose successfully (see below), but the Windows-side toolchain a Tauri build needs is
+still blocked — see "Tier 6."
 
 ## Tier 6: harness tournament, desktop product, remote provider pool
 
-One of three pieces has real infrastructure and a real baseline (F-041); the other two are
-blocked on things this session cannot supply unilaterally, flagged rather than guessed at:
-
-- **Harness tournament** — infrastructure and `native`'s own baseline are real (F-041).
-  The comparison itself needs at least one more registered `AgentLoop`
-  (DeepSeek Harness, Goose, or another) to actually compare against, and building any of
-  the currently-planned ones needs Rust/Cargo, confirmed entirely absent from this
-  machine.
+- **Harness tournament** — infrastructure, `native`'s baseline, and now a second real
+  `AgentLoop` are all real (F-041, F-043). A WSL-side Rust/Cargo toolchain turned out to
+  already be present (an earlier check that found it absent had not sourced
+  `~/.cargo/env` in a non-login shell); building Goose from source needed one additional
+  system package (`libclang-dev`, for `bindgen`) and otherwise completed cleanly.
+  `GooseAgentLoop` runs the compiled binary with `--no-profile` and no extensions, so it
+  has genuinely zero filesystem/shell tool access — a deliberate scope decision, not an
+  oversight: real per-step tool use would mean bridging Goose's MCP extension mechanism
+  to the kernel's own policy-gated tools, a larger piece of work correctly identified but
+  not built this pass (see F-043's honest limits). Comparable evidence exists only for
+  what a zero-tool Goose can attempt at all. A real live run against both loops (real
+  local inference, no scripted responses) was genuinely inconclusive: three of four
+  tasks timed out on both loops because the only "coding"-capable local model,
+  `qwen38-27b`, is already known too slow under CPU offload (F-005/F-012); the fourth
+  passed on both loops but for different reasons (native was actually denied by policy;
+  Goose simply had no tool to attempt anything with).
 - **Desktop product** — planned as an authenticated Tauri `KernelClient` with real
-  roster/job/approval/computer views (`knowledge/research.md` step 13). Tauri is
-  Rust-based; blocked on the same missing toolchain.
-- **Remote provider pool** — adding a remote model provider to the routing table
-  (`knowledge/research.md` step 14, gated on data-routing policy and cost/quota
-  accounting existing first). Needs real external credentials no session can supply
-  itself, and is worth confirming rather than assuming: this project's own mission is
-  local, open-source, subscription-free sovereignty, so whether — and which — remote
-  providers belong in scope at all is a decision for the user, not a default to build
-  toward.
+  roster/job/approval/computer views (`knowledge/research.md` step 13). Tauri needs a
+  Windows-side Rust toolchain (WSL's toolchain cannot produce a Windows GUI binary). Two
+  independent install attempts both hit a real dead end rather than succeeding: the
+  winget MSI package (`Rustlang.Rust.GNU`) hung indefinitely on a UAC elevation prompt
+  this session's shell has no rights to approve; the official per-user
+  `rustup-init.exe` (no elevation required) was removed by Windows Defender as a
+  virus/PUP immediately after download. Neither was worked around — no AV exclusion, no
+  elevation bypass — since both are real security controls, not incidental friction.
+  Resolving this needs the user's own action (approve the pending UAC prompt or cancel
+  it and investigate the Defender detection) and is reported rather than guessed past.
+- **Remote provider pool** — the plug-and-play seam this pool needs (data-classification/
+  local-only exclusion gate, request/token/cost/quota/circuit-breaker accounting,
+  secret-handle credential resolution, provenance recording — `knowledge/research.md`'s
+  own stated preconditions) is built and tested (F-042). No provider is enabled: doing
+  so needs real external credentials no session can supply itself, and is worth
+  confirming rather than assuming — this project's own mission is local, open-source,
+  subscription-free sovereignty, so whether, and which, remote providers belong in scope
+  at all remains a decision for the user, not a default to build toward.
 
 The final pre-build audit also found that the folder had no Git baseline, mutation endpoints
 had no local session authentication, SQLite stores had no general migration runner, job

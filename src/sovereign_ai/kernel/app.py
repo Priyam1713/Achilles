@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sovereign_ai.agents.goose_loop import GooseAgentLoop
 from sovereign_ai.agents.native_loop import NativeAgentLoop
 from sovereign_ai.agents.registry import AgentLoopRegistry
 from sovereign_ai.collaboration import CollaborationService, CollaborationStore
@@ -10,6 +11,7 @@ from sovereign_ai.execution.broker import ExecutionBroker
 from sovereign_ai.execution.workspaces import WorkspaceRegistry
 from sovereign_ai.inference.broker import InferenceBroker
 from sovereign_ai.inference.media import MediaBroker
+from sovereign_ai.inference.remote_quota import RemoteQuotaLedger
 from sovereign_ai.memory.context import ContextBuilder
 from sovereign_ai.memory.graph import MemoryGraph
 from sovereign_ai.memory.retrieval_adapter import MemoryIndexer, SpecialistVectorRetriever
@@ -59,6 +61,7 @@ class SovereignKernel:
     policy: PolicyEngine
     secrets: SecretStore
     scheduler: ResourceScheduler
+    remote_quota: RemoteQuotaLedger
     inference: InferenceBroker
     media: MediaBroker
     specialists: SpecialistBroker
@@ -116,7 +119,8 @@ class SovereignKernel:
             state_dir=state,
         )
         residency = ResidencyCoordinator()
-        inference = InferenceBroker(registry, scheduler, gpu)
+        remote_quota = RemoteQuotaLedger(state / "remote_quota.db")
+        inference = InferenceBroker(registry, scheduler, gpu, secrets, remote_quota)
         media = MediaBroker(registry, scheduler, gpu, residency)
         specialist_supervisor = SpecialistSupervisor(config.root.parent, state)
         specialists = SpecialistBroker(registry, scheduler, gpu, residency, specialist_supervisor)
@@ -134,6 +138,22 @@ class SovereignKernel:
         agent_loops.register(
             "native", NativeAgentLoop(inference, execution, workspaces, events)
         )
+        # D-015: Goose is genuinely optional -- most installs of this project will never
+        # have built it (it needs a Rust/Cargo toolchain most users won't have either),
+        # so it is registered only when the compiled binary actually exists, the same
+        # "runtime truth over manifest assumption" rule InferenceBroker already applies to
+        # engines (FIXES.md, broker.py docstring).
+        goose_binary = config.runtime_dir / "goose" / "bin" / "goose"
+        if goose_binary.exists():
+            llama_cpp_engine = registry.engines.get("llama_cpp")
+            if llama_cpp_engine and llama_cpp_engine.base_url:
+                agent_loops.register(
+                    # Same model NativeAgentLoop's own default `capability="coding"`
+                    # resolves to (configs/models.yaml), so a harness-tournament run
+                    # comparing the two loops is comparing loops, not models.
+                    "goose",
+                    GooseAgentLoop(str(goose_binary), llama_cpp_engine.base_url, "qwen38-27b"),
+                )
         computer = ComputerController()
         transactions = TransactionManager(state / "transactions")
         event_bus = EventBus()
@@ -166,6 +186,7 @@ class SovereignKernel:
             policy,
             secrets,
             scheduler,
+            remote_quota,
             inference,
             media,
             specialists,

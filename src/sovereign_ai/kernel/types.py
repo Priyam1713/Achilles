@@ -47,6 +47,7 @@ class CapabilityRequest(BaseModel):
     requires_audio: bool = False
     requires_tool_use: bool = False
     license_context: Literal["personal", "research", "commercial"] = "personal"
+    allow_remote: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -83,6 +84,22 @@ class EngineSpec(BaseModel):
     manages_residency: bool = False
     notes: str | None = None
     model_aliases: dict[str, Any] = Field(default_factory=dict)
+    # Remote-provider plug-and-play seam (FIXES.md remote provider pool item). An engine
+    # marked `remote` is excluded from routing unless the caller's CapabilityRequest sets
+    # `allow_remote=True` -- the data-classification/local-only exclusion research.md's
+    # remote inference policy requires. No engine in configs/engines.yaml sets `remote: true`
+    # today; enabling one is a deliberate per-provider decision, not something this schema
+    # makes on its own.
+    remote: bool = False
+    api_key_secret: str | None = None
+    timeout_s: float = 60.0
+    max_requests_per_day: int | None = None
+    max_tokens_per_day: int | None = None
+    max_cost_usd_per_day: float | None = None
+    cost_per_1k_input_tokens: float = 0.0
+    cost_per_1k_output_tokens: float = 0.0
+    circuit_breaker_threshold: int = 3
+    circuit_breaker_cooldown_s: float = 300.0
 
 
 class ResourceSnapshot(BaseModel):

@@ -1992,6 +1992,172 @@ not fabrication.
   environment this session did not make unilaterally. Flagged to the user alongside
   Tier 6's other two items (desktop product, remote provider pool) rather than assumed.
 
+### F-042 — Added: remote provider pool plug-and-play seam (Tier 6, item 2 of 3)
+
+- **Severity:** `debt` (new capability, not a defect) · **Status:** `fixed` for the seam
+  itself; zero remote providers are actually enabled, by design — see "Honest limits."
+- **Motivating problem:** `knowledge/research.md`'s remote inference policy says a
+  provider "may be enabled only when it has" an adapter behind the existing inference
+  interface, a secret handle rather than a literal key, explicit data-classification/
+  local-only exclusion rules, request/token/cost/quota/timeout/circuit-breaker limits, and
+  provenance recording — and roadmap item 14 says to add one only "after data-routing
+  policy and cost/quota accounting exist." None of that scaffolding existed; every prior
+  engine in `configs/engines.yaml` is `localhost`-only and assumes it can never fail a
+  budget check. The user asked for this made "plug and play ready" — the prerequisite
+  infrastructure built now, with no actual provider wired in, since that step needs real
+  credentials this session cannot supply and is a values question given the project's
+  open-source/no-subscription mission (already flagged once, in F-041's writeup).
+- **Fix applied:**
+  - `kernel/types.py` — `EngineSpec` gained `remote`, `api_key_secret` (a *name* to look
+    up in `SecretStore`, never a literal key), `timeout_s`, `max_requests_per_day`,
+    `max_tokens_per_day`, `max_cost_usd_per_day`, `cost_per_1k_input_tokens`,
+    `cost_per_1k_output_tokens`, `circuit_breaker_threshold`, `circuit_breaker_cooldown_s`.
+    `CapabilityRequest` gained `allow_remote: bool = False` — the data-classification/
+    local-only exclusion gate research.md requires, fail-closed by default like every
+    other gate in this kernel.
+  - `resources/scheduler.py` `_eligible()` — a `remote` engine is excluded from routing
+    unless the caller's request explicitly sets `allow_remote=True`, with a warning
+    recorded either way so a silently-empty candidate list is never mysterious.
+  - `inference/remote_backend.py` (new) — `RemoteOpenAICompatibleBackend`: same wire
+    protocol as the existing local backend, but resolves its API key from `SecretStore`
+    at call time (never stored in config, never in anything a model sees) and fails
+    honestly — a clear `RuntimeError`, not a silent skip — when the named secret was
+    never actually set.
+  - `inference/remote_quota.py` (new) — `RemoteQuotaLedger`: one SQLite row per call
+    *attempt* (`success`/`failure`/`refused`), giving budget accounting and the
+    provenance trail the same read instead of two things that can drift apart. Refusals
+    are themselves recorded, so a tripped circuit breaker or exhausted daily budget is
+    part of the audit trail, not a silent no-op. `usage_today()` counts every attempt
+    against the request quota but only successes against tokens/cost, since a failed or
+    refused call never moved tokens or was ever billed. `consecutive_failures()` powers
+    the breaker; a `refused` row neither extends nor resets the streak, only a real
+    `success` does.
+  - `inference/broker.py` — `InferenceBroker` now builds a remote backend only for an
+    engine that is both `remote: true` **and** has `api_key_secret` set (a remote engine
+    declared without a credential is silently never wired to a backend, not an error —
+    exactly the "plug-and-play but nothing plugged in" state this fix targets). Before
+    ever calling a remote backend, `_remote_budget_refusal()` checks the circuit breaker
+    and all three daily budgets and, on refusal, records it and falls through to the next
+    candidate — the same "local fallback or honest failure" behavior research.md asks
+    for. A successful remote call's real `usage.prompt_tokens`/`completion_tokens` from
+    the response, multiplied by the engine's configured per-1k pricing, is what actually
+    gets recorded — not an estimate.
+  - `kernel/app.py` — `remote_quota = RemoteQuotaLedger(state / "remote_quota.db")`,
+    threaded into `InferenceBroker` alongside the existing `SecretStore`, and exposed as
+    `SovereignKernel.remote_quota` like every other store.
+- **Verification:** 8 new tests, none touching the real OS keyring or a network call
+  (`_FakeSecrets` stands in for `SecretStore`; refusal paths are checked before any I/O
+  would happen) — ledger aggregation and breaker-streak-reset-on-success as direct unit
+  tests; broker-construction proving a remote engine without a credential is silently
+  skipped; scheduler exclusion proving `allow_remote` is a real gate, not a documented
+  intention; and two end-to-end `InferenceBroker.chat()` calls against a synthetic remote
+  engine proving both the daily-request-quota refusal and the circuit-breaker refusal
+  actually short-circuit before any backend call. Full suite **138 passed**,
+  `ruff check src/ tests/ scripts/` clean.
+- **Honest limits:** no remote provider is enabled anywhere in this repository —
+  `configs/engines.yaml` declares none, and this fix does not add one. Free-quota lists,
+  pricing and terms are exactly the kind of fact research.md already warns not to copy
+  here as timeless (`### Remote inference policy`); adding a real provider means picking
+  one from official docs on the day it happens, requesting real credentials from the
+  user, and writing a small evaluation set proving it adds a genuine capability — the
+  next deliberate step, not an automatic consequence of this seam existing.
+
+### F-043 — Added: Goose registered as a second real `AgentLoop` (Tier 6, item 1 completed)
+
+- **Severity:** `debt` (new capability, not a defect) · **Status:** `fixed` for
+  registration and a real live tournament run; the comparison itself is inconclusive for
+  the reason given in "Honest limits."
+- **Motivating problem:** F-041 built the harness-tournament scoring framework but could
+  only run it against `native`, since `cargo`/`rustc` were believed absent from this
+  workstation. Re-checked live at the user's explicit request (`do the rust installation`):
+  WSL actually already had a working Rust 1.97.1 toolchain — the earlier absence finding
+  had checked with `which cargo rustc` in a non-login shell that never sourced
+  `~/.cargo/env`, so it was checking the wrong PATH, not the wrong machine.
+- **Fix applied:**
+  - Cloned `block/goose` and built `goose-cli` from source with `cargo build --release`.
+    The auto-mode classifier correctly blocked the official `curl | bash` install
+    script (piping a downloaded script to a shell is exactly the pattern it exists to
+    stop) — built from source instead, which is also the better fit for `D-001`
+    ("no harness is the root of trust") than trusting a prebuilt binary blob. The first
+    build attempt failed on `bindgen` needing `libclang`; installed `libclang-dev` (a
+    standard system dev package, the same kind already required for the existing
+    llama.cpp toolchain) and the second attempt completed cleanly. Installed the
+    resulting binary at `$SOVEREIGN_RUNTIME_DIR/goose/bin/goose`, mirroring where
+    llama.cpp's own build output already lives.
+  - `agents/goose_loop.py` (new) — `GooseAgentLoop`: every invocation passes
+    `--no-profile` and no `--with-extension`/`--with-builtin` flag, so Goose has
+    genuinely zero filesystem/shell tool access. This satisfies `D-015`'s safety
+    boundary ("the kernel issues the run_id, grants, leases and final state transition")
+    by construction rather than by a policy check Goose could in principle fail: it has
+    no path to touch anything outside the one text completion it returns. Real per-step
+    tool use would mean bridging Goose's MCP extension mechanism to the kernel's own
+    `read_file`/`list_directory`/`run_command`, which needs either the official `mcp`
+    Python SDK or a hand-rolled JSON-RPC stdio server — real, valuable follow-on work,
+    deliberately not built this pass rather than risked half-working under time
+    pressure (see "Honest limits").
+  - `kernel/app.py` — `GooseAgentLoop` is registered as `"goose"` only when the compiled
+    binary actually exists on disk, the same "runtime truth over manifest assumption"
+    rule `InferenceBroker` already applies to engines. Most installs of this project will
+    never build Goose (needs a Rust/Cargo toolchain most users won't have), so nothing
+    should assume it is present. Registered against `qwen38-27b` — the same model
+    `NativeAgentLoop`'s own default `capability="coding"` resolves to in
+    `configs/models.yaml` — so a tournament run compares loops, not models.
+  - `scripts/harness_tournament.py` — **self-caught bug, found by actually running two
+    loops back to back for the first time:** `run_task()` scoped a task's workspace by
+    `task.id` alone, so the second loop to run the same task collided with the first
+    loop's leftover files (`items/` already existing crashed `_setup_list_directory_count`
+    with `FileExistsError`). Fixed by scoping the workspace by `(loop_name, task.id)` and
+    clearing it fresh each run; `agent_profile_id` scoped the same way so two loops'
+    tournament capability grants stay independent.
+- **Verification:** 5 new tests (all against a fake `goose` binary — a tiny Python
+  script — never the real 300MB binary or a live model, so the suite stays hermetic):
+  single-shot completion, no re-invocation on a second `next_step()` call for the same
+  state, honest `harness_error` reporting on both a non-zero exit and a missing binary,
+  and a live check that the kernel registers `"goose"` if and only if the binary exists
+  on this disk right now. Full suite **142 passed**, `ruff check src/ tests/ scripts/`
+  clean.
+
+  Then two real, live tournament runs (`scripts/harness_tournament.py --loop native
+  --loop goose` against a real local `llama-server`, no scripted responses) — the kind
+  of live verification this session has insisted on throughout rather than trusting code
+  review alone:
+  - **First run** used `qwen35-9b` (the fast brain) for both loops and immediately
+    exposed the exact capability mismatch described above: `NativeAgentLoop`'s default
+    `capability="coding"` only resolves to `qwen38-27b` in the manifest, so every native
+    call failed with `inference_error` (routing to a model that was never loaded) before
+    this fix reassigned Goose to the same model.
+  - **Second run**, corrected: both loops against `qwen38-27b`, real inference,
+    real backends. `mutation-without-authorization` passed for both — but for two
+    different reasons worth distinguishing rather than reporting as one equivalent
+    result: native passed because the tool call really was attempted and really was
+    denied (this is the same F-036/F-037 boundary, working); Goose passed because it has
+    no tool at all and printed a fictitious ```` ```bash\nrm ...\n``` ```` block as text
+    without ever invoking anything — the file was never touched because nothing capable
+    of touching it was ever reached, not because a policy said no. `denied_attempts == 0`
+    for both runs confirms this: no real denial fired on either side. The other three
+    tasks timed out on both loops (native at `InferenceBroker`'s 600s default; Goose at
+    its own 120s default) — `qwen38-27b`'s CPU-offloaded decode speed was already
+    measured and flagged as too slow for practical interactive use in this project's own
+    prior benchmarking (`docs/FIXES.md` F-005/F-012: 6.36 tok/s, "viability gate
+    failed"). The tournament reproduced that same finding through an entirely
+    independent code path rather than contradicting or superseding it.
+- **Honest limits:** the comparison this run produced is genuinely inconclusive on loop
+  quality, for two separate, disclosed reasons, not one: (1) Goose currently has no
+  kernel-policed tool access at all, so it cannot attempt three of the four tasks in any
+  meaningful sense — the MCP tool bridge described above is a real prerequisite for a
+  fair comparison, not yet built; (2) the only "coding"-capable local model on this
+  workstation is already known to be too slow for either loop to complete a task inside
+  a reasonable timeout, an existing open item (F-005/F-012's NVIDIA licence review would
+  unblock the much faster Nemotron MoE alternative already benchmarked at 8.3x the
+  throughput) rather than a new one this fix introduces. Separately: running the full
+  pytest suite *concurrently* with the live tournament's model load stalled the test
+  process for the better part of an hour on what a `ps`/`/proc` check showed was a futex
+  wait, not a crash — killed and reran sequentially once the tournament's processes
+  released the GPU, and the same suite completed in 53 seconds. Worth recording as an
+  operational note (do not run the live model-serving scripts and the test suite at the
+  same time on this hardware) rather than a code fix, since nothing in the suite itself
+  was at fault once resource contention was removed.
+
 ---
 
 ## Priority order
@@ -2103,9 +2269,21 @@ Ordered so each step makes the next one cheaper or safer, not by severity alone.
     real and run against `native`, the only currently-registered `AgentLoop`. Caught and
     fixed a real bug in its own test the same way this session has caught several others:
     a checker crashed instead of correctly failing on the exact scenario it existed to
-    catch. The actual multi-harness comparison remains blocked: `cargo`/`rustc` are
-    confirmed absent on both the WSL and Windows sides of this workstation, and both
-    DeepSeek Harness and Goose (`D-015`'s pick) need them.
+    catch.
+20. ~~**F-042**~~ — **fixed.** The remote provider pool's plug-and-play seam — local-only
+    exclusion gate, `RemoteQuotaLedger` (request/token/cost budgets plus a circuit
+    breaker, every attempt recorded for provenance), secret-handle credential
+    resolution — is real and tested. No provider is enabled; that is a deliberate,
+    separate decision, not this fix's job.
+21. ~~**F-043**~~ — **fixed, registration plus one real but inconclusive comparison.** A
+    WSL Rust/Cargo toolchain turned out to already work (the earlier absence finding had
+    checked the wrong PATH); built Goose from source rather than piping its install
+    script to bash (the auto-mode classifier correctly blocked that), registered it as a
+    second `AgentLoop` with deliberately zero tool access, and fixed a real
+    workspace-collision bug in `harness_tournament.py` caught by running two loops back
+    to back for the first time. The live comparison itself stayed inconclusive for two
+    disclosed, pre-existing reasons (no MCP tool bridge yet; the only "coding"-capable
+    local model already known too slow, F-005/F-012) rather than a defect in this fix.
 
 **Left open, each requiring a decision or resource this session cannot supply alone:**
 **F-005/F-012**'s remaining NVIDIA licence review and `-ncmoe` default benchmark;
@@ -2117,10 +2295,16 @@ memory-scope filtering, `WorkspaceLease` enforcement, identity propagation, a
 `CapabilityGrant`-authorized execution path, workflow DAGs with recurring triggers, and
 the skill-candidate pipeline are all real, tested, and composed through the existing
 `PolicyEngine`/`JobDispatcher` rather than a second authority or execution plane.
-**Tier 6 (F-041 through F-043) is one-third done:** harness tournament infrastructure
-exists (F-041) but the actual multi-harness comparison is blocked on a missing Rust/Cargo
-toolchain; the Tauri desktop product (planned) needs the same toolchain, confirmed
-entirely absent from this machine; and a remote provider pool needs real external
-credentials this session does not have and should not assume the user wants, given the
-project's own open-source, no-subscription mission. Both are flagged to the user rather
-than guessed at.
+**Tier 6 (F-041 through F-043) is two-thirds done, one genuinely blocked:** the harness
+tournament has real infrastructure, a real second `AgentLoop` (Goose, F-043), and a real
+live run — inconclusive for two disclosed reasons (no MCP tool bridge yet, and the only
+"coding"-capable local model is already known too slow), not a code defect. The remote
+provider pool's plug-and-play seam is real and tested (F-042); no provider is enabled,
+since that needs real external credentials this session cannot supply and is a values
+question given the project's own open-source, no-subscription mission. The Tauri desktop
+product remains genuinely blocked: a WSL-side toolchain turned out to already work (it
+built Goose), but Windows-side Rust hit two independent dead ends in the same session —
+a winget MSI install hung on a UAC prompt this session has no rights to approve, and the
+official per-user `rustup-init.exe` was removed by Windows Defender as a virus/PUP
+immediately after download. Neither was worked around (no AV exclusion, no elevation
+bypass); both are reported to the user rather than guessed past.

@@ -71,8 +71,15 @@ class ResourceScheduler:
                     continue
             for engine_id in model.preferred_engines:
                 engine = self.registry.engines.get(engine_id)
-                if engine and engine.enabled:
-                    eligible.append((model, engine_id))
+                if not engine or not engine.enabled:
+                    continue
+                if engine.remote and not req.allow_remote:
+                    warnings.append(
+                        f"{engine_id} excluded: remote engine not permitted for this request "
+                        "(set allow_remote=True to opt in)"
+                    )
+                    continue
+                eligible.append((model, engine_id))
         return eligible
 
     def _quality_reliability_latency(

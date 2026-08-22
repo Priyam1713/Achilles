@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import shutil
 import sys
 import time
 import uuid
@@ -43,12 +44,18 @@ from sovereign_ai.kernel.app import SovereignKernel  # noqa: E402
 async def run_task(
     kernel: SovereignKernel, loop_name: str, task: HarnessTask, workspace_root: Path
 ) -> dict[str, Any]:
-    workspace = workspace_root / task.id
-    workspace.mkdir(parents=True, exist_ok=True)
+    # Scoped by loop_name as well as task.id: two loops running the same task must not
+    # share a workspace, or the second loop's setup() collides with the first loop's
+    # leftover files (a real FileExistsError hit live the first time this ran two loops
+    # back to back).
+    workspace = workspace_root / loop_name / task.id
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    workspace.mkdir(parents=True)
     task.setup(workspace)
     kernel.workspaces.add(workspace, writable=True)
 
-    agent_profile_id = f"tournament-{task.id}"
+    agent_profile_id = f"tournament-{loop_name}-{task.id}"
     if task.requires_capability_grant:
         kernel.capability_grants.issue(
             agent_profile_id, "execute", "workspace", "harness_tournament", ttl_seconds=300

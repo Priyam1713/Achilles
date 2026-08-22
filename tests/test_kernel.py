@@ -2984,4 +2984,270 @@ def test_harness_tournament_runs_native_loop_against_all_tasks(tmp_path, monkeyp
     assert results["authorized-mutation"]["passed"] is False
     assert results["authorized-mutation"]["denied_attempts"] == 0
     assert "never created" in results["authorized-mutation"]["detail"]
-    assert k.capability_grants.is_active("tournament-authorized-mutation", "execute", "workspace")
+    assert k.capability_grants.is_active(
+        "tournament-native-authorized-mutation", "execute", "workspace"
+    )
+
+
+# --- Remote provider pool: plug-and-play seam (FIXES.md, Tier 6 item 3) ---
+#
+# knowledge/research.md's remote-inference policy requires an adapter behind the existing
+# inference interface, a secret handle (never a literal key in config), explicit
+# data-classification/local-only exclusion, request/token/cost/quota/timeout/circuit-breaker
+# limits, and provenance recording -- all *before* any actual provider may be enabled. No
+# provider is enabled by any of this: configs/engines.yaml declares none, and these tests
+# build a synthetic remote EngineSpec/ModelSpec by hand to prove the plumbing works without
+# needing real external credentials or a network call.
+
+
+class _FakeSecrets:
+    """Stands in for kernel.secrets.SecretStore without touching the real OS keyring --
+    keyring has no backend available in a headless WSL test run, and these tests are
+    about the plug-and-play plumbing, not the keyring integration itself."""
+
+    def __init__(self, values: dict[str, str] | None = None):
+        self._values = values or {}
+
+    def get(self, name: str) -> str | None:
+        return self._values.get(name)
+
+
+def _remote_engine_spec(**overrides):
+    from sovereign_ai.kernel.types import EngineSpec
+
+    defaults = dict(
+        id="remote-test",
+        kind="openai_compatible",
+        enabled=True,
+        base_url="https://example.invalid/v1",
+        remote=True,
+        api_key_secret="remote-test-key",
+    )
+    defaults.update(overrides)
+    return EngineSpec(**defaults)
+
+
+def _remote_model_spec(engine_id="remote-test", capability="remote_test_capability"):
+    from sovereign_ai.kernel.types import ModelSpec, ModelStatus
+
+    return ModelSpec(
+        id="remote-test-model",
+        name="Remote Test Model",
+        source_type="reference",
+        status=ModelStatus.FINAL,
+        install_policy="runtime_only",
+        capabilities=[capability],
+        preferred_engines=[engine_id],
+        quality_prior=0.9,
+    )
+
+
+def test_remote_quota_ledger_records_and_aggregates_usage_today(tmp_path):
+    from sovereign_ai.inference.remote_quota import RemoteQuotaLedger
+
+    ledger = RemoteQuotaLedger(tmp_path / "remote_quota.db")
+    ledger.record(
+        "eng", "model", status="success", route_reason="r", prompt_tokens=100,
+        completion_tokens=50, cost_usd=0.01,
+    )
+    ledger.record(
+        "eng", "model", status="success", route_reason="r", prompt_tokens=200,
+        completion_tokens=100, cost_usd=0.02,
+    )
+    ledger.record("eng", "model", status="failure", route_reason="boom")
+    ledger.record("eng", "model", status="refused", route_reason="quota exhausted")
+
+    usage = ledger.usage_today("eng")
+    assert usage["requests"] == 4  # every attempt counts against the request quota
+    assert usage["tokens"] == 450  # only successes moved real tokens
+    assert usage["cost_usd"] == pytest.approx(0.03)  # only successes were ever billed
+
+    assert ledger.usage_today("other-engine") == {"requests": 0, "tokens": 0, "cost_usd": 0}
+
+
+def test_remote_quota_ledger_circuit_breaker_streak_resets_on_success(tmp_path):
+    from sovereign_ai.inference.remote_quota import RemoteQuotaLedger
+
+    ledger = RemoteQuotaLedger(tmp_path / "remote_quota.db")
+    for _ in range(3):
+        ledger.record("eng", "model", status="failure", route_reason="boom")
+    assert ledger.consecutive_failures("eng") == 3
+    assert ledger.last_failure_at("eng") is not None
+
+    # A refused row (breaker already open, or budget exhausted) is not itself a new
+    # failure and must not extend or reset the streak.
+    ledger.record("eng", "model", status="refused", route_reason="breaker open")
+    assert ledger.consecutive_failures("eng") == 3
+
+    ledger.record("eng", "model", status="success", route_reason="r", prompt_tokens=1)
+    assert ledger.consecutive_failures("eng") == 0
+
+
+def test_inference_broker_only_builds_remote_backend_when_credential_is_configured(tmp_path, monkeypatch):
+    from sovereign_ai.inference.broker import InferenceBroker
+    from sovereign_ai.inference.remote_backend import RemoteOpenAICompatibleBackend
+    from sovereign_ai.inference.remote_quota import RemoteQuotaLedger
+
+    k = kernel(tmp_path, monkeypatch)
+    k.registry.engines["remote-with-secret"] = _remote_engine_spec(id="remote-with-secret")
+    k.registry.engines["remote-no-secret"] = _remote_engine_spec(
+        id="remote-no-secret", api_key_secret=None
+    )
+    broker = InferenceBroker(
+        k.registry, k.scheduler, k.gpu, _FakeSecrets(), RemoteQuotaLedger(tmp_path / "rq.db")
+    )
+    assert isinstance(broker.backends["remote-with-secret"], RemoteOpenAICompatibleBackend)
+    assert "remote-no-secret" not in broker.backends
+
+
+def test_inference_broker_without_secrets_configures_no_remote_backends(tmp_path, monkeypatch):
+    from sovereign_ai.inference.broker import InferenceBroker
+
+    k = kernel(tmp_path, monkeypatch)
+    k.registry.engines["remote-test"] = _remote_engine_spec()
+    broker = InferenceBroker(k.registry, k.scheduler, k.gpu)
+    assert "remote-test" not in broker.backends
+
+
+def test_scheduler_excludes_remote_engine_unless_request_opts_in(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    k.registry.engines["remote-test"] = _remote_engine_spec()
+    k.registry.models["remote-test-model"] = _remote_model_spec()
+    k.registry.by_capability["remote_test_capability"] = ["remote-test-model"]
+
+    denied = k.scheduler.route(CapabilityRequest(capability="remote_test_capability"))
+    assert denied.candidates == []
+    assert any("remote engine not permitted" in w for w in denied.warnings)
+
+    allowed = k.scheduler.route(
+        CapabilityRequest(capability="remote_test_capability", allow_remote=True)
+    )
+    assert len(allowed.candidates) == 1
+    assert allowed.candidates[0].engine_id == "remote-test"
+
+
+def test_inference_broker_refuses_remote_call_once_daily_request_quota_is_exhausted(
+    tmp_path, monkeypatch
+):
+    from sovereign_ai.inference.broker import InferenceBroker
+    from sovereign_ai.inference.remote_quota import RemoteQuotaLedger
+
+    k = kernel(tmp_path, monkeypatch)
+    k.registry.engines["remote-test"] = _remote_engine_spec(max_requests_per_day=1)
+    k.registry.models["remote-test-model"] = _remote_model_spec()
+    k.registry.by_capability["remote_test_capability"] = ["remote-test-model"]
+
+    ledger = RemoteQuotaLedger(tmp_path / "rq.db")
+    ledger.record("remote-test", "remote-test-model", status="success", route_reason="prior call")
+    broker = InferenceBroker(k.registry, k.scheduler, k.gpu, _FakeSecrets({"remote-test-key": "sk-x"}), ledger)
+
+    request = CapabilityRequest(capability="remote_test_capability", allow_remote=True)
+    with pytest.raises(RuntimeError, match="daily request quota exhausted"):
+        asyncio.run(broker.chat(request, [{"role": "user", "content": "hi"}]))
+    # The refusal itself is recorded, so the ledger's own request count reflects the attempt.
+    assert ledger.usage_today("remote-test")["requests"] == 2
+
+
+def test_inference_broker_refuses_remote_call_when_circuit_breaker_is_open(tmp_path, monkeypatch):
+    from sovereign_ai.inference.broker import InferenceBroker
+    from sovereign_ai.inference.remote_quota import RemoteQuotaLedger
+
+    k = kernel(tmp_path, monkeypatch)
+    k.registry.engines["remote-test"] = _remote_engine_spec(circuit_breaker_threshold=2)
+    k.registry.models["remote-test-model"] = _remote_model_spec()
+    k.registry.by_capability["remote_test_capability"] = ["remote-test-model"]
+
+    ledger = RemoteQuotaLedger(tmp_path / "rq.db")
+    ledger.record("remote-test", "remote-test-model", status="failure", route_reason="boom")
+    ledger.record("remote-test", "remote-test-model", status="failure", route_reason="boom")
+    broker = InferenceBroker(k.registry, k.scheduler, k.gpu, _FakeSecrets({"remote-test-key": "sk-x"}), ledger)
+
+    request = CapabilityRequest(capability="remote_test_capability", allow_remote=True)
+    with pytest.raises(RuntimeError, match="circuit breaker open"):
+        asyncio.run(broker.chat(request, [{"role": "user", "content": "hi"}]))
+
+
+def test_remote_backend_fails_honestly_when_credential_is_not_set(tmp_path):
+    from sovereign_ai.inference.remote_backend import RemoteOpenAICompatibleBackend
+
+    backend = RemoteOpenAICompatibleBackend(
+        "https://example.invalid/v1", "missing-secret", _FakeSecrets()
+    )
+    assert asyncio.run(backend.health()) is False
+    with pytest.raises(RuntimeError, match="missing-secret"):
+        asyncio.run(backend.chat("some-model", [{"role": "user", "content": "hi"}]))
+
+
+# --- Goose harness adapter (FIXES.md, Tier 6 item 1 continued: D-015) ---
+#
+# GooseAgentLoop shells out to a real external binary, so these tests stand in a small
+# fake "goose" CLI (a python3 script, not the real 300MB binary) rather than depending on
+# a compiled Goose checkout or a live local model server being available in CI. The real
+# binary was built and live-verified manually against this project's own llama.cpp
+# backend (docs/FIXES.md) -- these tests pin GooseAgentLoop's own contract: single-shot
+# completion, no re-invocation on a second next_step() call, and honest failure reporting.
+
+
+def test_goose_agent_loop_runs_once_and_returns_done(tmp_path):
+    from sovereign_ai.agents.goose_loop import GooseAgentLoop
+
+    # GooseAgentLoop invokes `self.goose_binary` as a single executable, so the fake
+    # "goose" is a directly-executable shebang script rather than an interpreter + a
+    # separate script path.
+    calls_file = tmp_path / "calls.txt"
+    shim = tmp_path / "fake_goose"
+    shim.write_text(
+        f"#!/usr/bin/env python3\n"
+        f"with open({str(calls_file)!r}, 'a') as f:\n"
+        f"    f.write('call\\n')\n"
+        f"print('READY', end='')\n",
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+
+    loop = GooseAgentLoop(str(shim), "http://127.0.0.1:1/v1", "test-model", timeout_s=10)
+    state = {"task": "say ready"}
+    step = asyncio.run(loop.next_step(state))
+    assert step.done is True
+    assert step.kind == "done"
+    assert step.payload["summary"] == "READY"
+    assert calls_file.read_text().count("call") == 1
+
+    # A second call for the *same* state must not relaunch the subprocess -- one
+    # `goose run` already ran Goose's own loop to completion.
+    step2 = asyncio.run(loop.next_step(state))
+    assert step2.done is True
+    assert calls_file.read_text().count("call") == 1
+
+
+def test_goose_agent_loop_reports_harness_error_on_nonzero_exit(tmp_path):
+    from sovereign_ai.agents.goose_loop import GooseAgentLoop
+
+    shim = tmp_path / "goose_shim.sh"
+    shim.write_text("#!/usr/bin/env bash\necho 'boom' >&2\nexit 3\n", encoding="utf-8")
+    shim.chmod(0o755)
+
+    loop = GooseAgentLoop(str(shim), "http://127.0.0.1:1/v1", "test-model", timeout_s=10)
+    step = asyncio.run(loop.next_step({"task": "x"}))
+    assert step.done is True
+    assert step.kind == "harness_error"
+    assert "boom" in step.payload["error"]
+
+
+def test_goose_agent_loop_reports_harness_error_when_binary_missing(tmp_path):
+    from sovereign_ai.agents.goose_loop import GooseAgentLoop
+
+    loop = GooseAgentLoop(str(tmp_path / "does-not-exist"), "http://127.0.0.1:1/v1", "m")
+    step = asyncio.run(loop.next_step({"task": "x"}))
+    assert step.done is True
+    assert step.kind == "harness_error"
+    assert "not found" in step.payload["error"]
+
+
+def test_kernel_registers_goose_loop_only_when_binary_exists_on_disk(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    goose_binary = k.config.runtime_dir / "goose" / "bin" / "goose"
+    if goose_binary.exists():
+        assert "goose" in k.agent_loops.names()
+    else:
+        assert "goose" not in k.agent_loops.names()
