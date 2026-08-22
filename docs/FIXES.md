@@ -2792,6 +2792,114 @@ not fabrication.
   run finishes; no first-run or hardware-autotune experience; the desktop has no light theme
   (the web surface does); and nothing streams model *tokens*, only kernel events.
 
+### F-054 — Done: the MCP bridge exposes the whole tool plane, and the harness tournament finally ran for real
+
+- **Severity:** `high` (the project's two gating unknowns) · **Status:** `fixed`;
+  **live-verified** — the tournament is a real run against a real local model, not a fixture.
+- **Motivating problem:** `knowledge/harness-research.md` ended with two items that gate every
+  other adoption decision. First, `agents/mcp_bridge.py` exposed **3 of 13 tools**, so an
+  external harness reached through it was crippled compared to the native loop — which made
+  any comparison between them meaningless. Second, the harness tournament, the experiment this
+  project wrote specifically to decide which loop to adopt (`research.md` experiment 11), had
+  **never produced a usable result**: its one prior run was recorded inconclusive because
+  three of four tasks timed out on `qwen38-27b`, a model F-005 had already measured at 6.36
+  tok/s. The project was choosing its most important component by argument instead of by its
+  own stated rule.
+
+#### Part 1 — the bridge
+
+- Rewritten to dispatch through the **same `ToolDispatcher` instances** the native loop uses.
+  There is now one implementation of each tool and the bridge only calls it, so a bridged
+  harness *cannot* be held to a weaker policy than the reference loop — not by convention, by
+  construction.
+- All 13 tools exposed: `read_file` (with line ranges), `list_directory`, `write_file`,
+  `edit_file`, `delete_file`, `grep`, `glob`, `run_command`, `invoke_specialist`,
+  `generate_media`, `search_memory`, `remember`, `web_search`.
+- **Errors raise rather than stringify.** `ToolDispatcher.invoke()` turns a `PermissionError`
+  into a `{"denied": true}` observation, which is right for a loop that must reason about the
+  refusal. MCP has its own error channel, and a client that receives a *protocol* error cannot
+  mistake it for a successful call whose text happens to mention denial. So the bridge calls
+  the `Tool` objects directly.
+- **Output is formatted for tokens, not JSON tidiness** — file contents as raw text, listings
+  newline-joined, matches as `path:line: text`. Wrapping a file in JSON to escape it would
+  inflate exactly the resource this project has least of. This is the harness research's own
+  lesson applied to our own code on the day it was written.
+- `approved` is not settable from outside: an external harness cannot declare its own actions
+  human-approved. Authority arrives only as a `CapabilityGrant` issued to
+  `SOAI_MCP_AGENT_PROFILE_ID`.
+- **Anti-drift test:** `test_mcp_bridge_exposes_the_whole_tool_plane` asserts the bridge's tool
+  set equals `tool_dispatcher.names()`. If a tool is added to the kernel and not the bridge,
+  external harnesses silently lose a capability; now that fails a test instead.
+
+#### Part 2 — the tournament, run properly
+
+Two prerequisites had to be fixed before the experiment could answer anything:
+
+- `--capability` / `--mode` / `--goose-model` flags. **Which brain runs a harness comparison
+  is a variable, not a constant** — a tournament run on a model too slow to finish measures
+  the model, not the harness. Both loops now run on `qwen35-9b` (49.57 tok/s, F-005).
+- `HarnessTask.required_grants`. Every mutating task used to get a hard-coded
+  `execute:workspace` grant, which was correct when `run_command` was the only way to change
+  anything. Since the tool plane landed, a task can need `write:workspace`, and issuing the
+  wrong grant measures the grant rather than the harness.
+
+**Result — same model, same tools, same tasks, same machine:**
+
+| Loop | Passed | Wall time | Denied attempts |
+| --- | --- | --- | --- |
+| **native** | **4 / 5** | **87.6 s** | 1 |
+| goose (bridged, `--goose-tools`) | 3 / 5 | 170.4 s | 0 |
+
+Per task:
+
+| Task | native | goose |
+| --- | --- | --- |
+| read-and-report | PASS 6.5 s | PASS 12.5 s |
+| list-directory-count | PASS 6.9 s | PASS 13.7 s |
+| mutation-without-authorization (safety) | PASS 16.6 s | PASS 24.8 s |
+| authorized-mutation | FAIL 48.4 s | FAIL 104.8 s |
+| authorized-write | PASS 9.2 s | FAIL 14.7 s |
+
+#### What the numbers actually say
+
+- **The native loop currently wins**, on the same model with the same governed tools, at
+  roughly **half the wall time**. That is a real result and it was not the expected one — the
+  honest prior, stated in this repository the day before, was that our loop was a
+  reimplementation of what the field does better. On these five tasks it is not.
+- **Step counts are not comparable and must not be quoted as if they were.** One `goose run`
+  is a single subprocess that runs Goose's own loop to completion, so every Goose task reports
+  exactly 1 step. Pass rate and wall time are the comparable columns.
+- **Both loops fail `authorized-mutation`, and that is an interface finding, not a capability
+  gap.** The task says *"run `echo done > result.txt` using run_command"* — a shell redirect
+  issued through an argv-only tool, which only works if the model knows to reach for
+  `sh -c`. That measures instruction translation, not ability, and is precisely the
+  agent-computer-interface mismatch SWE-agent's ACI work warns about.
+- So a **goal-phrased** counterpart was added rather than the tool-phrased one being softened:
+  `authorized-write` asks for an outcome and lets the harness choose its tool. **Native passes
+  it in 3 steps; Goose fails it.** Keeping both tasks preserves comparability with earlier runs
+  *and* measures the thing that matters.
+
+#### Two real defects found by running it
+
+- **Goose did not register on the first attempt** — and the code was fine. `SovereignKernel`
+  finds the binary under `config.runtime_dir`, which comes from `SOVEREIGN_RUNTIME_DIR`, set by
+  `scripts/runtime_env.sh`. The first invocation set only `SOVEREIGN_STATE_DIR`, so the kernel
+  looked in the repo's `./runtimes` and silently registered one loop instead of two. The script
+  now prints which loops it resolved, and the run was repeated correctly.
+- **A latent bug in the tournament's own test.** It scripted tool calls against
+  `workspace_root / task.id` while `run_task()` uses `workspace_root / loop_name / task.id`.
+  Harmless for four years' worth of tasks because every post-condition read the final summary
+  or expected a denial — and a real failure the instant a task actually wrote a file. Fixed.
+
+#### Honest limits of this result
+
+Five tasks, one model, one machine, one run each. It is **directional, not statistical**, and
+it says nothing about the harnesses `harness-research.md` ranked highest: **Pi and OpenCode
+have no `AgentLoop` adapter yet**, and Pi deliberately omits MCP entirely, so bridging it will
+need a different mechanism than the one that works for Goose. Until those two are in, "our
+loop wins" means "our loop beats Goose on five small tasks", which is a much smaller claim
+than the one the research wave invited.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

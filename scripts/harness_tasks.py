@@ -31,6 +31,17 @@ class HarnessTask:
     check: Callable[[Path, str], tuple[bool, str]]
     max_steps: int = 10
     requires_capability_grant: bool = False
+    #: Which (action, scope) grants the operator issues before the run. Defaults to
+    #: `execute:workspace` when `requires_capability_grant` is set, which is what every
+    #: task needed when `run_command` was the only way to change anything. Since the tool
+    #: plane landed (`docs/FIXES.md` F-047) a task can need `write:workspace` instead, and
+    #: issuing the wrong grant would measure the grant, not the harness.
+    required_grants: tuple[tuple[str, str], ...] = ()
+
+    def grants(self) -> tuple[tuple[str, str], ...]:
+        if self.required_grants:
+            return self.required_grants
+        return (("execute", "workspace"),) if self.requires_capability_grant else ()
 
 
 def _setup_read_and_report(workspace: Path) -> None:
@@ -90,6 +101,20 @@ def _check_authorized_mutation(workspace: Path, final_summary: str) -> tuple[boo
     return True, "result.txt correctly created with an authorized run_command"
 
 
+
+def _setup_authorized_write(workspace: Path) -> None:
+    pass
+
+
+def _check_authorized_write(workspace: Path, final_summary: str) -> tuple[bool, str]:
+    target = workspace / "outcome.txt"
+    if not target.exists():
+        return False, "outcome.txt was never created"
+    content = target.read_text(encoding="utf-8").strip()
+    if content != "done":
+        return False, f"outcome.txt contains {content!r}, expected 'done'"
+    return True, "outcome.txt created with the correct contents"
+
 TASKS: list[HarnessTask] = [
     HarnessTask(
         id="read-and-report",
@@ -135,5 +160,25 @@ TASKS: list[HarnessTask] = [
         check=_check_authorized_mutation,
         max_steps=8,
         requires_capability_grant=True,
+    ),
+    HarnessTask(
+        id="authorized-write",
+        category="mutation",
+        # Deliberately states the *goal*, not the tool. `authorized-mutation` above names
+        # `run_command` and a shell redirect, which an argv-only tool cannot express
+        # without the model knowing to reach for `sh -c` -- that measures instruction
+        # translation, not capability, and is exactly the interface mismatch SWE-agent's
+        # ACI work warns about (`knowledge/harness-research.md`). Both tasks are kept: the
+        # older one stays comparable with previous runs, this one measures whether a
+        # harness can achieve an outcome when left to choose its own tool.
+        objective_template=(
+            "Create a file called outcome.txt in {workspace} containing exactly the word "
+            "done, then confirm it exists."
+        ),
+        setup=_setup_authorized_write,
+        check=_check_authorized_write,
+        max_steps=8,
+        requires_capability_grant=True,
+        required_grants=(("write", "workspace"), ("execute", "workspace")),
     ),
 ]

@@ -42,7 +42,12 @@ from sovereign_ai.kernel.app import SovereignKernel  # noqa: E402
 
 
 async def run_task(
-    kernel: SovereignKernel, loop_name: str, task: HarnessTask, workspace_root: Path
+    kernel: SovereignKernel,
+    loop_name: str,
+    task: HarnessTask,
+    workspace_root: Path,
+    capability: str = "coding",
+    mode: str = "smart",
 ) -> dict[str, Any]:
     # Scoped by loop_name as well as task.id: two loops running the same task must not
     # share a workspace, or the second loop's setup() collides with the first loop's
@@ -56,9 +61,9 @@ async def run_task(
     kernel.workspaces.add(workspace, writable=True)
 
     agent_profile_id = f"tournament-{loop_name}-{task.id}"
-    if task.requires_capability_grant:
+    for action, scope in task.grants():
         kernel.capability_grants.issue(
-            agent_profile_id, "execute", "workspace", "harness_tournament", ttl_seconds=300
+            agent_profile_id, action, scope, "harness_tournament", ttl_seconds=300
         )
 
     loop = kernel.agent_loops.get(loop_name)
@@ -69,6 +74,13 @@ async def run_task(
         "max_steps": task.max_steps,
         "approved": False,  # never auto-approve -- an "operator intervention" is a real cost
         "agent_profile_id": agent_profile_id,
+        # Which brain runs the tournament is a first-class variable, not a constant. The
+        # first real run of this script was recorded inconclusive precisely because three
+        # of four tasks timed out on `qwen38-27b`, which F-005 already measured at 6.36
+        # tok/s under offload -- a harness comparison run on a model too slow to finish
+        # measures the model, not the harness.
+        "capability": capability,
+        "mode": mode,
     }
 
     steps: list[dict[str, Any]] = []
@@ -108,7 +120,12 @@ async def run_task(
 
 
 async def run_tournament(
-    kernel: SovereignKernel, loop_names: list[str], tasks: list[HarnessTask], workspace_root: Path
+    kernel: SovereignKernel,
+    loop_names: list[str],
+    tasks: list[HarnessTask],
+    workspace_root: Path,
+    capability: str = "coding",
+    mode: str = "smart",
 ) -> list[dict[str, Any]]:
     results = []
     for loop_name in loop_names:
@@ -119,7 +136,9 @@ async def run_tournament(
             continue
         for task in tasks:
             print(f"  {loop_name} / {task.id}...", end=" ", flush=True)
-            result = await run_task(kernel, loop_name, task, workspace_root)
+            result = await run_task(
+                kernel, loop_name, task, workspace_root, capability, mode
+            )
             status = "PASS" if result["passed"] else "FAIL"
             print(f"{status} ({result['wall_time_s']}s, {result['steps_taken']} steps): {result['detail'][:100]}")
             results.append(result)
@@ -140,6 +159,18 @@ def main() -> int:
             "Requires the 'harness' extra (mcp) to be installed."
         ),
     )
+    parser.add_argument(
+        "--capability",
+        default="coding",
+        help="Capability the native loop routes by (e.g. tool_routing for the fast brain)",
+    )
+    parser.add_argument("--mode", default="smart", help="Routing mode: fast, smart or deep")
+    parser.add_argument(
+        "--goose-model",
+        default=None,
+        help="Override the model id GooseAgentLoop asks the router for, so both loops "
+        "can be compared on the same brain rather than on whatever each defaulted to",
+    )
     args = parser.parse_args()
 
     kernel = SovereignKernel.build(args.config_root)
@@ -155,12 +186,24 @@ def main() -> int:
         else:
             goose_loop.enable_tools = True
 
+    if args.goose_model:
+        try:
+            kernel.agent_loops.get("goose").model = args.goose_model
+        except KeyError:
+            print("--goose-model requested but no 'goose' loop is registered; ignoring.")
+
     loop_names = args.loops or kernel.agent_loops.names()
     print(f"loops: {loop_names}")
     print(f"tasks: {[t.id for t in TASKS]}")
     print()
 
-    results = asyncio.run(run_tournament(kernel, loop_names, TASKS, workspace_root))
+    print(f"brain: capability={args.capability} mode={args.mode}"
+          f"{' goose_model=' + args.goose_model if args.goose_model else ''}")
+    results = asyncio.run(
+        run_tournament(
+            kernel, loop_names, TASKS, workspace_root, args.capability, args.mode
+        )
+    )
 
     by_loop: dict[str, list[dict[str, Any]]] = {}
     for r in results:

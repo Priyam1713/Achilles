@@ -3031,11 +3031,22 @@ def test_harness_tournament_runs_native_loop_against_all_tasks(tmp_path, monkeyp
             '{{"tool": "run_command", "args": {{"argv": ["sh", "-c", "echo done > {workspace}/result.txt"], "mutates_state": true}}}}',
             '{{"tool": "done", "summary": "Created result.txt"}}',
         ],
+        # Goal-phrased rather than tool-phrased, and satisfiable with write_file -- so
+        # unlike authorized-mutation it needs no execution backend and can genuinely pass
+        # here, which is what makes it a real check of write:workspace grant issuance.
+        "authorized-write": [
+            '{{"tool": "write_file", "args": {{"path": "{workspace}/outcome.txt", "content": "done"}}}}',
+            '{{"tool": "done", "summary": "Created outcome.txt"}}',
+        ],
     }
 
     results = {}
     for task in TASKS:
-        workspace = workspace_root / task.id
+        # Must match run_task()'s own layout exactly: it scopes by loop name as well as
+        # task id so two loops cannot collide. Scripting a different path was harmless
+        # while every task's post-condition read the final summary or expected a denial,
+        # and became a real failure the moment a task actually wrote a file.
+        workspace = workspace_root / "native" / task.id
         replies = [reply.format(workspace=workspace) for reply in scripts[task.id]]
         # NativeAgentLoop was constructed once at kernel-build time and holds its own
         # `inference` reference internally -- patching k.inference itself would not
@@ -3055,6 +3066,12 @@ def test_harness_tournament_runs_native_loop_against_all_tasks(tmp_path, monkeyp
     # genuinely cleared (proven by reaching backend selection, not denied earlier), but
     # the task still correctly fails its post-condition since nothing actually ran.
     assert results["authorized-mutation"]["passed"] is False
+
+    # The write-based task needs no execution backend, so it must genuinely pass -- which
+    # proves the runner issues the task's *declared* grants (write:workspace here) rather
+    # than the execute:workspace it used to hard-code for every mutating task.
+    assert results["authorized-write"]["passed"] is True
+    assert results["authorized-write"]["denied_attempts"] == 0
     assert results["authorized-mutation"]["denied_attempts"] == 0
     assert "never created" in results["authorized-mutation"]["detail"]
     assert k.capability_grants.is_active(
@@ -3328,9 +3345,9 @@ def test_kernel_registers_goose_loop_only_when_binary_exists_on_disk(tmp_path, m
 
 # --- MCP tool bridge (FIXES.md follow-on to F-043: Goose's real per-step tool access) ---
 #
-# agents/mcp_bridge.py exposes read_file/list_directory/run_command as MCP tools, calling
-# the exact same WorkspaceRegistry/ExecutionBroker primitives NativeAgentLoop already
-# uses. @mcp.tool() returns the wrapped function unchanged (verified against the
+# agents/mcp_bridge.py exposes the kernel's whole tool plane as MCP tools, dispatching
+# through the same ToolDispatcher instances NativeAgentLoop uses -- so a bridged external
+# harness cannot be held to a weaker policy than the reference loop. @mcp.tool() returns the wrapped function unchanged (verified against the
 # installed `mcp` package's own source), so these tests call the tool functions directly
 # rather than driving a real stdio MCP client/server pair -- a real live run through the
 # actual `goose` binary is the genuine end-to-end proof, done separately and reported in
@@ -3350,7 +3367,7 @@ def test_mcp_bridge_read_file_denies_unregistered_path(tmp_path, monkeypatch):
     target = tmp_path / "secret.txt"
     target.write_text("nope", encoding="utf-8")
     with pytest.raises(PermissionError):
-        bridge.read_file(str(target))
+        asyncio.run(bridge.read_file(str(target)))
 
 
 def test_mcp_bridge_read_file_returns_content_for_registered_workspace(tmp_path, monkeypatch):
@@ -3361,7 +3378,7 @@ def test_mcp_bridge_read_file_returns_content_for_registered_workspace(tmp_path,
     (workspace / "data.txt").write_text("the secret number is 4217", encoding="utf-8")
     k.workspaces.add(workspace, writable=False)
 
-    result = bridge.read_file(str(workspace / "data.txt"))
+    result = asyncio.run(bridge.read_file(str(workspace / "data.txt")))
     assert "4217" in result
 
 
@@ -3374,7 +3391,7 @@ def test_mcp_bridge_list_directory_returns_sorted_entries(tmp_path, monkeypatch)
     (workspace / "a.txt").write_text("", encoding="utf-8")
     k.workspaces.add(workspace, writable=False)
 
-    result = bridge.list_directory(str(workspace))
+    result = asyncio.run(bridge.list_directory(str(workspace)))
     assert result.split("\n") == ["a.txt", "b.txt"]
 
 
@@ -4106,3 +4123,86 @@ def test_control_surface_html_is_served_with_a_session_token(tmp_path, monkeypat
     assert "%%SOAI_SESSION_TOKEN%%" not in body, "the placeholder must be substituted"
     assert "/events/stream" in body, "the surface must consume the stream, not poll"
     assert 'role="tablist"' in body and 'aria-live' in body
+
+
+def test_mcp_bridge_exposes_the_whole_tool_plane(tmp_path, monkeypatch):
+    """The bridge must not drift from the tool plane.
+
+    Widening it from three tools to all thirteen is what lets an external harness run on
+    *governed* tools rather than raw filesystem access (knowledge/harness-research.md).
+    If a tool is ever added to the kernel and not here, an external harness silently loses
+    a capability the native loop has -- so this asserts the two sets match.
+    """
+    k = kernel(tmp_path, monkeypatch)
+    bridge = _reset_mcp_bridge_kernel()
+
+    exposed = {
+        name
+        for name in dir(bridge)
+        if callable(getattr(bridge, name))
+        and not name.startswith("_")
+        and name in set(k.tool_dispatcher.names())
+    }
+    assert exposed == set(k.tool_dispatcher.names()), (
+        "bridge and tool plane disagree: "
+        f"missing={set(k.tool_dispatcher.names()) - exposed}"
+    )
+
+
+def test_mcp_bridge_write_is_denied_without_a_grant_then_allowed_with_one(
+    tmp_path, monkeypatch
+):
+    """The point of the bridge: an external harness gets the same authority model, not a
+    weaker one. Same assertion as the native loop's own test, through MCP instead."""
+    k = kernel(tmp_path, monkeypatch)
+    bridge = _reset_mcp_bridge_kernel()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    target = workspace / "bridged.txt"
+    monkeypatch.setenv("SOAI_MCP_AGENT_PROFILE_ID", "bridge-subject")
+    monkeypatch.setenv("SOAI_MCP_WORKSPACE", str(workspace))
+
+    with pytest.raises(PermissionError):
+        asyncio.run(bridge.write_file(str(target), "hello"))
+    assert not target.exists(), "a denied bridged write must not touch the filesystem"
+
+    k.capability_grants.issue(
+        "bridge-subject", "write", "workspace", "test-operator", ttl_seconds=60
+    )
+    result = asyncio.run(bridge.write_file(str(target), "hello"))
+    assert "created" in result
+    assert target.read_text(encoding="utf-8") == "hello"
+
+
+def test_mcp_bridge_formats_for_tokens_not_json(tmp_path, monkeypatch):
+    """read_file returns raw text and grep returns `path:line: text`.
+
+    Wrapping a whole file in JSON to escape it would inflate exactly the resource this
+    project has least of (docs/FIXES.md F-005: 6.36 tok/s on the deep brain)."""
+    k = kernel(tmp_path, monkeypatch)
+    bridge = _reset_mcp_bridge_kernel()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.py").write_text('x = "quoted"\ndef find_me():\n    pass\n', encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+    monkeypatch.setenv("SOAI_MCP_WORKSPACE", str(workspace))
+
+    content = asyncio.run(bridge.read_file(str(workspace / "a.py")))
+    assert content.startswith('x = "quoted"'), "content must not be JSON-escaped"
+
+    hits = asyncio.run(bridge.grep("def find_me"))
+    assert hits.splitlines()[0].endswith(":2: def find_me():")
+
+
+def test_mcp_bridge_reports_expected_failures_in_band(tmp_path, monkeypatch):
+    """A missing file is an observation the agent should act on; a policy denial is a
+    protocol fault. The bridge distinguishes them deliberately."""
+    k = kernel(tmp_path, monkeypatch)
+    bridge = _reset_mcp_bridge_kernel()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=False)
+
+    result = asyncio.run(bridge.read_file(str(workspace / "absent.txt")))
+    assert result.startswith("error: not a file")

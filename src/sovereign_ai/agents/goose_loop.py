@@ -27,11 +27,12 @@ class GooseAgentLoop(AgentLoop):
     back to a caller between its own internal turns.
 
     Setting `enable_tools=True` bridges Goose's own MCP stdio extension mechanism
-    (`--with-extension`) to `agents/mcp_bridge.py`, which exposes the *same*
-    `read_file`/`list_directory`/`run_command` tools `NativeAgentLoop` already uses,
-    calling the identical `WorkspaceRegistry`/`ExecutionBroker` primitives -- so a
-    tool-enabled Goose run is held to the same policy gate as the reference loop, not a
-    weaker one. Off by default: most callers (including the harness tournament's default
+    (`--with-extension`) to `agents/mcp_bridge.py`, which exposes the kernel's **whole
+    tool plane** -- files, search, execution, specialists, media, memory and web -- by
+    dispatching through the same `ToolDispatcher` instances `NativeAgentLoop` uses. A
+    tool-enabled Goose run is therefore held to exactly the same policy gate as the
+    reference loop, and cannot be held to a weaker one: there is one implementation of
+    each tool and the bridge only calls it. Off by default: most callers (including the harness tournament's default
     construction in `kernel/app.py`) get the zero-tool comparison this loop shipped with
     first, so nothing about existing behavior or tests changes silently.
     """

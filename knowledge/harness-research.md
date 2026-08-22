@@ -548,8 +548,8 @@ Effort is rough and assumes the kernel stays as-is.
 
 | # | Item | Source | Effort | Why this rank |
 | --- | --- | --- | --- | --- |
-| 1 | Widen the MCP bridge from 3 to all 13 tools | ours | ~1 day | Every harness in Tier 1–2 becomes able to run on our governed tools. Highest leverage line-for-line in the project |
-| 2 | Run the harness tournament for real: Pi vs OpenCode vs Goose vs native, all bridged | ours | days | The project's own rule, never applied to its most important decision. Everything below should be decided by its result |
+| 1 | ~~Widen the MCP bridge from 3 to all 13 tools~~ | ours | **done 2026-08-23** (`docs/FIXES.md` F-054) | All 13 tools now dispatch through the same `ToolDispatcher` the native loop uses, with an anti-drift test |
+| 2 | Run the harness tournament for real | ours | **partly done 2026-08-23** (F-054) | Ran native vs bridged Goose on `qwen35-9b`: **native 4/5 in 87.6 s, Goose 3/5 in 170.4 s**. Pi and OpenCode still have no adapter, and Pi has no MCP at all — so the field's two strongest candidates are still unmeasured |
 | 3 | Summarising `read` + parallel ripgrep `grep` | oh-my-pi | ~1 day | Immediate context savings; no new dependency |
 | 4 | Focus Chain (re-injected todo list) | Cline | ~1 day | Cheapest fix for compaction drift |
 | 5 | Parallel tool dispatch | ForgeCode | ~2 days | Direct multiplier on wall time |
@@ -579,6 +579,13 @@ and should be measured against the tournament baseline, individually.
   integration or an agent-to-agent one.
 - **Is Pi's 3× context advantage transferable, or an artifact of its provider mix?** The
   benchmark used frontier models; our regime is different and could amplify *or* erase it.
+- **How do we bridge a harness that has no MCP client?** Pi omits MCP by design, so the
+  `mcp_bridge` route that works for Goose does not reach it. Its in-process TypeScript hook
+  system is the obvious alternative, and would mean writing a hook that calls our HTTP API
+  rather than an MCP server — a different adapter shape than every other candidate needs.
+- **Why did the native loop beat Goose (F-054)?** Wall time is explainable (subprocess startup
+  plus Goose's own loop), but the two task failures are not yet diagnosed. Until they are, the
+  result is a scoreboard, not an explanation.
 - **LLMling-Agent** — does it exist under another name?
 
 ## Primary sources consulted (2026-08-23)
