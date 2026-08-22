@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from sovereign_ai.agents.goose_loop import GooseAgentLoop
 from sovereign_ai.agents.native_loop import NativeAgentLoop
+from sovereign_ai.agents.opencode_loop import OpenCodeAgentLoop, resolve_opencode_binary
 from sovereign_ai.agents.registry import AgentLoopRegistry
 from sovereign_ai.collaboration import CollaborationService, CollaborationStore
 from sovereign_ai.computer.controller import ComputerController
@@ -167,9 +168,9 @@ class SovereignKernel:
         # so it is registered only when the compiled binary actually exists, the same
         # "runtime truth over manifest assumption" rule InferenceBroker already applies to
         # engines (FIXES.md, broker.py docstring).
+        llama_cpp_engine = registry.engines.get("llama_cpp")
         goose_binary = config.runtime_dir / "goose" / "bin" / "goose"
         if goose_binary.exists():
-            llama_cpp_engine = registry.engines.get("llama_cpp")
             if llama_cpp_engine and llama_cpp_engine.base_url:
                 agent_loops.register(
                     # Same model NativeAgentLoop's own default `capability="coding"`
@@ -178,6 +179,17 @@ class SovereignKernel:
                     "goose",
                     GooseAgentLoop(str(goose_binary), llama_cpp_engine.base_url, "qwen38-27b"),
                 )
+        # Same runtime-truth rule as Goose: registered only when a *working* binary
+        # exists, so an install without it has one fewer loop rather than a loop that
+        # fails at first use. `resolve_opencode_binary()` rather than `shutil.which()`
+        # because npm's shim is frequently shadowed by a stale symlink and the real
+        # executable lives in a platform-specific optional dependency.
+        opencode_binary = resolve_opencode_binary()
+        if opencode_binary and llama_cpp_engine and llama_cpp_engine.base_url:
+            agent_loops.register(
+                "opencode",
+                OpenCodeAgentLoop(opencode_binary, llama_cpp_engine.base_url, "qwen38-27b"),
+            )
         computer = ComputerController()
         transactions = TransactionManager(state / "transactions")
         event_bus = EventBus()

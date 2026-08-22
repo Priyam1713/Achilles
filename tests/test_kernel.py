@@ -4206,3 +4206,92 @@ def test_mcp_bridge_reports_expected_failures_in_band(tmp_path, monkeypatch):
 
     result = asyncio.run(bridge.read_file(str(workspace / "absent.txt")))
     assert result.startswith("error: not a file")
+
+
+# ---------------------------------------------------------------------------------------
+# OpenCode adapter (knowledge/harness-research.md ranked it the strongest mature
+# provider-neutral open harness; F-054's tournament could not measure it because no adapter
+# existed). These tests pin the containment properties, which are the whole reason a
+# bridged external harness is comparable to the native loop at all.
+# ---------------------------------------------------------------------------------------
+
+
+def _opencode_loop(**kwargs):
+    from sovereign_ai.agents.opencode_loop import OpenCodeAgentLoop
+
+    return OpenCodeAgentLoop(
+        "/nonexistent/opencode", "http://127.0.0.1:18080/v1", "qwen35-9b", **kwargs
+    )
+
+
+def test_opencode_adapter_disables_every_builtin_tool():
+    """A bridged run must have no ungoverned path to the filesystem, shell or network.
+
+    If any built-in survived, the tournament would compare a harness using tools that never
+    pass through PolicyEngine against a native loop whose every action does -- which would
+    make the comparison meaningless and the result flattering to the wrong side.
+    """
+    from sovereign_ai.agents.opencode_loop import _BUILTIN_TOOLS_TO_DISABLE
+
+    config = _opencode_loop()._config({"workspace": "/tmp/ws", "agent_profile_id": "s"})
+    assert set(config["tools"]) == set(_BUILTIN_TOOLS_TO_DISABLE)
+    assert all(enabled is False for enabled in config["tools"].values())
+    for dangerous in ("bash", "write", "edit", "read", "webfetch"):
+        assert config["tools"][dangerous] is False
+
+
+def test_opencode_adapter_points_only_at_the_kernel_bridge():
+    config = _opencode_loop()._config(
+        {"workspace": "/tmp/ws", "agent_profile_id": "subject-1", "run_id": "run-1"}
+    )
+    assert list(config["mcp"]) == ["kernel"], "the bridge must be the only tool source"
+    server = config["mcp"]["kernel"]
+    assert server["type"] == "local"
+    assert server["command"][-1] == "sovereign_ai.agents.mcp_bridge"
+    # The identity every grant is checked against has to reach the bridge, or every
+    # mutating call is denied for the wrong reason.
+    assert server["environment"]["SOAI_MCP_AGENT_PROFILE_ID"] == "subject-1"
+    assert server["environment"]["SOAI_MCP_WORKSPACE"] == "/tmp/ws"
+
+
+def test_opencode_adapter_provider_points_at_the_local_router():
+    config = _opencode_loop()._config({})
+    provider = config["provider"]["sovereign"]
+    assert provider["options"]["baseURL"] == "http://127.0.0.1:18080/v1"
+    assert "qwen35-9b" in provider["models"]
+
+
+def test_opencode_adapter_without_tools_has_no_mcp_server():
+    config = _opencode_loop(enable_tools=False)._config({"workspace": "/tmp/ws"})
+    assert "mcp" not in config
+    assert all(enabled is False for enabled in config["tools"].values())
+
+
+def test_opencode_adapter_never_writes_its_config_into_the_workspace(tmp_path):
+    """The tournament's post-conditions inspect the workspace directory, so a config file
+    dropped there would let the harness's own configuration count as task output."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    loop = _opencode_loop()
+    step = asyncio.run(
+        loop.next_step(
+            {"task": "anything", "workspace": str(workspace), "agent_profile_id": "s"}
+        )
+    )
+    assert step.done and step.kind == "harness_error"
+    assert "not found" in step.payload["error"]
+    assert list(workspace.iterdir()) == [], "the workspace must be left exactly as found"
+
+
+def test_opencode_loop_registers_only_when_the_binary_exists(tmp_path, monkeypatch):
+    """Runtime truth over manifest assumption: an install without OpenCode gets one fewer
+    loop, not a loop that fails at first use."""
+    from sovereign_ai.kernel import app as kernel_app
+
+    monkeypatch.setattr(kernel_app, "resolve_opencode_binary", lambda: None)
+    absent = kernel(tmp_path, monkeypatch)
+    assert "opencode" not in absent.agent_loops.names()
+
+    monkeypatch.setattr(kernel_app, "resolve_opencode_binary", lambda: "/usr/bin/opencode")
+    present = kernel(tmp_path / "second", monkeypatch)
+    assert "opencode" in present.agent_loops.names()

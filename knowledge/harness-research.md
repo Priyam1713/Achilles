@@ -204,8 +204,14 @@ vim mode, themes, and session sharing.
 3. **`specs/`** as a directory — a harness that keeps its own specifications in-repo is one you
    can build a compatible client against.
 
-**Verdict: `trial` as the primary external `AgentLoop` candidate, and the leading candidate to
-*inherit* a TUI, diff view, LSP and session management from** rather than build them.
+**Verdict: `trial` as the leading candidate to *inherit* a TUI, diff view, LSP and session
+management from** — but **not** as the primary `AgentLoop` on this hardware. Measured
+2026-08-23 (`docs/FIXES.md` F-055): bridged to our governed tools on `qwen35-9b`, OpenCode
+scored **1 genuine pass in 5 with four 300 s timeouts**, against 4/5 for our native loop.
+The same binary answers a trivial prompt in 5.5 s standalone, so this is not a broken
+integration — it is context weight. A big system prompt plus thirteen MCP tool schemas on
+every turn is affordable at frontier speeds and disqualifying at 49 tok/s. Take its *surfaces*;
+do not take its loop.
 
 ---
 
@@ -549,7 +555,7 @@ Effort is rough and assumes the kernel stays as-is.
 | # | Item | Source | Effort | Why this rank |
 | --- | --- | --- | --- | --- |
 | 1 | ~~Widen the MCP bridge from 3 to all 13 tools~~ | ours | **done 2026-08-23** (`docs/FIXES.md` F-054) | All 13 tools now dispatch through the same `ToolDispatcher` the native loop uses, with an anti-drift test |
-| 2 | Run the harness tournament for real | ours | **partly done 2026-08-23** (F-054) | Ran native vs bridged Goose on `qwen35-9b`: **native 4/5 in 87.6 s, Goose 3/5 in 170.4 s**. Pi and OpenCode still have no adapter, and Pi has no MCP at all — so the field's two strongest candidates are still unmeasured |
+| 2 | Run the harness tournament for real | ours | **done for three loops 2026-08-23** (F-054, F-055) | native **4/5 in 134 s**, Goose **4/5 in ~206 s**, OpenCode **1/5 genuine in 1294 s** (four timeouts). OpenCode's context weight — big system prompt plus 13 MCP tool schemas every turn — is disqualifying at 49 tok/s, which is exactly what this file's ranking function predicted. **Pi remains unmeasured**: it is installed on this machine but omits MCP, so the bridge does not reach it |
 | 3 | Summarising `read` + parallel ripgrep `grep` | oh-my-pi | ~1 day | Immediate context savings; no new dependency |
 | 4 | Focus Chain (re-injected todo list) | Cline | ~1 day | Cheapest fix for compaction drift |
 | 5 | Parallel tool dispatch | ForgeCode | ~2 days | Direct multiplier on wall time |
