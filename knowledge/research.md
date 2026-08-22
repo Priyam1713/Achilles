@@ -1486,7 +1486,11 @@ repository and the name Achilles is not research. It is wiring, and then legitim
 ### D-027 — Streaming is a requirement, not an enhancement
 
 - **Date:** 2026-08-22
-- **Status:** `adopted`.
+- **Status:** `adopted`. **Kernel seam implemented 2026-08-22** (`docs/FIXES.md` F-050):
+  `GET /events/stream` serves session-authenticated server-sent events over the journal, with
+  the event sequence as a resume cursor. **No UI consumes it yet** — the web page and the
+  desktop still poll on their four-second timers, and token-level streaming does not exist.
+  The decision is not satisfied until a surface actually uses it.
 - **Reason:** There is no `StreamingResponse`, SSE endpoint, WebSocket or generator anywhere
   in the API, and every view polls on a four-second timer. On hardware measured at 6.36 tok/s
   for the deep brain, that means minutes of undifferentiated waiting followed by a wall of

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -586,6 +587,60 @@ def create_app(config_root: str | None = None) -> FastAPI:
         if kernel.collaboration.store.get_room(room_id) is None:
             raise HTTPException(status_code=404, detail="room not found")
         return kernel.collaboration.store.verify_chain(room_id)
+
+    @app.get("/events/stream", dependencies=[Depends(require_session)])
+    async def stream_events(
+        request: Request,
+        after: int = 0,
+        stream: str | None = None,
+        follow: bool = True,
+        idle_timeout: float = 0.0,
+    ):
+        """Server-sent events over the kernel journal.
+
+        Research wave 7's second severity-1 finding was that **nothing in this system
+        streamed**: every surface polled on a four-second timer, which on hardware measured at
+        6-52 tok/s means minutes of undifferentiated waiting followed by a wall of text. This
+        is the seam that fixes it, and the one AG-UI (`D-014`) and ACP (`D-024`) would later
+        be spoken across.
+
+        Authentication is the ordinary session header, deliberately **not** a token in the
+        query string: a URL is logged, cached and shared in ways a header is not. Browser
+        clients must therefore consume this with streaming `fetch`, not `EventSource`, which
+        cannot set headers.
+
+        `follow=false` returns the backlog and closes, which is what a reconnecting client
+        wants for catch-up and what makes this testable without a live connection.
+        """
+
+        async def frames():
+            cursor = after
+            idle_since = asyncio.get_event_loop().time()
+            while True:
+                events = kernel.events.read_after(cursor, limit=200, stream_prefix=stream)
+                for event in events:
+                    cursor = int(event["seq"])
+                    yield f"id: {cursor}\nevent: {event['event_type']}\ndata: {json.dumps(event, default=str)}\n\n"
+                if events:
+                    idle_since = asyncio.get_event_loop().time()
+                if not follow:
+                    return
+                if await request.is_disconnected():
+                    return
+                now = asyncio.get_event_loop().time()
+                if idle_timeout and now - idle_since >= idle_timeout:
+                    return
+                # A comment frame keeps proxies and impatient clients from closing an idle
+                # stream, and costs nothing.
+                if now - idle_since > 10:
+                    yield ": heartbeat\n\n"
+                await asyncio.sleep(0.25)
+
+        return StreamingResponse(
+            frames(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/jobs")
     async def list_jobs(status: JobStatus | None = None, limit: int = 50) -> dict[str, Any]:

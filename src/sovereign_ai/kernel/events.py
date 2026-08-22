@@ -68,6 +68,27 @@ class EventStore:
             )
         return event_id
 
+    def read_after(
+        self, after_seq: int = 0, limit: int = 500, stream_prefix: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Read the journal forward from a sequence number, across all streams.
+
+        `read_stream` answers "what happened in this one stream", which is what an audit of a
+        known run needs. Live observation needs the other question -- "what has happened
+        anywhere since I last looked" -- and that is what the streaming endpoint added for
+        `knowledge/research.md` D-027 consumes. Monotonic `seq` makes it a cursor, so a client
+        that reconnects resumes exactly where it stopped rather than replaying or skipping.
+        """
+        sql = "SELECT * FROM events WHERE seq>?"
+        params: list[Any] = [after_seq]
+        if stream_prefix:
+            sql += " AND stream_id LIKE ?"
+            params.append(stream_prefix + "%")
+        sql += " ORDER BY seq LIMIT ?"
+        params.append(limit)
+        with self._connect() as con:
+            return [dict(row) for row in con.execute(sql, params)]
+
     def read_stream(self, stream_id: str, after_seq: int = 0) -> Iterable[dict[str, Any]]:
         with self._connect() as con:
             rows = con.execute(

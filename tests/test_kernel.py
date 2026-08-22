@@ -3926,3 +3926,62 @@ def test_read_only_tools_do_not_create_checkpoints(tmp_path, monkeypatch):
     asyncio.run(loop.next_step({"run_id": "ckpt-2", "task": "read", "workspace": str(workspace)}))
     events = [e["event_type"] for e in k.events.read_stream("agent-loop:ckpt-2")]
     assert "agent.checkpoint.created" not in events
+
+
+# ---------------------------------------------------------------------------------------
+# Server-sent events over the kernel journal (D-027). Wave 7's second severity-1 finding was
+# that nothing in this system streamed: every surface polled on a four-second timer.
+# ---------------------------------------------------------------------------------------
+
+
+def test_event_store_reads_forward_from_a_cursor(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    k.events.append("run:a", "one", {"n": 1})
+    k.events.append("other:b", "two", {"n": 2})
+    k.events.append("run:a", "three", {"n": 3})
+
+    everything = k.events.read_after(0)
+    assert [e["event_type"] for e in everything] == ["one", "two", "three"]
+
+    # A cursor resumes exactly where it stopped: no replay, no skip.
+    after_first = k.events.read_after(int(everything[0]["seq"]))
+    assert [e["event_type"] for e in after_first] == ["two", "three"]
+
+    scoped = k.events.read_after(0, stream_prefix="run:")
+    assert [e["event_type"] for e in scoped] == ["one", "three"]
+
+
+def test_event_stream_endpoint_emits_sse_frames(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    client = api_client(tmp_path, monkeypatch)
+    k.events.append("agent-loop:sse-1", "agent.step.tool_call", {"tool": "read_file"})
+    k.events.append("agent-loop:sse-1", "agent.step.done", {"summary": "finished"})
+
+    response = client.get("/events/stream?follow=false")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+
+    body = response.text
+    assert "event: agent.step.tool_call" in body
+    assert "event: agent.step.done" in body
+    assert "data: {" in body
+    # Every frame carries its sequence as the SSE id, which is what makes reconnection exact.
+    assert "id: 1" in body
+
+
+def test_event_stream_requires_a_session(tmp_path, monkeypatch):
+    client = api_client(tmp_path, monkeypatch)
+    del client.headers["Authorization"]
+    assert client.get("/events/stream?follow=false").status_code == 401
+
+
+def test_event_stream_resumes_from_a_cursor_without_replaying(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    client = api_client(tmp_path, monkeypatch)
+    k.events.append("agent-loop:sse-2", "first", {})
+    first_seq = int(k.events.read_after(0)[-1]["seq"])
+    k.events.append("agent-loop:sse-2", "second", {})
+
+    body = client.get(f"/events/stream?follow=false&after={first_seq}").text
+    assert "event: second" in body
+    assert "event: first" not in body

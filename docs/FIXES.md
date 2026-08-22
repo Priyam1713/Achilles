@@ -2571,6 +2571,41 @@ not fabrication.
   `AGENTS.md` is read but nothing yet validates or bounds what a hostile one can attempt —
   that is `D-037`'s quarantine, still open.
 
+### F-050 — Added: the kernel streams, closing wave 7's second severity-1 finding
+
+- **Severity:** `high` · **Status:** `fixed` at the API seam; **not** yet consumed by any UI.
+- **Motivating problem:** research wave 7, X-02. `grep` for `StreamingResponse`, SSE,
+  WebSocket or a generator in `api/server.py` returned **zero hits**, and every surface polled
+  on a four-second `setInterval`. On hardware measured at 6.36 tok/s for the deep brain that
+  means minutes of undifferentiated waiting followed by a finished wall of text — the worst
+  possible presentation of this system's slowest property. It also contradicted `D-014` in
+  practice: AG-UI was adopted *because* it standardises streaming, and the opposite was built.
+- **Fix:**
+  - `EventStore.read_after(after_seq, limit, stream_prefix)` — the journal read that live
+    observation needs. `read_stream` answers "what happened in this run"; this answers "what
+    has happened anywhere since I last looked", and the monotonic `seq` makes it a cursor, so
+    a reconnecting client resumes exactly rather than replaying or skipping.
+  - `GET /events/stream` — server-sent events, session-authenticated, with the sequence number
+    as the SSE `id` on every frame, a heartbeat comment on idle, and disconnect detection.
+  - `follow=false` returns the backlog and closes, which is what a reconnecting client wants
+    for catch-up and what makes the endpoint testable without holding a live connection.
+- **A deliberate security choice worth naming:** authentication is the ordinary session
+  header, **not** a token in the query string. That means browser clients cannot use
+  `EventSource` (which cannot set headers) and must use streaming `fetch` instead. That is the
+  right trade: a URL is logged, cached, and shared in ways a header is not, and this project's
+  own rules forbid putting credentials in URLs. The constraint is documented on the endpoint
+  rather than discovered later.
+- **Verification:** 4 new tests — cursor semantics including the no-replay guarantee, real SSE
+  frame structure (`event:`, `data:`, `id:`), stream-prefix scoping, and that the endpoint
+  401s without a session. 177 passing overall, ruff clean.
+- **What this does not fix, and must not be claimed:** **no surface consumes it yet.** The
+  web page still polls, the desktop still polls on its 4-second `setInterval`, and nothing
+  streams model *tokens* — this streams kernel events (tool calls, job transitions, approvals,
+  checkpoints), which is the layer AG-UI and ACP would be spoken across, not token-level
+  output. Wiring the UIs is deliberately left undone rather than shipped unverified: there is
+  no browser in this environment to confirm it against, and an unverified UI claim is exactly
+  what research wave 8 was written to stop.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.
