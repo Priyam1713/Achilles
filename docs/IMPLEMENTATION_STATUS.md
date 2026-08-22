@@ -190,9 +190,26 @@ that subsumes both of the above: **installed is not reachable.**
 | SearXNG is deployed and never queried | present in `infra/docker-compose.yml`; `grep -rn "searx" src` returns nothing |
 | Memory is never consulted | `ContextBuilder` is constructed in `kernel/app.py` and called by no request path |
 
-**19 of 21 capability domains are therefore unreachable by an agent**, including every one of
-the specialist models the `workstation` profile installs. The reachability table is in
-`knowledge/research.md` research wave 8.
+**19 of 21 capability domains were therefore unreachable by an agent.** The reachability table
+is in `knowledge/research.md` research wave 8.
+
+### What has since been fixed (2026-08-22)
+
+| Wave-8 finding | Status |
+| --- | --- |
+| `ToolRegistry` holds zero tools | **fixed** (F-047) — 13 registered tools across files, search, execution, specialists, media, memory, web |
+| The agent cannot invoke any specialist/media/memory/web capability | **fixed** (F-047) — dispatched through `ToolDispatcher`, gated by `ExecutionBroker.authorize` |
+| `ContextBuilder` never called | **fixed** (F-047) — `search_memory` puts recall in the loop |
+| SearXNG deployed and never queried | **fixed** (F-047) — `web_search`, results labelled untrusted |
+| No surface can start work | **fixed** (F-048) — `sovereign run`, live-verified against a real local model |
+| Tool calls scraped out of prose | **fixed** (F-048) — schema-constrained decoding; measured 2-of-4 unparsable turns to 0 |
+| No project instructions | **fixed** (F-049) — `AGENTS.md`, injected as guidance that cannot authorise |
+| History never compacted | **fixed** (F-049) — deterministic elision plus an `agent.context.compacted` event |
+| Checkpoints store job state, not file state | **fixed** (F-049) — shadow-git snapshots and restore |
+| `ComputerController` holds zero controllers | **open** — no browser or desktop control exists |
+| 7 of 14 workers return HTTP 501 | **open** — now reachable-but-unimplemented rather than unreachable |
+| Nothing streams; no TUI; no diff view; approval cards show no evidence | **open** (`D-027`, `D-026`, `D-028`) |
+| No Linux or Apple Silicon install path | **open** (`D-035`) |
 
 Two further facts about the artifact itself were blocking for a project meant to be given
 away, and **both are now fixed**: the repository carries an Apache-2.0 `LICENSE`, a `NOTICE`

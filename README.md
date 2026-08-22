@@ -13,14 +13,17 @@ No model, harness, sandbox, inference engine or UI owns the architecture. The ke
 
 ## What is implemented
 
-> **Read this first (research wave 8, 2026-08-22).** The list below describes *kernel
-> features that exist*, not capabilities an agent can use. An audit on 2026-08-22 found that
-> **19 of 21 capability domains are unreachable by the agent loop**: `ToolRegistry` has zero
-> tools registered in it, `ComputerController` has zero controllers, 7 of 14 specialist
-> workers return HTTP 501, the deployed SearXNG has no client, and the memory
-> `ContextBuilder` is never called by any request path. The agent can currently read a file,
-> list a directory, run a command, and talk. Everything else is installed, designed, or
-> declared - and not yet wired. See `knowledge/research.md` research wave 8 and `D-034`.
+> **Read this first.** Research wave 8 (2026-08-22) found that 19 of 21 capability domains
+> were unreachable by the agent: `ToolRegistry` had zero tools registered in it and the loop
+> had three hard-coded ones. **That is now fixed** — 13 tools cover files, search, execution,
+> specialists, media, memory and web (`docs/FIXES.md` F-047), and `sovereign run "<task>"` is
+> a real front door, live-verified against a local model (F-048).
+>
+> What is still honestly *not* there: `ComputerController` has **no registered controllers**,
+> so there is no browser or desktop control; **7 of 14 specialist workers return HTTP 501**
+> (audio reasoning, segmentation, GUI grounding, materials, medical, music), so those are
+> reachable-but-unimplemented; nothing **streams** yet; and there is no TUI or desktop task
+> composer. See `knowledge/research.md` waves 6-8 and `docs/IMPLEMENTATION_STATUS.md`.
 
 
 - capability/model registry with source, license/gating and hardware-fit metadata
@@ -34,8 +37,14 @@ No model, harness, sandbox, inference engine or UI owns the architecture. The ke
 - OS credential-store secret handles
 - append-only events, checkpoint persistence primitives, transaction journal/rollback hooks
 - lexical memory, persistent vector adapter, graph memory and provenance metadata
-- contextual tool discovery (the registry and ranking are implemented; **no tools are
-  registered in it yet**)
+- a real tool plane: `read_file` (ranged), `list_directory`, `write_file`, `edit_file`,
+  `delete_file`, `grep`, `glob`, `run_command`, `invoke_specialist`, `generate_media`,
+  `search_memory`, `remember`, `web_search` — every one policy-gated, with contextual
+  discovery so an agent sees a small relevant roster
+- schema-constrained tool calls: the action schema is derived from the registered tools and
+  enforced during decoding, with a recorded fallback when a backend cannot honour it
+- `AGENTS.md` project instructions, deterministic context compaction, and shadow-git
+  file-state checkpoints so an agent's edit can be undone
 - deterministic post-condition verification
 - hierarchical computer-control interface: API → CLI → plugin → DOM → UIA → vision GUI
   (**interface only - no controller is registered, so no computer control executes**)
@@ -106,7 +115,19 @@ sources, download revision-resolved model snapshots, prepare the Qwen GGUFs, per
 llama.cpp load/inference smoke tests, validate the registry and run kernel tests. Its runtime
 and specialist sources must be made immutable before this path is treated as reproducible.
 
-## Run
+## Give it a task
+
+```powershell
+uv run sovereign workspace add C:\path\to\your\project
+uv run sovereign run "summarise what this project does and how its tests run" --workspace C:\path\to\your\project
+```
+
+Every step prints as it happens with its own timing, because on this hardware an
+undifferentiated wait is the worst possible way to present a slow model. Mutating actions are
+refused unless a `CapabilityGrant` covers them or you pass `--approve`; that refusal is the
+kernel working, not a bug. `uv run sovereign tools` lists what an agent can actually invoke.
+
+## Run the control plane
 
 ```powershell
 ./scripts/start.ps1
