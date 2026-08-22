@@ -208,7 +208,11 @@ is in `knowledge/research.md` research wave 8.
 | Checkpoints store job state, not file state | **fixed** (F-049) — shadow-git snapshots and restore |
 | `ComputerController` holds zero controllers | **open** — no browser or desktop control exists |
 | 7 of 14 workers return HTTP 501 | **open** — now reachable-but-unimplemented rather than unreachable |
-| Nothing streams; no TUI; no diff view; approval cards show no evidence | **open** (`D-027`, `D-026`, `D-028`) |
+| Nothing streams | **fixed for the web surface** (F-050, F-052) — live SSE, verified in a browser; the Tauri desktop still polls |
+| No way to start work from a UI | **fixed for the web surface** (F-052) — task composer; the desktop has none |
+| Approval cards show no evidence | **partially fixed** (F-052) — the web card shows action, scope, subject, policy reason and evidence; no diff or triggering rule yet |
+| Accessibility was one ARIA attribute | **fixed for the web surface** (F-052) — landmarks, skip link, tablist, live regions, every control labelled |
+| No TUI; no diff view anywhere; no session resume | **open** (`D-026`, `D-021`) |
 | No Linux or Apple Silicon install path | **open** (`D-035`) |
 
 Two further facts about the artifact itself were blocking for a project meant to be given

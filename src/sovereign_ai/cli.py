@@ -65,7 +65,11 @@ def run(
     approve: bool = typer.Option(
         False,
         "--approve",
-        help="Treat this run as human-approved, allowing mutations policy would otherwise stop",
+        help=(
+            "Mark the run human-approved. Note this does NOT authorise a file write: the "
+            "untrusted-content gate can never allow a model-proposed mutation, so use "
+            "`sovereign grant <subject> write workspace` for that."
+        ),
     ),
     subject: str = typer.Option(
         "cli-operator", help="Subject id whose CapabilityGrants apply to this run"
@@ -347,6 +351,10 @@ def serve(config_root: str = "./configs") -> None:
     system = kernel.config.system["system"]
     uvicorn.run(
         create_app(config_root),
+        # Cap the drain so a browser tab holding /events/stream open cannot make stopping
+        # the kernel take minutes; the stream is bounded on its own side too, and clients
+        # reconnect from their cursor without losing an event.
+        timeout_graceful_shutdown=3,
         host=system.get("bind", "127.0.0.1"),
         port=int(system.get("port", 7788)),
     )

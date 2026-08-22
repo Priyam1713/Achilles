@@ -2644,6 +2644,93 @@ not fabrication.
   grant's expiry is **not** met by printing the existing record more fully. The desktop and
   web surfaces still have none of this.
 
+### F-052 — Added: a control surface that can start work, streams, and shows its evidence
+
+- **Severity:** `high` · **Status:** `fixed` for the web control surface; the Tauri desktop is
+  untouched and still polls. **Verified by driving the real page in a real browser** against a
+  real local model, not by inspection.
+- **Motivating problem:** research wave 7 audited `web/index.html` (47 lines) and found six
+  severity-1 defects in one file: no way to start work, nothing streaming, agent output
+  rendered as plain text, no diff or evidence anywhere, scroll position destroyed on every
+  poll, and effectively zero accessibility (**one** `aria-`/`role=`/`onKeyDown` occurrence
+  across the whole surface).
+- **Fix — the page was rebuilt, still with no build step, no CDN and no external font**, since
+  it has to work on a machine with no internet at all:
+  - **Task composer** (X-01) — workspace picker fed by a new `GET /workspaces`, task,
+    capability, mode, step budget. Submits an `agent` job. The system finally has a front door
+    that is not a chat-room mention.
+  - **Live run view** (X-02) — streaming `fetch` over `/events/stream`, rendering each step as
+    it happens with its own elapsed time, plus checkpoint, compaction and decoding-degraded
+    events. The four-second polls are gone.
+  - **Denials are loud** — a refused tool call renders in red with the policy's own words,
+    because burying the kernel refusing an action is how an operator learns to stop reading.
+  - **Rendered output** (X-05) — fenced code, inline code and bold, all escaped first, so an
+    agent writing code no longer produces an unstyled blob in a *coding* tool.
+  - **Approval evidence** (X-03) — the card leads with action, scope, subject, the reason
+    policy gave and the evidence payload, and says so explicitly when no evidence was
+    recorded: *"approving means trusting the request text alone"*.
+  - **Accessibility** (X-07) — landmarks, a skip link, `lang`, a real tablist with arrow-key
+    navigation, `aria-live` regions for the step stream, and a label on every control.
+    Measured in the live page: **zero unlabelled controls, 18 ARIA attributes**, up from one.
+  - **Scroll is not stolen** (X-11) — the log follows the tail only if the reader was already
+    at the tail.
+  - **Latency and authority legibility** (`D-029`, `D-030`) — live GPU/VRAM/RAM/disk gauges, a
+    connection pill with reconnect state, per-step timings, a tool-plane table and a raw event
+    log.
+  - Light/dark, `prefers-reduced-motion`, and readable errors with no `alert()` anywhere.
+- **The finding that changed the design, discovered by using the page:** the composer
+  originally had a *"pre-approve mutations"* checkbox, and with it checked **the write was
+  still denied**. That is correct behaviour: `PolicyEngine`'s untrusted-content gate can never
+  return `allowed` for a model-proposed mutation, so `approved=True` cannot rescue one — only
+  a `CapabilityGrant` can (F-036). The checkbox was promising something the architecture
+  forbids. It now issues a **real, narrow, 15-minute `write:workspace` grant** through a new
+  `POST /roster/grants` (session-authenticated, closed enumerations, TTL capped at 24 h, and
+  written to the journal as `capability_grant.issued`), and the hint text says exactly that:
+  *"an agent cannot authorise its own mutation, and no checkbox on this page can change
+  that."* The identical misleading help text on `sovereign run --approve` was corrected too.
+- **Two real defects found by using it, both fixed:**
+  - The event wire field is `payload_json`, not `payload`, so the first live run rendered
+    steps as empty `{}`.
+  - `state.activeRun` was never cleared between runs, so the *second* task of a session
+    silently rendered nothing while watching the first run's stream.
+- **A third defect, found by killing the server while watching:** an open SSE stream held
+  uvicorn's graceful shutdown open — a single watching browser tab made stopping the kernel
+  hang (observed still running 25 s after `SIGTERM`). A lifespan-shutdown hook **cannot** fix
+  this, because uvicorn drains in-flight requests *before* running lifespan shutdown, so the
+  stream would wait on an event waiting on the stream. Fixed where the lifecycle is actually
+  owned: the stream is bounded (`max_seconds`, client resumes from its cursor and misses
+  nothing) and `sovereign serve` caps uvicorn's drain at three seconds. The port now releases
+  promptly with a live browser stream attached.
+- **Live verification, in the browser, against `qwen35-9b` through the real router:**
+  1. Page loads with the stream **live**, real gauges (RTX 5070 Ti, 3.8 GB VRAM free), 13
+     tools listed.
+  2. *"Read config.env and report ANSWER"* → three steps streamed in as they happened —
+     `list_directory 2.0s`, `read_file 1.3s`, `done 1.7s: found ANSWER=42` — 5.0 s total.
+  3. *"Create notes.txt"* with no grant → **`write_file` denied, in red**, with the policy's
+     own sentence, and the model explained and stopped instead of retrying.
+  4. Same task with the authorise control → grant issued *"until 9:28:56 PM"*, checkpoint
+     event rendered as *"this edit can be undone"*, `write_file (bytes_written=5)`, done.
+     `cat notes.txt` on disk → `hello`. The grant appears in `GET /roster/grants` with a real
+     expiry.
+  5. Rooms, Inspect (route inspector returning a real routing decision) and Approvals tabs all
+     render.
+- **Verification (deterministic):** 5 new tests — the two new read-only endpoints, the grant
+  endpoint's authentication/enumeration/TTL bounds and audit event, the `/ui` document being
+  served with its token substituted and consuming the stream, and a pinned test that
+  **approval alone cannot authorise a write while a grant can**, so no future UI can imply
+  otherwise. 182 passing overall, ruff clean.
+- **Also fixed, having been recorded twice as an operational finding and hit twice:** the
+  suite is no longer non-hermetic about a running backend.
+  `test_workflow_http_start_creates_and_dispatches_the_first_step` now **skips with a stated
+  reason** when a real inference backend is reachable, instead of hanging for two minutes on a
+  developer's own machine.
+- **What this does not fix:** the **Tauri desktop is untouched** and still polls on its
+  four-second timer with no composer, no stream and the same evidence-free approval card — it
+  is the primary product per `D-010` and it is now behind the recovery surface. There is still
+  **no diff view** (X-04) anywhere, so an edit is described rather than shown; no session
+  resume, search or fork; no notifications; no first-run or hardware-autotune experience; and
+  nothing streams model *tokens*, only kernel events.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

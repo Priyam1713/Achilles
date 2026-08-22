@@ -1,47 +1,738 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Local Sovereign AI</title>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Achilles — local control surface</title>
 <style>
-:root { --bg:#050608; --panel:#0c0f14; --line:#202631; --text:#f3f5f7; --muted:#8c98aa; --glow:#d6e7ff; --accent:#9fc5ff; }
-*{box-sizing:border-box} body{margin:0;background:radial-gradient(circle at 50% -20%,#18202a 0,#080a0e 32%,var(--bg) 62%);color:var(--text);font:14px/1.45 Inter,ui-sans-serif,system-ui,sans-serif;min-height:100vh}
-.shell{max-width:1500px;margin:auto;padding:28px}.top{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding-bottom:18px}.brand{letter-spacing:.28em;font-size:12px}.state{display:flex;gap:10px;align-items:center;color:var(--muted)}.dot{width:7px;height:7px;border-radius:50%;background:#d7f7e1;box-shadow:0 0 18px #c5ffd8}
-.hero{display:grid;grid-template-columns:1.2fr .8fr;gap:18px;padding-top:18px}.panel{background:linear-gradient(180deg,rgba(18,22,29,.86),rgba(8,10,14,.92));border:1px solid var(--line);border-radius:18px;padding:20px;box-shadow:0 18px 80px #0008}.core{min-height:390px;position:relative;overflow:hidden}.core:before{content:"";position:absolute;width:340px;height:340px;border-radius:50%;border:1px solid #45516655;left:50%;top:50%;transform:translate(-50%,-50%);box-shadow:0 0 90px #7085aa16 inset}.orb{position:absolute;left:50%;top:49%;transform:translate(-50%,-50%);width:156px;height:156px;border-radius:50%;background:radial-gradient(circle at 35% 28%,#fff,#aab9cc 6%,#1b222c 28%,#06080c 66%);box-shadow:0 0 80px #b9d7ff29,0 0 180px #6ca0e119 inset;display:grid;place-items:center;text-align:center}.orb b{font-size:15px;letter-spacing:.08em}.orb span{font-size:10px;color:#b8c1cd}.node{position:absolute;padding:8px 12px;border:1px solid #2a3340;background:#090c11;border-radius:999px;color:#b9c2cd;font-size:11px}.n1{left:8%;top:20%}.n2{right:7%;top:22%}.n3{left:10%;bottom:18%}.n4{right:8%;bottom:17%}.title{font-size:11px;letter-spacing:.16em;color:var(--muted);text-transform:uppercase;margin-bottom:12px}.metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.metric{padding:14px;border:1px solid var(--line);border-radius:13px;background:#080a0e}.metric strong{display:block;font-size:22px;font-weight:500}.metric small{color:var(--muted)}.route{margin-top:15px;display:grid;grid-template-columns:1fr auto;gap:8px}.route input,.route select,.route button{background:#080a0e;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px}.route button{cursor:pointer}.result{margin-top:10px;min-height:75px;color:#bdc6d2;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;white-space:pre-wrap}.lower{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px}.caps{display:flex;gap:7px;flex-wrap:wrap}.cap{border:1px solid var(--line);border-radius:999px;padding:6px 9px;color:#aeb8c5;font-size:10px}.planes{display:grid;gap:8px}.plane{display:flex;justify-content:space-between;border-bottom:1px solid #171c24;padding:8px 0}.plane span:last-child{color:#8290a3}.footer{margin-top:18px;color:#536071;font-size:10px;text-align:center;letter-spacing:.12em}
-.collab{margin-top:18px;padding:0;overflow:hidden}.collab-head{display:flex;justify-content:space-between;align-items:center;padding:17px 20px;border-bottom:1px solid var(--line)}.collab-head .title{margin:0}.chain{font:10px ui-monospace,monospace;color:#8ea2bb}.collab-grid{display:grid;grid-template-columns:210px minmax(340px,1fr) 320px;min-height:520px}.rooms{padding:14px;border-right:1px solid var(--line);background:#080a0e}.room-button{display:block;width:100%;border:0;background:transparent;color:#8995a6;text-align:left;padding:10px 11px;border-radius:10px;cursor:pointer;margin-bottom:3px}.room-button:hover,.room-button.active{background:#151b24;color:#fff}.room-button b{display:block;font-size:12px}.room-button small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.room-main{display:grid;grid-template-rows:auto 1fr auto;min-height:520px}.room-meta{padding:14px 18px;border-bottom:1px solid var(--line)}.room-meta h2{margin:0 0 3px;font-size:17px}.room-meta p{margin:0;color:var(--muted);font-size:11px}.members{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}.member{font-size:10px;border:1px solid #293342;border-radius:999px;padding:4px 7px;color:#9fb1c8;cursor:pointer}.member.agent:before{content:'✦ ';color:var(--accent)}.timeline{padding:16px 18px;overflow:auto;max-height:440px}.event{padding:10px 12px;margin-bottom:9px;border:1px solid #1d2430;border-radius:12px;background:#090c11}.event.agent{border-color:#29384b;background:#0c1119}.event .who{font-size:10px;color:#8fa2ba;margin-bottom:5px}.event .body{white-space:pre-wrap;overflow-wrap:anywhere;color:#dce3ec}.event .thread{font-size:9px;color:#627187;margin-bottom:4px}.event .event-actions{display:flex;gap:5px;margin-top:7px}.event .event-actions button{border:0;background:#151c25;color:#8998aa;border-radius:999px;padding:3px 7px;font-size:10px;cursor:pointer}.event.failure{border-color:#5b3333;color:#ffb5b5}.composer{border-top:1px solid var(--line);padding:12px;display:grid;grid-template-columns:1fr auto;gap:8px}.composer textarea,.canvas textarea{resize:vertical;background:#07090d;color:var(--text);border:1px solid var(--line);border-radius:11px;padding:11px;font:13px/1.4 inherit}.composer button,.canvas button{background:#dbe9ff;color:#07101b;border:0;border-radius:10px;padding:0 16px;font-weight:650;cursor:pointer}.canvas{border-left:1px solid var(--line);padding:16px;background:#080a0e;display:flex;flex-direction:column;gap:9px}.canvas textarea{min-height:360px;flex:1;font-family:ui-monospace,Consolas,monospace;font-size:11px}.canvas button{min-height:38px}.hint{font-size:10px;color:#657387}.empty{color:#677486;text-align:center;padding:50px 10px}
-@media(max-width:1050px){.collab-grid{grid-template-columns:170px 1fr}.canvas{grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}.canvas textarea{min-height:180px}}
-@media(max-width:900px){.hero,.lower{grid-template-columns:1fr}.core{min-height:330px}.collab-grid{grid-template-columns:1fr}.rooms{border-right:0;border-bottom:1px solid var(--line);display:flex;overflow:auto}.room-button{min-width:150px}.timeline{max-height:500px}}
+/* No build step, no CDN, no external font: this page has to work on a machine with no
+   internet at all, which is the entire point of the project it belongs to. */
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --ink:#12161c; --muted:#5d6672; --line:#dfe3e8;
+  --accent:#2f6feb; --ok:#1a7f45; --warn:#9a6400; --bad:#b3261e; --code:#f0f2f5;
+  --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.1);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0e1116; --panel:#151a21; --ink:#e7ecf3; --muted:#98a2b3; --line:#242b35;
+    --accent:#79a6ff; --ok:#5cd08a; --warn:#e3b341; --bad:#ff8f8f; --code:#0b0e12;
+    --shadow:none;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink); font:15px/1.5 ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+a{color:var(--accent)}
+.skip{position:absolute;left:-9999px;top:0;background:var(--panel);padding:10px 14px;z-index:10}
+.skip:focus{left:8px;top:8px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+header{
+  display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+  padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel);
+}
+.brand{font-weight:700;letter-spacing:.14em;font-size:13px}
+.brand small{display:block;font-weight:400;letter-spacing:0;color:var(--muted);font-size:11px}
+.pill{
+  display:inline-flex;align-items:center;gap:7px;padding:4px 10px;border:1px solid var(--line);
+  border-radius:999px;font-size:12px;color:var(--muted);background:var(--bg);
+}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.dot.live{background:var(--ok)}
+.dot.retry{background:var(--warn)}
+.dot.down{background:var(--bad)}
+@media (prefers-reduced-motion:no-preference){ .dot.live{animation:pulse 2.4s ease-in-out infinite} }
+@keyframes pulse{50%{opacity:.45}}
+.gauges{display:flex;gap:14px;margin-left:auto;flex-wrap:wrap}
+.gauge{min-width:92px}
+.gauge b{display:block;font-variant-numeric:tabular-nums;font-size:14px}
+.gauge span{font-size:11px;color:var(--muted)}
+nav.tabs{display:flex;gap:4px;padding:10px 20px 0;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+nav.tabs button{
+  appearance:none;border:1px solid transparent;border-bottom:none;background:none;color:var(--muted);
+  padding:8px 14px;border-radius:8px 8px 0 0;font:inherit;font-size:14px;cursor:pointer;
+}
+nav.tabs button[aria-selected="true"]{background:var(--bg);color:var(--ink);border-color:var(--line);font-weight:600}
+main{padding:20px;max-width:1180px;margin:0 auto}
+.grid{display:grid;gap:16px}
+@media(min-width:900px){ .grid.two{grid-template-columns:minmax(320px,420px) 1fr} }
+section.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:var(--shadow)}
+h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+h3{font-size:15px;margin:0 0 4px}
+label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+input,select,textarea,button{font:inherit;color:inherit}
+input,select,textarea{
+  width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;
+}
+textarea{resize:vertical;min-height:88px}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row>*{flex:1 1 120px}
+button.primary{
+  background:var(--accent);color:#fff;border:1px solid transparent;border-radius:8px;padding:10px 16px;
+  cursor:pointer;font-weight:600;
+}
+button.primary[disabled]{opacity:.55;cursor:progress}
+button.ghost{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer}
+button.approve{background:var(--ok);color:#fff;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font-weight:600}
+button.deny{background:var(--bad);color:#fff;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font-weight:600}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.steps{max-height:60vh;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px;background:var(--bg)}
+.step{display:flex;gap:10px;padding:8px 10px;border-bottom:1px solid var(--line);align-items:flex-start}
+.step:last-child{border-bottom:none}
+.step .n{color:var(--muted);font-variant-numeric:tabular-nums;min-width:26px;text-align:right}
+.step .body{flex:1;min-width:0}
+.step .t{font-weight:600}
+.step.denied .t{color:var(--bad)}
+.step.error .t{color:var(--warn)}
+.step.done .t{color:var(--ok)}
+.step .meta{color:var(--muted);font-size:12px}
+.step pre{margin:6px 0 0;background:var(--code);border:1px solid var(--line);border-radius:8px;padding:8px;overflow:auto;font-size:12px}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;border:1px solid var(--line);background:var(--bg)}
+.badge.high,.badge.critical{color:var(--bad);border-color:var(--bad)}
+.badge.medium{color:var(--warn);border-color:var(--warn)}
+.badge.low{color:var(--ok);border-color:var(--ok)}
+.card{border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px;background:var(--bg)}
+.kv{display:grid;grid-template-columns:104px 1fr;gap:4px 10px;font-size:13px;margin:8px 0}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;overflow-wrap:anywhere}
+.error{border-color:var(--bad);color:var(--bad)}
+.empty{color:var(--muted);padding:18px;text-align:center}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:12px}
+.stream-log{max-height:280px;overflow:auto;font-size:12px}
+.hide{display:none}
 </style>
 </head>
-<body><div class="shell">
-<div class="top"><div class="brand">LOCAL SOVEREIGN AI</div><div class="state"><i class="dot" id="dot"></i><span id="status">booting kernel</span></div></div>
-<div class="hero">
-<section class="panel core"><div class="title">Cognition fabric</div><div class="node n1">MEMORY FABRIC</div><div class="node n2">INFERENCE BROKER</div><div class="node n3">VERIFICATION PLANE</div><div class="node n4">EXECUTION BOUNDARY</div><div class="orb"><div><b>AI KERNEL</b><br><span>capability routed · fail closed</span></div></div></section>
-<section class="panel"><div class="title">Resource fabric</div><div class="metrics"><div class="metric"><strong id="gpu">—</strong><small>GPU</small></div><div class="metric"><strong id="vram">—</strong><small>VRAM free</small></div><div class="metric"><strong id="ram">—</strong><small>RAM free</small></div><div class="metric"><strong id="disk">—</strong><small>Disk free</small></div></div><div class="title" style="margin-top:18px">Route inspector</div><div class="route"><input id="cap" value="reasoning" placeholder="capability"/><select id="mode"><option>fast</option><option selected>smart</option><option>deep</option></select><button onclick="route()">Route</button></div><div class="result" id="result">Select a capability to inspect the winning model/runtime.</div></section>
+<body>
+<a class="skip" href="#main">Skip to main content</a>
+
+<header>
+  <div class="brand">ACHILLES<small>local sovereign kernel</small></div>
+  <span class="pill" id="conn" role="status" aria-live="polite">
+    <span class="dot" id="connDot"></span><span id="connText">connecting…</span>
+  </span>
+  <div class="gauges" id="gauges" aria-label="Machine resources">
+    <div class="gauge"><b id="gGpu">—</b><span>GPU</span></div>
+    <div class="gauge"><b id="gVram">—</b><span>VRAM free</span></div>
+    <div class="gauge"><b id="gRam">—</b><span>RAM free</span></div>
+    <div class="gauge"><b id="gDisk">—</b><span>disk free</span></div>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="Sections">
+  <button role="tab" id="tab-work" aria-controls="panel-work" aria-selected="true">Work</button>
+  <button role="tab" id="tab-approvals" aria-controls="panel-approvals" aria-selected="false">
+    Approvals <span id="approvalCount" class="badge hide">0</span>
+  </button>
+  <button role="tab" id="tab-rooms" aria-controls="panel-rooms" aria-selected="false">Rooms</button>
+  <button role="tab" id="tab-inspect" aria-controls="panel-inspect" aria-selected="false">Inspect</button>
+</nav>
+
+<main id="main">
+
+<div id="panel-work" role="tabpanel" aria-labelledby="tab-work" class="grid two">
+  <section class="panel">
+    <h2>Give it a task</h2>
+    <form id="taskForm">
+      <label for="fWorkspace">Workspace</label>
+      <select id="fWorkspace" required></select>
+      <p class="small muted" id="wsHint" style="margin:6px 0 0"></p>
+
+      <label for="fTask">Task</label>
+      <textarea id="fTask" required placeholder="e.g. read config.env and tell me what ANSWER is"></textarea>
+
+      <div class="row">
+        <div>
+          <label for="fCapability">Capability</label>
+          <select id="fCapability">
+            <option value="coding">coding</option>
+            <option value="tool_routing" selected>tool_routing</option>
+            <option value="reasoning">reasoning</option>
+            <option value="planning">planning</option>
+          </select>
+        </div>
+        <div>
+          <label for="fMode">Mode</label>
+          <select id="fMode">
+            <option>fast</option><option selected>smart</option><option>deep</option>
+          </select>
+        </div>
+        <div>
+          <label for="fSteps">Step budget</label>
+          <input id="fSteps" type="number" min="1" max="25" value="8"/>
+        </div>
+      </div>
+
+      <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
+        <input id="fApprove" type="checkbox" style="width:auto"/>
+        <span>Authorise file writes for 15 minutes</span>
+      </label>
+      <p class="small muted" style="margin:4px 0 12px" id="grantHint">
+        Checking this issues a real <span class="mono">write:workspace</span> capability grant
+        to <span class="mono">web-operator</span>, expiring in 15 minutes. Without it a write
+        is refused — an agent cannot authorise its own mutation, and no checkbox on this page
+        can change that.
+      </p>
+
+      <button class="primary" id="submitBtn" type="submit">Run task</button>
+      <p class="small error hide" id="taskError" role="alert"></p>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Live run</h2>
+    <div id="runHead" class="muted small">No run selected. Start one, or pick a recent job below.</div>
+    <div class="steps" id="steps" aria-live="polite" aria-label="Agent steps"></div>
+    <h2 style="margin-top:18px">Recent jobs</h2>
+    <table>
+      <thead><tr><th>kind</th><th>status</th><th>created</th><th></th></tr></thead>
+      <tbody id="jobRows"><tr><td colspan="4" class="empty">loading…</td></tr></tbody>
+    </table>
+  </section>
 </div>
-<div class="lower"><section class="panel"><div class="title">Registered capabilities</div><div class="caps" id="caps"></div></section><section class="panel"><div class="title">System planes</div><div class="planes"><div class="plane"><span>Intelligence</span><span>replaceable agent loops</span></div><div class="plane"><span>Execution</span><span>OpenShell → hardened fallback</span></div><div class="plane"><span>Memory</span><span>provenance + lexical/vector adapters</span></div><div class="plane"><span>Verification</span><span>post-condition before commit</span></div><div class="plane"><span>Learning</span><span>local benchmark overrides</span></div><div class="plane"><span>Resources</span><span>VRAM ↔ RAM ↔ NVMe</span></div></div></section></div>
-<section class="panel collab"><div class="collab-head"><div class="title">Collaboration rooms · humans + local agents</div><div class="chain" id="chain">verifying event chain…</div></div><div class="collab-grid"><nav class="rooms" id="rooms"></nav><main class="room-main"><header class="room-meta"><h2 id="roomName">Build Lab</h2><p id="roomPurpose">Local collaboration stays under kernel authority.</p><div class="members" id="members"></div></header><div class="timeline" id="timeline"><div class="empty">Loading the room…</div></div><div class="composer"><textarea id="message" rows="3" placeholder="Try: @swift summarize our next step, or @forge review this design"></textarea><button id="send" onclick="postMessage()">Send</button></div></main><aside class="canvas"><div class="title">Shared canvas</div><div class="hint">Pin goals, decisions and evidence. Every revision stays in the room's hash chain.</div><textarea id="canvas" spellcheck="false"></textarea><button onclick="saveCanvas()">Save canvas</button></aside></div></section>
-<div class="footer">THE MODEL IS A COMPONENT. THE KERNEL IS THE SYSTEM.</div>
+
+<div id="panel-approvals" role="tabpanel" aria-labelledby="tab-approvals" class="hide">
+  <section class="panel">
+    <h2>Pending approvals</h2>
+    <div id="approvalList"><p class="empty">nothing is waiting on you</p></div>
+  </section>
 </div>
+
+<div id="panel-rooms" role="tabpanel" aria-labelledby="tab-rooms" class="hide grid two">
+  <section class="panel">
+    <h2>Rooms</h2>
+    <div id="roomList"></div>
+    <p class="small muted" id="chainState">verifying event chain…</p>
+  </section>
+  <section class="panel">
+    <h3 id="roomName">—</h3>
+    <p class="small muted" id="roomPurpose"></p>
+    <div class="steps" id="timeline" aria-live="polite" aria-label="Room timeline"></div>
+    <label for="msg">Message</label>
+    <textarea id="msg" placeholder="Mention @swift, @sage or @forge to dispatch a job"></textarea>
+    <button class="primary" id="sendBtn" type="button">Send</button>
+    <p class="small error hide" id="roomError" role="alert"></p>
+  </section>
+</div>
+
+<div id="panel-inspect" role="tabpanel" aria-labelledby="tab-inspect" class="hide grid two">
+  <section class="panel">
+    <h2>Route inspector</h2>
+    <label for="iCap">Capability</label>
+    <input id="iCap" value="coding"/>
+    <label for="iMode">Mode</label>
+    <select id="iMode"><option>fast</option><option selected>smart</option><option>deep</option></select>
+    <p></p>
+    <button class="ghost" id="routeBtn" type="button">Show route</button>
+    <pre class="mono small" id="routeOut" style="margin-top:12px">—</pre>
+  </section>
+  <section class="panel">
+    <h2>Tool plane</h2>
+    <table>
+      <thead><tr><th>tool</th><th>scope</th><th>description</th></tr></thead>
+      <tbody id="toolRows"><tr><td colspan="3" class="empty">loading…</td></tr></tbody>
+    </table>
+    <h2 style="margin-top:18px">Event stream</h2>
+    <div class="steps stream-log mono" id="streamLog" aria-label="Raw kernel events"></div>
+  </section>
+</div>
+
+</main>
+
 <script>
-const SOAI_TOKEN='%%SOAI_SESSION_TOKEN%%';
-function authHeaders(extra){return Object.assign({},extra,SOAI_TOKEN&&!SOAI_TOKEN.startsWith('%')?{'Authorization':'Bearer '+SOAI_TOKEN}:{})}
-async function boot(){try{let h=await fetch('/health').then(r=>r.json());document.querySelector('#status').textContent='kernel online';let x=h.resources;document.querySelector('#gpu').textContent=(x.gpu_name||'CPU').replace('NVIDIA GeForce ','');document.querySelector('#vram').textContent=x.vram_total_mb?`${(x.vram_free_mb/1024).toFixed(1)} GB`:'—';document.querySelector('#ram').textContent=`${(x.ram_free_mb/1024).toFixed(1)} GB`;document.querySelector('#disk').textContent=`${x.disk_free_gb.toFixed(0)} GB`;let c=await fetch('/capabilities').then(r=>r.json());document.querySelector('#caps').innerHTML=c.capabilities.map(v=>`<span class=cap>${v}</span>`).join('')}catch(e){document.querySelector('#status').textContent='kernel unavailable';document.querySelector('#dot').style.background='#ff8f8f'}}
-async function route(){let capability=document.querySelector('#cap').value,mode=document.querySelector('#mode').value;let d=await fetch('/route',{method:'POST',headers:authHeaders({'content-type':'application/json'}),body:JSON.stringify({capability,mode})}).then(r=>r.json());let s=d.selected;document.querySelector('#result').textContent=s?`${s.model_id}\nvia ${s.engine_id}\nscore ${s.score}\n${s.reasons.join('; ')}`:`NO ROUTE\n${d.warnings.join('\n')}`}
-let currentRoom=null,roomData=[],identityMap={},lastEventSignature='';
-function node(tag,className,text){let n=document.createElement(tag);if(className)n.className=className;if(text!==undefined)n.textContent=text;return n}
-async function collaborationBoot(){try{let [rooms,identities]=await Promise.all([fetch('/collaboration/rooms').then(r=>r.json()),fetch('/collaboration/identities').then(r=>r.json())]);roomData=rooms.rooms;identityMap=Object.fromEntries(identities.identities.map(i=>[i.id,i]));renderRooms();let preferred=roomData.find(r=>r.id==='build-lab')||roomData[0];if(preferred)await selectRoom(preferred.id)}catch(e){document.querySelector('#timeline').textContent=`Collaboration unavailable: ${e.message}`}}
-function renderRooms(){let host=document.querySelector('#rooms');host.replaceChildren();for(let room of roomData){let b=node('button',`room-button${room.id===currentRoom?' active':''}`);let name=node('b','',`# ${room.name}`),purpose=node('small','',room.purpose||'Room');b.append(name,purpose);b.onclick=()=>selectRoom(room.id);host.append(b)}}
-async function selectRoom(roomId){currentRoom=roomId;lastEventSignature='';renderRooms();let room=roomData.find(r=>r.id===roomId);document.querySelector('#roomName').textContent=room.name;document.querySelector('#roomPurpose').textContent=room.purpose;let members=document.querySelector('#members');members.replaceChildren();for(let member of room.members){if(member.kind==='system')continue;let chip=node('button',`member ${member.kind}`,`@${member.id}`);chip.title=member.display_name;chip.onclick=()=>insertMention(member.id);members.append(chip)}await refreshRoom(true)}
-function insertMention(id){let box=document.querySelector('#message'),mention=`@${id} `,start=box.selectionStart||box.value.length;box.value=box.value.slice(0,start)+mention+box.value.slice(start);box.focus();box.selectionStart=box.selectionEnd=start+mention.length}
-async function refreshRoom(loadCanvas=false){if(!currentRoom)return;let [events,verify]=await Promise.all([fetch(`/collaboration/rooms/${currentRoom}/events?limit=160`).then(r=>r.json()),fetch(`/collaboration/rooms/${currentRoom}/verify`).then(r=>r.json())]);let tail=events.events.at(-1),signature=`${currentRoom}:${events.events.length}:${tail?tail.event_hash:''}`;if(signature!==lastEventSignature){renderEvents(events.events);lastEventSignature=signature}let chain=document.querySelector('#chain');chain.textContent=verify.valid?`chain verified · ${verify.events} events`:`CHAIN BROKEN · ${verify.broken_at}`;chain.style.color=verify.valid?'#8ea2bb':'#ff8f8f';if(loadCanvas||document.activeElement!==document.querySelector('#canvas')){let canvas=await fetch(`/collaboration/rooms/${currentRoom}/canvas`).then(r=>r.json());document.querySelector('#canvas').value=canvas.content||''}}
-function renderEvents(events){let timeline=document.querySelector('#timeline'),reactions={};for(let event of events){if(event.event_type==='reaction.added'){let target=event.payload.target_event_id;(reactions[target]??=[]).push(event.payload.emoji)}}timeline.replaceChildren();let visible=events.filter(e=>e.event_type==='message.posted'||e.event_type==='job.failed');if(!visible.length){timeline.append(node('div','empty','No messages yet. Mention an agent to begin.'));return}for(let event of visible){let actor=identityMap[event.actor_id]||{display_name:event.actor_id,kind:'system'},card=node('article',`event ${actor.kind==='agent'?'agent':''} ${event.event_type==='job.failed'?'failure':''}`);if(event.parent_event_id)card.append(node('div','thread',`↳ reply to ${event.parent_event_id.slice(0,8)}`));let stamp=new Date(Number(event.created_at_ns)/1e6).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});card.append(node('div','who',`${actor.display_name} · ${stamp}`));let content=event.event_type==='job.failed'?`Job failed: ${event.payload.error}`:event.payload.content;card.append(node('div','body',content));if(event.event_type==='message.posted'){let actions=node('div','event-actions');for(let emoji of ['👍','✨','🚀']){let b=node('button','',emoji);b.onclick=()=>react(event.event_id,emoji);actions.append(b)}for(let emoji of reactions[event.event_id]||[])actions.append(node('span','member',emoji));card.append(actions)}timeline.append(card)}timeline.scrollTop=timeline.scrollHeight}
-async function postMessage(){let box=document.querySelector('#message'),content=box.value.trim(),button=document.querySelector('#send');if(!content||!currentRoom)return;button.disabled=true;button.textContent='Dispatching…';try{let response=await fetch(`/collaboration/rooms/${currentRoom}/messages`,{method:'POST',headers:authHeaders({'content-type':'application/json'}),body:JSON.stringify({actor_id:'owner',content})});let data=await response.json();if(!response.ok)throw new Error(data.detail||'message failed');box.value='';button.textContent=data.jobs.length?`${data.jobs.length} agent job${data.jobs.length>1?'s':''} queued`:'Sent';await refreshRoom()}catch(e){button.textContent=e.message}finally{setTimeout(()=>{button.disabled=false;button.textContent='Send'},1400)}}
-async function react(eventId,emoji){await fetch(`/collaboration/rooms/${currentRoom}/reactions`,{method:'POST',headers:authHeaders({'content-type':'application/json'}),body:JSON.stringify({actor_id:'owner',target_event_id:eventId,emoji})});await refreshRoom()}
-async function saveCanvas(){let content=document.querySelector('#canvas').value,response=await fetch(`/collaboration/rooms/${currentRoom}/canvas`,{method:'PUT',headers:authHeaders({'content-type':'application/json'}),body:JSON.stringify({actor_id:'owner',content})});if(response.ok)await refreshRoom(true)}
-document.querySelector('#message').addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();postMessage()}});
+"use strict";
+/* The session token is injected by the server when it serves this page (kernel/auth.py).
+   It is sent as a header, never as a query parameter: a URL gets logged, cached and shared
+   in ways a header does not. That is also why the event stream below uses streaming fetch
+   rather than EventSource, which cannot set headers. */
+const TOKEN = '%%SOAI_SESSION_TOKEN%%';
+const AUTHED = TOKEN && !TOKEN.startsWith('%');
+const authHeaders = (extra) => Object.assign({}, extra || {}, AUTHED ? {Authorization: 'Bearer ' + TOKEN} : {});
+
+const $ = (id) => document.getElementById(id);
+const state = {
+  cursor: 0, activeRun: null, runStart: 0, lastStepAt: 0, stepCount: 0,
+  room: null, roomSignature: '', tab: 'work',
+};
+
+/* ---------- tiny helpers ---------------------------------------------------------- */
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* Minimal, deliberately incomplete markdown: fenced code, inline code, bold. An agent that
+   writes code is the common case, and rendering it as an unstyled blob -- which this page
+   did before -- is indefensible in a coding tool. Everything is escaped first, so this
+   cannot become an injection path for untrusted model output. */
+function renderText(raw){
+  const parts = String(raw ?? '').split(/```/);
+  return parts.map((chunk, i) => {
+    if (i % 2 === 1) return '<pre class="mono">' + esc(chunk.replace(/^\w+\n/, '')) + '</pre>';
+    return '<p>' + esc(chunk)
+      .replace(/`([^`]+)`/g, '<code class="mono">$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br/>') + '</p>';
+  }).join('');
+}
+function fmtBytes(mb){ return mb == null ? '—' : (mb/1024).toFixed(1) + ' GB'; }
+function since(t){ return ((Date.now() - t)/1000).toFixed(1) + 's'; }
+
+async function api(path, options){
+  const res = await fetch(path, Object.assign({}, options, {
+    headers: authHeaders(Object.assign({'content-type':'application/json'}, (options||{}).headers)),
+  }));
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { const body = await res.json(); detail = body.detail || JSON.stringify(body); } catch (_) {}
+    throw new Error(detail);
+  }
+  return res.status === 204 ? null : res.json();
+}
+function showError(el, message){
+  el.textContent = message;
+  el.classList.remove('hide');
+}
+
+/* ---------- tabs ------------------------------------------------------------------ */
+const TABS = ['work','approvals','rooms','inspect'];
+function selectTab(name){
+  state.tab = name;
+  TABS.forEach(t => {
+    $('tab-' + t).setAttribute('aria-selected', String(t === name));
+    $('panel-' + t).classList.toggle('hide', t !== name);
+  });
+  if (name === 'rooms' && !state.room) loadRooms();
+}
+TABS.forEach((t, index) => {
+  const button = $('tab-' + t);
+  button.addEventListener('click', () => selectTab(t));
+  button.addEventListener('keydown', (e) => {
+    const delta = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!delta) return;
+    e.preventDefault();
+    const next = TABS[(index + delta + TABS.length) % TABS.length];
+    $('tab-' + next).focus(); selectTab(next);
+  });
+});
+
+/* ---------- health ---------------------------------------------------------------- */
+async function refreshHealth(){
+  try {
+    const h = await api('/health');
+    const r = h.resources || {};
+    $('gGpu').textContent = (r.gpu_name || 'CPU').replace('NVIDIA GeForce ', '');
+    $('gVram').textContent = r.vram_total_mb ? fmtBytes(r.vram_free_mb) : '—';
+    $('gRam').textContent = fmtBytes(r.ram_free_mb);
+    $('gDisk').textContent = r.disk_free_gb != null ? r.disk_free_gb.toFixed(0) + ' GB' : '—';
+  } catch (e) { /* the connection pill already tells this story */ }
+}
+
+/* ---------- the event stream ------------------------------------------------------ */
+function setConnection(kind, text){
+  $('connDot').className = 'dot ' + kind;
+  $('connText').textContent = text;
+}
+
+/* Streaming fetch over /events/stream, with backoff. Before this the whole surface polled
+   every four seconds; on a machine that generates 6-52 tokens a second that is the worst
+   possible way to present the one property this system cannot hide. */
+async function connectStream(attempt){
+  attempt = attempt || 0;
+  try {
+    const res = await fetch('/events/stream?after=' + state.cursor, {headers: authHeaders()});
+    if (!res.ok || !res.body) throw new Error('stream ' + res.status);
+    setConnection('live', 'live');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      let split;
+      while ((split = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0, split); buffer = buffer.slice(split + 2);
+        handleFrame(frame);
+      }
+    }
+    throw new Error('stream closed');
+  } catch (err) {
+    const delay = Math.min(30000, 1000 * Math.pow(2, attempt));
+    setConnection('retry', 'reconnecting in ' + Math.round(delay/1000) + 's');
+    setTimeout(() => connectStream(attempt + 1), delay);
+  }
+}
+
+function handleFrame(frame){
+  let type = 'message', data = null, id = null;
+  for (const line of frame.split('\n')) {
+    if (line.startsWith('id: ')) id = Number(line.slice(4));
+    else if (line.startsWith('event: ')) type = line.slice(7);
+    else if (line.startsWith('data: ')) { try { data = JSON.parse(line.slice(6)); } catch (_) {} }
+  }
+  if (id) state.cursor = id;
+  if (!data) return;
+
+  const log = $('streamLog');
+  const row = document.createElement('div');
+  row.className = 'step';
+  row.innerHTML = '<span class="n">' + esc(id) + '</span><span class="body"><span class="t">'
+    + esc(type) + '</span> <span class="meta">' + esc(data.stream_id || '') + '</span></span>';
+  log.appendChild(row);
+  while (log.childElementCount > 200) log.removeChild(log.firstElementChild);
+  if (log.scrollHeight - log.scrollTop - log.clientHeight < 60) log.scrollTop = log.scrollHeight;
+
+  if (type.startsWith('agent.')) onAgentEvent(type, data);
+  if (type.startsWith('approval.') || type.startsWith('job.')) { refreshApprovals(); refreshJobs(); }
+  if (state.room && String(data.stream_id || '').includes(state.room)) refreshRoom();
+}
+
+/* The journal stores payloads as JSON text, so the wire field is `payload_json`. Room
+   events use `payload`. Accept both rather than assuming one. */
+function payloadOf(event){
+  const raw = event.payload_json !== undefined ? event.payload_json : event.payload;
+  if (typeof raw === 'string') { try { return JSON.parse(raw); } catch (_) { return {}; } }
+  return raw || {};
+}
+
+function onAgentEvent(type, event){
+  const stream = String(event.stream_id || '');
+  if (!state.activeRun || !stream.endsWith(state.activeRun)) return;
+  const payload = payloadOf(event);
+  const elapsed = state.lastStepAt ? ((Date.now() - state.lastStepAt) / 1000).toFixed(1) + 's' : '';
+  state.lastStepAt = Date.now();
+
+  if (type === 'agent.step.tool_call') {
+    const obs = payload.observation || {};
+    const denied = obs.denied ? 'denied' : obs.error ? 'error' : '';
+    appendStep(++state.stepCount, payload.tool, denied, summarise(obs), elapsed);
+  } else if (type === 'agent.step.done') {
+    appendStep(++state.stepCount, 'done', 'done', payload.summary || '', elapsed, true);
+    finishRun();
+  } else if (type === 'agent.step.unparsable') {
+    appendStep(++state.stepCount, 'unparsable reply', 'error', 'the model did not emit a usable action', elapsed);
+  } else if (type === 'agent.checkpoint.created') {
+    appendStep('·', 'checkpoint', '', String(payload.sha || '').slice(0, 12) + ' — this edit can be undone', '');
+  } else if (type === 'agent.context.compacted') {
+    appendStep('·', 'context compacted', '', payload.elided_turns + ' earlier steps elided', '');
+  } else if (type === 'agent.decoding.degraded') {
+    appendStep('·', 'decoding degraded', 'error', 'backend refused the action schema; falling back to prose parsing', '');
+  }
+}
+
+function summarise(observation){
+  if (observation.denied || observation.error) return observation.error || 'denied';
+  for (const key of ['path','root','query','capability']) {
+    if (key in observation) {
+      for (const n of ['count','total','replacements','bytes_written','returncode']) {
+        if (n in observation) return observation[key] + '  (' + n + '=' + observation[n] + ')';
+      }
+      return String(observation[key]);
+    }
+  }
+  return JSON.stringify(observation).slice(0, 200);
+}
+
+function appendStep(n, title, kind, detail, elapsed, rich){
+  const host = $('steps');
+  if (host.querySelector('.empty')) host.replaceChildren();
+  const row = document.createElement('div');
+  row.className = 'step ' + (kind || '');
+  row.innerHTML =
+    '<span class="n">' + esc(n) + '</span>' +
+    '<span class="body"><span class="t">' + esc(title) + '</span>' +
+    (elapsed ? ' <span class="meta">' + esc(elapsed) + '</span>' : '') +
+    (rich ? renderText(detail) : '<div class="meta">' + esc(detail) + '</div>') + '</span>';
+  const stick = host.scrollHeight - host.scrollTop - host.clientHeight < 60;
+  host.appendChild(row);
+  /* Only follow the tail if the reader was already at the tail. The previous page yanked
+     scroll position to the bottom on every poll, which made reading history impossible. */
+  if (stick) host.scrollTop = host.scrollHeight;
+}
+
+function finishRun(){
+  $('runHead').innerHTML = 'run <span class="mono">' + esc(state.activeRun) + '</span> — finished in '
+    + esc(since(state.runStart)) + ' over ' + state.stepCount + ' steps';
+  $('submitBtn').disabled = false;
+  $('submitBtn').textContent = 'Run task';
+}
+
+/* ---------- work ------------------------------------------------------------------ */
+async function loadWorkspaces(){
+  const select = $('fWorkspace');
+  try {
+    const {workspaces} = await api('/workspaces');
+    select.replaceChildren();
+    if (!workspaces.length) {
+      $('wsHint').textContent = 'No workspace is registered. Run:  sovereign workspace add <path>';
+      select.disabled = true; $('submitBtn').disabled = true;
+      return;
+    }
+    for (const ws of workspaces) {
+      const option = document.createElement('option');
+      option.value = ws.path;
+      option.textContent = ws.label + (ws.writable ? '' : ' (read-only)') + ' — ' + ws.path;
+      select.appendChild(option);
+    }
+    $('wsHint').textContent = 'Knowing a path never grants authority; only registered directories appear here.';
+  } catch (e) {
+    $('wsHint').textContent = 'Could not load workspaces: ' + e.message;
+  }
+}
+
+$('taskForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('taskError').classList.add('hide');
+  const button = $('submitBtn');
+  button.disabled = true; button.textContent = 'Dispatching…';
+  try {
+    /* Authority comes from a grant, never from a flag on the request that needs it. The
+       kernel's untrusted-content gate can never allow a model-proposed mutation, so this
+       issues the narrow, expiring grant that can -- and says so above the checkbox. */
+    if ($('fApprove').checked) {
+      const grant = await api('/roster/grants', {method: 'POST', body: JSON.stringify({
+        subject_id: 'web-operator', action: 'write', scope: 'workspace',
+        ttl_seconds: 900, reason: 'authorised from the control surface for one run',
+      })});
+      $('grantHint').innerHTML = 'granted <span class="mono">write:workspace</span> to '
+        + '<span class="mono">web-operator</span> until '
+        + esc(new Date(grant.expires_at * 1000).toLocaleTimeString());
+    }
+    const job = await api('/jobs', {method: 'POST', body: JSON.stringify({
+      kind: 'agent',
+      payload: {
+        task: $('fTask').value.trim(),
+        workspace: $('fWorkspace').value,
+        capability: $('fCapability').value,
+        mode: $('fMode').value,
+        max_steps: Number($('fSteps').value) || 8,
+        approved: $('fApprove').checked,
+        agent_profile_id: 'web-operator',
+      },
+    })});
+    startWatching(job);
+    refreshJobs();
+  } catch (err) {
+    showError($('taskError'), err.message);
+    button.disabled = false; button.textContent = 'Run task';
+  }
+});
+
+async function startWatching(job){
+  /* Clearing the previous run id matters: without it the second task of a session keeps
+     filtering events against the first run's stream and silently renders nothing. */
+  state.activeRun = null;
+  state.stepCount = 0; state.runStart = Date.now(); state.lastStepAt = Date.now();
+  $('steps').replaceChildren();
+  $('runHead').innerHTML = 'job <span class="mono">' + esc(job.id.slice(0,8))
+    + '</span> queued — steps appear as they happen';
+  /* A run id is minted by the dispatcher, so find it, then follow that stream. */
+  for (let i = 0; i < 40 && !state.activeRun; i++) {
+    try {
+      const {runs} = await api('/jobs/' + job.id + '/runs');
+      if (runs && runs.length) {
+        state.activeRun = runs[runs.length - 1].id;
+        $('runHead').innerHTML = 'run <span class="mono">' + esc(state.activeRun) + '</span> — live';
+        return;
+      }
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 250));
+  }
+}
+
+async function refreshJobs(){
+  try {
+    const {jobs} = await api('/jobs?limit=8');
+    const body = $('jobRows');
+    body.replaceChildren();
+    if (!jobs.length) { body.innerHTML = '<tr><td colspan="4" class="empty">no jobs yet</td></tr>'; return; }
+    for (const job of jobs) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + esc(job.kind) + '<div class="muted small mono">' + esc(job.id.slice(0,8)) + '</div></td>'
+        + '<td><span class="badge">' + esc(job.status) + '</span></td>'
+        + '<td class="muted small">' + esc(new Date(job.created_at * 1000).toLocaleTimeString()) + '</td>'
+        + '<td></td>';
+      const cell = tr.lastElementChild;
+      if (job.status === 'queued' || job.status === 'running') {
+        const cancel = document.createElement('button');
+        cancel.className = 'ghost'; cancel.textContent = 'Cancel';
+        cancel.onclick = async () => { try { await api('/jobs/' + job.id, {method:'DELETE'}); refreshJobs(); } catch (e) { showError($('taskError'), e.message); } };
+        cell.appendChild(cancel);
+      }
+      body.appendChild(tr);
+    }
+  } catch (e) { /* connection pill covers it */ }
+}
+
+/* ---------- approvals ------------------------------------------------------------- */
+async function refreshApprovals(){
+  try {
+    const {approvals} = await api('/roster/approvals');
+    const count = $('approvalCount');
+    count.textContent = approvals.length;
+    count.classList.toggle('hide', approvals.length === 0);
+    const host = $('approvalList');
+    host.replaceChildren();
+    if (!approvals.length) { host.innerHTML = '<p class="empty">nothing is waiting on you</p>'; return; }
+    for (const a of approvals) host.appendChild(approvalCard(a));
+  } catch (e) { /* connection pill covers it */ }
+}
+
+/* An approval that hides what it is approving trains its operator to click Approve, which
+   turns the strongest safety mechanism in this project into a rubber stamp. So: the exact
+   action, scope, subject, the reason policy gave, and the evidence, before the buttons. */
+function approvalCard(a){
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML =
+    '<h3>' + esc(a.action) + ':' + esc(a.scope) + ' <span class="badge ' + esc(a.risk) + '">' + esc(a.risk) + '</span></h3>' +
+    '<dl class="kv">' +
+      '<dt>subject</dt><dd class="mono">' + esc(a.subject_id) + '</dd>' +
+      '<dt>why asked</dt><dd>' + esc(a.reason) + '</dd>' +
+      (a.expires_at ? '<dt>expires</dt><dd>' + esc(new Date(a.expires_at * 1000).toLocaleTimeString()) + '</dd>' : '') +
+      '<dt>evidence</dt><dd>' + (a.evidence && Object.keys(a.evidence).length
+          ? '<pre class="mono">' + esc(JSON.stringify(a.evidence, null, 2)) + '</pre>'
+          : '<span class="muted">none recorded — approving means trusting the request text alone</span>') + '</dd>' +
+    '</dl>';
+  const reason = document.createElement('input');
+  reason.placeholder = 'Reason (recorded with your decision)';
+  reason.setAttribute('aria-label', 'Resolution reason');
+  const row = document.createElement('div');
+  row.className = 'row'; row.style.marginTop = '10px';
+  const yes = document.createElement('button'); yes.className = 'approve'; yes.textContent = 'Approve';
+  const no = document.createElement('button'); no.className = 'deny'; no.textContent = 'Deny';
+  const resolve = async (approved) => {
+    yes.disabled = no.disabled = true;
+    try {
+      await api('/roster/approvals/' + a.id + '/resolve', {method: 'POST', body: JSON.stringify({
+        resolver_id: 'web-operator', approved,
+        reason: reason.value || (approved ? 'approved from the control surface' : 'denied from the control surface'),
+      })});
+      refreshApprovals();
+    } catch (e) { showError($('taskError'), e.message); yes.disabled = no.disabled = false; }
+  };
+  yes.onclick = () => resolve(true); no.onclick = () => resolve(false);
+  row.append(yes, no);
+  card.append(reason, row);
+  return card;
+}
+
+/* ---------- rooms ----------------------------------------------------------------- */
+async function loadRooms(){
+  try {
+    const [{rooms}, {identities}] = await Promise.all([api('/collaboration/rooms'), api('/collaboration/identities')]);
+    window.__identities = Object.fromEntries(identities.map(i => [i.id, i]));
+    const host = $('roomList'); host.replaceChildren();
+    for (const room of rooms) {
+      const button = document.createElement('button');
+      button.className = 'ghost'; button.style.width = '100%'; button.style.marginBottom = '6px';
+      button.textContent = '# ' + room.name;
+      button.setAttribute('aria-pressed', String(room.id === state.room));
+      button.onclick = () => { state.room = room.id; $('roomName').textContent = room.name;
+        $('roomPurpose').textContent = room.purpose || ''; loadRooms(); refreshRoom(); };
+      host.appendChild(button);
+    }
+    if (!state.room && rooms.length) {
+      state.room = rooms[0].id; $('roomName').textContent = rooms[0].name;
+      $('roomPurpose').textContent = rooms[0].purpose || ''; refreshRoom();
+    }
+  } catch (e) { showError($('roomError'), e.message); }
+}
+
+async function refreshRoom(){
+  if (!state.room) return;
+  try {
+    const [{events}, verify] = await Promise.all([
+      api('/collaboration/rooms/' + state.room + '/events?limit=120'),
+      api('/collaboration/rooms/' + state.room + '/verify'),
+    ]);
+    $('chainState').textContent = verify.valid ? ('chain verified · ' + verify.events + ' events')
+                                               : ('CHAIN BROKEN at ' + verify.broken_at);
+    $('chainState').style.color = verify.valid ? '' : 'var(--bad)';
+    const tail = events[events.length - 1];
+    const signature = state.room + ':' + events.length + ':' + (tail ? tail.event_hash : '');
+    if (signature === state.roomSignature) return;
+    state.roomSignature = signature;
+
+    const host = $('timeline');
+    const stick = host.scrollHeight - host.scrollTop - host.clientHeight < 60;
+    host.replaceChildren();
+    /* Rooms exist to display work, so job and approval events belong here too -- the old
+       page filtered everything except chat and failures, which hid the actual work. */
+    const shown = events.filter(e => ['message.posted','job.failed','job.completed','job.created','approval.requested'].includes(e.event_type));
+    if (!shown.length) { host.innerHTML = '<p class="empty">no messages yet — mention an agent to begin</p>'; return; }
+    for (const event of shown) {
+      const actor = (window.__identities || {})[event.actor_id] || {display_name: event.actor_id, kind: 'system'};
+      const payload = payloadOf(event);
+      const when = new Date(Number(event.created_at_ns) / 1e6).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+      const row = document.createElement('div');
+      row.className = 'step' + (event.event_type === 'job.failed' ? ' error' : '');
+      const content = event.event_type === 'message.posted' ? payload.content
+        : event.event_type === 'job.failed' ? ('job failed: ' + (payload.error || ''))
+        : (event.event_type + ' ' + JSON.stringify(payload).slice(0, 200));
+      row.innerHTML = '<span class="body"><span class="t">' + esc(actor.display_name)
+        + '</span> <span class="meta">' + esc(when) + '</span>' + renderText(content) + '</span>';
+      host.appendChild(row);
+    }
+    if (stick) host.scrollTop = host.scrollHeight;
+  } catch (e) { showError($('roomError'), e.message); }
+}
+
+$('sendBtn').addEventListener('click', async () => {
+  const box = $('msg'), content = box.value.trim();
+  if (!content || !state.room) return;
+  $('roomError').classList.add('hide');
+  const button = $('sendBtn'); button.disabled = true; button.textContent = 'Sending…';
+  try {
+    await api('/collaboration/rooms/' + state.room + '/messages', {method: 'POST',
+      body: JSON.stringify({actor_id: 'owner', content})});
+    box.value = ''; state.roomSignature = ''; refreshRoom();
+  } catch (e) { showError($('roomError'), e.message); }
+  finally { button.disabled = false; button.textContent = 'Send'; }
+});
+
+/* ---------- inspect --------------------------------------------------------------- */
+$('routeBtn').addEventListener('click', async () => {
+  try {
+    const decision = await api('/route', {method: 'POST',
+      body: JSON.stringify({capability: $('iCap').value, mode: $('iMode').value})});
+    const chosen = decision.selected;
+    $('routeOut').textContent = chosen
+      ? chosen.model_id + '\nvia ' + chosen.engine_id + '\nscore ' + chosen.score + '\n' + (chosen.reasons || []).join('; ')
+      : 'NO ROUTE\n' + (decision.warnings || []).join('\n');
+  } catch (e) { $('routeOut').textContent = 'route failed: ' + e.message; }
+});
+
+async function loadTools(){
+  try {
+    const {tools} = await api('/tools');
+    const body = $('toolRows'); body.replaceChildren();
+    for (const tool of tools) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td class="mono">' + esc(tool.id) + (tool.mutating ? ' <span class="badge medium">mutating</span>' : '')
+        + '</td><td class="muted">' + esc(tool.risk_scope) + '</td><td>' + esc(tool.description) + '</td>';
+      body.appendChild(tr);
+    }
+  } catch (e) {
+    $('toolRows').innerHTML = '<tr><td colspan="3" class="empty">could not load tools: ' + esc(e.message) + '</td></tr>';
+  }
+}
+
+/* ---------- boot ------------------------------------------------------------------ */
+async function boot(){
+  if (!AUTHED) {
+    setConnection('down', 'no session token — open this page from the kernel, not from a file');
+    return;
+  }
+  setConnection('retry', 'connecting…');
+  await Promise.all([refreshHealth(), loadWorkspaces(), refreshJobs(), refreshApprovals(), loadTools()]);
+  connectStream(0);
+  /* The stream carries change; this only refreshes numbers that change without an event. */
+  setInterval(refreshHealth, 15000);
+}
 boot();
-collaborationBoot();
-setInterval(()=>refreshRoom(false).catch(()=>{}),4000);
-</script></body></html>
+</script>
+</body>
+</html>

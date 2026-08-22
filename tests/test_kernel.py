@@ -342,6 +342,29 @@ def test_api_exposes_status_and_durable_jobs(tmp_path, monkeypatch):
         "/collaboration/rooms/{room_id}/verify",
     } <= paths
 
+def _local_inference_backend_reachable() -> bool:
+    """Is a real inference backend listening where the manifest expects one?
+
+    Several tests assert that a job fails fast "because there is no real inference backend
+    in this environment". That is true in a sandbox and false on a developer's own machine
+    with the kernel running -- where the job instead starts loading a 16 GB model and the
+    test hangs. Making the assumption explicit is the honest fix; loosening the assertion
+    would just hide the difference.
+    """
+    import socket
+
+    from sovereign_ai.kernel.config import ConfigBundle
+
+    try:
+        engines = ConfigBundle(str(ROOT / "configs")).engines
+        url = engines["engines"]["llama_cpp"]["health_url"]
+        host, _, port = url.split("//", 1)[1].split("/", 1)[0].rpartition(":")
+        with socket.create_connection((host, int(port)), timeout=0.4):
+            return True
+    except Exception:
+        return False
+
+
 def api_client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("SOVEREIGN_STATE_DIR", str(tmp_path / "state"))
     app = create_app(str(ROOT / "configs"))
@@ -2488,6 +2511,10 @@ def _async_return(value):
     return _coro()
 
 
+@pytest.mark.skipif(
+    _local_inference_backend_reachable(),
+    reason="a real inference backend is running, so a chat job will not fail fast",
+)
 def test_workflow_http_start_creates_and_dispatches_the_first_step(tmp_path, monkeypatch):
     """A workflow with no real inference backend in this test environment: the step's job
     is genuinely submitted to the real dispatcher and reaches a terminal (failed) state,
@@ -3985,3 +4012,97 @@ def test_event_stream_resumes_from_a_cursor_without_replaying(tmp_path, monkeypa
     body = client.get(f"/events/stream?follow=false&after={first_seq}").text
     assert "event: second" in body
     assert "event: first" not in body
+
+
+# ---------------------------------------------------------------------------------------
+# Endpoints the control surface needs (research wave 7 X-01/X-03, D-026/D-028).
+# ---------------------------------------------------------------------------------------
+
+
+def test_workspaces_endpoint_lists_only_registered_directories(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, label="demo", writable=True)
+    client = api_client(tmp_path, monkeypatch)
+
+    body = client.get("/workspaces").json()
+    assert [w["label"] for w in body["workspaces"]] == ["demo"]
+    assert body["workspaces"][0]["writable"] is True
+
+
+def test_tools_endpoint_exposes_the_plane_with_its_risk_scopes(tmp_path, monkeypatch):
+    client = api_client(tmp_path, monkeypatch)
+    tools = {t["id"]: t for t in client.get("/tools").json()["tools"]}
+
+    assert {"read_file", "write_file", "grep", "web_search", "invoke_specialist"} <= set(tools)
+    assert tools["read_file"]["mutating"] is False
+    assert tools["write_file"]["mutating"] is True
+    assert tools["web_search"]["risk_scope"] == "public_web"
+
+
+def test_issuing_a_grant_is_bounded_authenticated_and_audited(tmp_path, monkeypatch):
+    """The control surface's 'authorise writes' control has to issue a real grant, because
+    approval alone can never authorise a model-proposed mutation (F-036). That makes this
+    endpoint an authority surface, so its bounds are part of the contract."""
+    k = kernel(tmp_path, monkeypatch)
+    client = api_client(tmp_path, monkeypatch)
+
+    unauthenticated = TestClient(create_app(str(ROOT / "configs")), base_url="http://127.0.0.1")
+    assert unauthenticated.post("/roster/grants", json={
+        "subject_id": "x", "action": "write", "scope": "workspace"}).status_code == 401
+
+    created = client.post("/roster/grants", json={
+        "subject_id": "web-operator", "action": "write", "scope": "workspace",
+        "ttl_seconds": 900, "reason": "test"})
+    assert created.status_code == 201
+    assert k.capability_grants.is_active("web-operator", "write", "workspace")
+
+    # Closed enumerations and a capped TTL: not a general-purpose authority faucet.
+    assert client.post("/roster/grants", json={
+        "subject_id": "web-operator", "action": "sudo", "scope": "workspace"}).status_code == 422
+    assert client.post("/roster/grants", json={
+        "subject_id": "web-operator", "action": "write", "scope": "workspace",
+        "ttl_seconds": 999_999}).status_code == 422
+
+    # And it leaves a record of who authorised what.
+    issued = [e for e in k.events.read_after(0) if e["event_type"] == "capability_grant.issued"]
+    assert issued and "write" in issued[-1]["payload_json"]
+
+
+def test_grant_actually_unblocks_a_write_that_approval_alone_cannot(tmp_path, monkeypatch):
+    """The finding that motivated the endpoint: `approved=True` does not help, because
+    PolicyEngine's untrusted-content gate never returns allowed for a model-proposed
+    mutation. Only a grant does. This pins that so no UI can imply otherwise again."""
+    from sovereign_ai.tools.base import ToolContext
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    target = workspace / "out.txt"
+
+    approved_ctx = ToolContext(workspace=str(workspace), approved=True, subject_id="ui-subject")
+    denied = asyncio.run(k.tool_dispatcher.invoke(
+        "write_file", {"path": str(target), "content": "x"}, approved_ctx))
+    assert denied["denied"] is True, "approval must not authorise an untrusted mutation"
+    assert not target.exists()
+
+    k.capability_grants.issue("ui-subject", "write", "workspace", "operator", ttl_seconds=60)
+    allowed = asyncio.run(k.tool_dispatcher.invoke(
+        "write_file", {"path": str(target), "content": "x"},
+        ToolContext(workspace=str(workspace), subject_id="ui-subject")))
+    assert allowed.get("created") is True
+    assert target.read_text(encoding="utf-8") == "x"
+
+
+def test_control_surface_html_is_served_with_a_session_token(tmp_path, monkeypatch):
+    """The page authenticates with a header, never a token in the URL, so the server has to
+    inject it into the document it serves."""
+    client = api_client(tmp_path, monkeypatch)
+    page = client.get("/ui")
+    assert page.status_code == 200
+    body = page.text
+    assert "%%SOAI_SESSION_TOKEN%%" not in body, "the placeholder must be substituted"
+    assert "/events/stream" in body, "the surface must consume the stream, not poll"
+    assert 'role="tablist"' in body and 'aria-live' in body

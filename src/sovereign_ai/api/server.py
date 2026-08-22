@@ -49,6 +49,23 @@ class JobSubmission(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class CapabilityGrantIssue(BaseModel):
+    """An operator handing an agent a narrow, expiring authorisation.
+
+    This is the only way an agent ever gets to mutate anything: `PolicyEngine`'s
+    untrusted-content gate can never return `allowed` for a mutation proposed by model
+    output, no matter what any UI checkbox says, so "approval" alone cannot authorise one.
+    That is deliberate (F-036) and is why this endpoint exists — the authority has to come
+    from a human, scoped and time-bounded, not from a flag on the request that produced it.
+    """
+
+    subject_id: str
+    action: Literal["read", "write", "execute", "delete", "network_get"]
+    scope: Literal["workspace", "memory", "host", "public_web"]
+    ttl_seconds: float = Field(default=900.0, gt=0, le=86_400)
+    reason: str = ""
+
+
 class CollaborationIdentityCreate(BaseModel):
     id: str
     display_name: str
@@ -594,7 +611,7 @@ def create_app(config_root: str | None = None) -> FastAPI:
         after: int = 0,
         stream: str | None = None,
         follow: bool = True,
-        idle_timeout: float = 0.0,
+        max_seconds: float = 300.0,
     ):
         """Server-sent events over the kernel journal.
 
@@ -615,7 +632,9 @@ def create_app(config_root: str | None = None) -> FastAPI:
 
         async def frames():
             cursor = after
-            idle_since = asyncio.get_event_loop().time()
+            loop = asyncio.get_event_loop()
+            started = loop.time()
+            idle_since = started
             while True:
                 events = kernel.events.read_after(cursor, limit=200, stream_prefix=stream)
                 for event in events:
@@ -627,8 +646,16 @@ def create_app(config_root: str | None = None) -> FastAPI:
                     return
                 if await request.is_disconnected():
                     return
-                now = asyncio.get_event_loop().time()
-                if idle_timeout and now - idle_since >= idle_timeout:
+                now = loop.time()
+                # A stream with an unbounded lifetime holds the server open: uvicorn's
+                # graceful shutdown waits for in-flight requests, so one watching browser
+                # tab is enough to make `stop` hang -- observed live, not theorised. A
+                # lifespan-shutdown hook cannot fix it (uvicorn drains requests *before*
+                # running lifespan shutdown, so the stream would wait on an event that waits
+                # on the stream), so the bound lives here and `sovereign serve` additionally
+                # caps uvicorn's own drain. Reconnecting costs nothing: the client resumes
+                # from its cursor and misses no event.
+                if now - started >= max_seconds:
                     return
                 # A comment frame keeps proxies and impatient clients from closing an idle
                 # stream, and costs nothing.
@@ -641,6 +668,38 @@ def create_app(config_root: str | None = None) -> FastAPI:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
+
+    @app.get("/workspaces")
+    async def list_workspaces() -> dict[str, Any]:
+        """Which directories an agent may be pointed at.
+
+        Read-only and deliberately so: registering a workspace is a grant of authority over
+        real files and stays an operator action through the CLI, not something a web page can
+        do. A UI needs this to offer a picker instead of asking a human to retype a path.
+        """
+        return {"workspaces": kernel.workspaces.list()}
+
+    @app.get("/tools")
+    async def list_tools() -> dict[str, Any]:
+        """The tool plane, as data.
+
+        Before F-047 this endpoint would have returned an empty list, which is exactly why it
+        is worth exposing: "what can this system actually do" should be answerable by a
+        client without reading the source.
+        """
+        return {
+            "tools": [
+                {
+                    "id": spec.id,
+                    "description": spec.description,
+                    "capabilities": spec.capabilities,
+                    "risk_scope": spec.risk_scope,
+                    "mutating": spec.mutating,
+                    "schema": spec.schema,
+                }
+                for spec in kernel.tool_dispatcher.specs()
+            ]
+        }
 
     @app.get("/jobs")
     async def list_jobs(status: JobStatus | None = None, limit: int = 50) -> dict[str, Any]:
@@ -768,6 +827,36 @@ def create_app(config_root: str | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"approval": approval.model_dump(), "job": _submit_if_present(job)}
+
+    @app.post("/roster/grants", status_code=201, dependencies=[Depends(require_session)])
+    async def issue_grant(request: CapabilityGrantIssue) -> dict[str, Any]:
+        """Issue a capability grant, on the authority of whoever holds the session token.
+
+        Bounded on purpose: the TTL is capped by the request model, the action and scope are
+        closed enumerations rather than free strings, and the issuance is written to the
+        append-only journal so "who authorised this, when, and for how long" is answerable
+        after the fact rather than inferred.
+        """
+        record = kernel.capability_grants.issue(
+            request.subject_id,
+            request.action,
+            request.scope,
+            granted_by="local-session",
+            ttl_seconds=request.ttl_seconds,
+        )
+        kernel.events.append(
+            stream_id=f"grants:{request.subject_id}",
+            event_type="capability_grant.issued",
+            payload={
+                "grant_id": record.id,
+                "action": request.action,
+                "scope": request.scope,
+                "ttl_seconds": request.ttl_seconds,
+                "reason": request.reason,
+            },
+            trust="trusted_user",
+        )
+        return record.model_dump()
 
     @app.get("/roster/grants")
     async def list_active_grants(subject_id: str) -> dict[str, Any]:
