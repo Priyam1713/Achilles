@@ -4,7 +4,10 @@
 > Target: Windows host + Ubuntu 24.04/WSL2, RTX 5070 Ti Laptop GPU (12 GB VRAM),
 > 32 GB host RAM  
 > Architecture truth: [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)  
-> Implementation truth: [docs/IMPLEMENTATION_STATUS.md](../docs/IMPLEMENTATION_STATUS.md)
+> Implementation truth: [docs/IMPLEMENTATION_STATUS.md](../docs/IMPLEMENTATION_STATUS.md)  
+> Harness field notes: [knowledge/harness-research.md](harness-research.md) — per-harness
+> dissection of the open field, opened 2026-08-23. Findings become decisions only when they
+> appear here as a `D-` record.
 
 This is the project's durable memory for **what we learned, what we decided, and why**.
 It is not a news feed or a wishlist. A repository or model appearing here does not make it
