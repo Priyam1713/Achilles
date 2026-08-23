@@ -568,7 +568,7 @@ Effort is rough and assumes the kernel stays as-is.
 | 7 | ~~Advisor role on the fast brain~~ | oh-my-pi | **done 2026-08-23** (`docs/FIXES.md` F-061) | Can object, never approve; off by default because it costs a generation per turn. Semantics tested, usefulness unmeasured |
 | 8 | Cumulative diff sandbox | Plandex | ~1 week | Solves approval evidence + diff view together; may amend `D-021`/`D-028` |
 | 9 | ~~MCP client~~ | fast-agent | **done 2026-08-23** (`docs/FIXES.md` F-064) | Two tools (discover + call) rather than per-tool proxies, so a forty-tool server does not cost forty schemas per turn. Opt-in, fails closed on `execute:external_mcp`. **Elicitations not implemented** -- that half remains open |
-| 10 | Architect/editor split across our two brains | Aider | ~3 days | Best use of the hardware we already have |
+| 10 | ~~Architect/editor split~~ | Aider | **done 2026-08-23** (`docs/FIXES.md` F-066) | Per-role routing: turn zero can run on the deep brain, the rest on the fast one. Opt-in; benefit unmeasured because the tournament runs entirely on the fast brain |
 | 11 | ~~Boomerang-style subtasks~~ | Kilo + oh-my-pi | **done 2026-08-23** (`docs/FIXES.md` F-065) | Fresh child context, narrow structured hand-back, authority inherited not widened, depth capped structurally |
 | 12 | ACP (Zed) server | Zed | ~1 week | Every editor, one implementation |
 | 13 | Auxiliary services on the event stream + deterministic replay | OpenHands | ~1 week | Substrate for the authority-legibility inspector |

@@ -81,6 +81,8 @@ class NativeAgentLoop(AgentLoop):
         focus_every: int = 4,
         advisor: Advisor | None = None,
         allow_subtasks: bool = True,
+        plan_role: tuple[str, str] | None = None,
+        act_role: tuple[str, str] | None = None,
     ):
         self.inference = inference
         self.execution = execution
@@ -111,6 +113,18 @@ class NativeAgentLoop(AgentLoop):
         # Sub-tasks are registered here rather than in `build_standard_tools` because the
         # tool needs a factory that produces *another loop of this shape* -- fresh history,
         # same tools, same policy -- and only the loop knows how to build one.
+        # Aider's architect/editor split, expressed as routing rather than as two models
+        # (`knowledge/harness-research.md` adoption item 10). A role is a
+        # (capability, mode) pair the scheduler resolves, so the *first* turn -- deciding
+        # what to do -- can run on the deep brain while the mechanical turns that follow run
+        # on the fast one. On this machine that is 6.36 tok/s versus 49.57, which is the
+        # whole reason the split exists here.
+        #
+        # Both default to None, meaning "use whatever the run asked for". Enabling it is a
+        # decision about which brains are in play, and it makes every task slower before it
+        # makes any task better -- so it is opt-in, like the advisor.
+        self.plan_role = plan_role
+        self.act_role = act_role
         self.allow_subtasks = allow_subtasks
         if allow_subtasks and self.tools.get("spawn_subtask") is None:
             self.tools.register(SpawnSubtaskTool())
@@ -127,10 +141,8 @@ class NativeAgentLoop(AgentLoop):
                 kind="budget_exhausted", payload={"steps_taken": step_count}, done=True
             )
 
-        request = CapabilityRequest(
-            capability=state.get("capability", "coding"),
-            mode=RoutingMode(state.get("mode", "smart")),
-        )
+        capability, mode = self._role_for(step_count, state)
+        request = CapabilityRequest(capability=capability, mode=RoutingMode(mode))
         messages = self._build_messages(state)
         try:
             result = await self._chat(request, messages, constrained=self._constrain_now())
@@ -285,6 +297,21 @@ class NativeAgentLoop(AgentLoop):
             "circuit breaker",
         )
         return not any(marker in message for marker in pre_request)
+
+    def _role_for(self, turn: int, state: dict[str, Any]) -> tuple[str, str]:
+        """Which brain answers this turn.
+
+        Turn zero is the plan: no observations exist yet, so it is the turn where reasoning
+        is worth paying for. Everything after it is acting on what came back, which is the
+        cheap model's job. When no roles are configured this returns exactly what the run
+        asked for, so the default path is unchanged.
+        """
+        default = (state.get("capability", "coding"), state.get("mode", "smart"))
+        if turn == 0 and self.plan_role:
+            return self.plan_role
+        if turn > 0 and self.act_role:
+            return self.act_role
+        return default
 
     def _constrain_now(self) -> bool:
         return bool(self.constrain_output) and self._constraint_supported is not False

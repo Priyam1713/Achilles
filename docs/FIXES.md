@@ -3530,6 +3530,40 @@ instead of an opinion.
   question from whether delegation works, and the task set has nothing long enough to reward
   it — the same gap that left Focus Chain unmeasured (F-060).
 
+### F-066 — Added: per-role model routing — the architect/editor split
+
+- **Severity:** `low` (enabler) · **Status:** `fixed`; opt-in, and **unmeasured by design of
+  the hardware** rather than by omission.
+- **Motivating problem:** `knowledge/harness-research.md` adoption item 10. Aider splits a
+  task between a strong-but-slow model that plans and a fast one that applies the edit, and
+  `harness-research.md` flagged that this maps onto our two-brain topology better than
+  anything else in the file: 6.36 tok/s deep versus 49.57 fast is exactly the gradient the
+  split exists to exploit.
+- **Fix:** `NativeAgentLoop` gains `plan_role` and `act_role`, each a `(capability, mode)`
+  pair the scheduler resolves. **Turn zero is the plan** — no observations exist yet, so it is
+  the one turn where reasoning is worth paying for — and every turn after it is acting on what
+  came back, which is the cheap model's job.
+  - Expressed as **routing**, not as two models. The scheduler already picks a model from a
+    capability and a mode; this only decides *which question to ask it* on which turn, so it
+    composes with local-benchmark overrides and VRAM fitting rather than bypassing them.
+  - Both default to `None`, meaning "use whatever the run asked for", so the default path is
+    byte-identical to before. Half a configuration is valid too: set `plan_role` alone and
+    acting falls through to the run's own capability.
+- **Verification:** 3 new tests, 236 passing, ruff clean. They assert the exact routing
+  sequence per turn — unset roles produce an unchanged sequence, a configured split routes
+  turn zero to the deep brain and the rest to the fast one, and a plan-only configuration
+  falls through correctly.
+- **Why this is not measured, stated plainly:** the tournament runs entirely on the fast brain,
+  so enabling the split there would make every task slower and no task better — it would
+  measure the cost and none of the benefit. Measuring the benefit needs a task the fast brain
+  fails and the deep brain passes, and a deep-brain run of the task set at 6.36 tok/s is
+  hours, not minutes. `large-file-question` is the obvious candidate (it is a coin flip on the
+  fast brain, F-062), and that experiment is affordable one task at a time rather than as a
+  full sweep.
+- **What this is really for:** it is the mechanism that makes the deep brain *usable at all*
+  from the loop. Until now a run picked one capability and lived with it; the 30B and the 27B
+  were things the router could load and the loop could not selectively spend.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

@@ -5397,3 +5397,106 @@ def test_spawn_subtask_refuses_outside_a_loop_and_needs_an_objective(tmp_path, m
         loop._execute_tool("spawn_subtask", {}, {"run_id": "y", "workspace": str(workspace)})
     )
     assert "objective" in in_loop["error"]
+
+
+# ---------------------------------------------------------------------------------------
+# Architect/editor split (adoption item 10, from Aider), expressed as per-role routing.
+# On this machine the deep brain is 6.36 tok/s and the fast one 49.57, so *which* brain
+# answers which turn is the whole point.
+# ---------------------------------------------------------------------------------------
+
+
+class _RoleRecordingInference:
+    """Records the capability/mode each turn was routed by."""
+
+    def __init__(self, replies):
+        self._replies = list(replies)
+        self.routes: list[tuple[str, str]] = []
+
+    async def chat(self, request, messages, model_overrides=None):
+        self.routes.append((request.capability, request.mode.value))
+        content = self._replies.pop(0) if self._replies else '{"tool": "done", "summary": "x"}'
+        return {"result": {"choices": [{"message": {"content": content}}]}}
+
+
+def _role_loop(tmp_path, monkeypatch, replies, **kwargs):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("alpha", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+    inference = _RoleRecordingInference(replies)
+    loop = NativeAgentLoop(
+        inference, k.execution, k.workspaces, k.events, tools=k.tool_dispatcher, **kwargs
+    )
+    return workspace, loop, inference
+
+
+def test_without_roles_every_turn_uses_what_the_run_asked_for(tmp_path, monkeypatch):
+    """The default path must be untouched: this is opt-in."""
+    workspace, loop, inference = _role_loop(
+        tmp_path,
+        monkeypatch,
+        [
+            json.dumps({"tool": "read_file", "args": {"path": (tmp_path / "ws" / "a.txt").as_posix()}}),
+            json.dumps({"tool": "done", "summary": "read it"}),
+        ],
+    )
+    state = {
+        "run_id": "role-1",
+        "task": "read it",
+        "workspace": str(workspace),
+        "capability": "tool_routing",
+        "mode": "fast",
+    }
+    asyncio.run(loop.next_step(state))
+    asyncio.run(loop.next_step(state))
+    assert inference.routes == [("tool_routing", "fast"), ("tool_routing", "fast")]
+
+
+def test_the_first_turn_can_be_routed_to_a_different_brain(tmp_path, monkeypatch):
+    """Turn zero is the plan -- no observations exist yet, so it is the turn where reasoning
+    is worth paying for. Everything after is acting on what came back."""
+    workspace, loop, inference = _role_loop(
+        tmp_path,
+        monkeypatch,
+        [
+            json.dumps({"tool": "read_file", "args": {"path": (tmp_path / "ws" / "a.txt").as_posix()}}),
+            json.dumps({"tool": "read_file", "args": {"path": (tmp_path / "ws" / "a.txt").as_posix()}}),
+            json.dumps({"tool": "done", "summary": "done"}),
+        ],
+        plan_role=("reasoning", "deep"),
+        act_role=("tool_routing", "fast"),
+    )
+    state = {"run_id": "role-2", "task": "t", "workspace": str(workspace)}
+    for _ in range(3):
+        asyncio.run(loop.next_step(state))
+
+    assert inference.routes[0] == ("reasoning", "deep"), "the plan turn did not use the deep brain"
+    assert inference.routes[1:] == [("tool_routing", "fast")] * 2
+
+
+def test_a_role_can_be_set_for_planning_only(tmp_path, monkeypatch):
+    """Half a configuration is valid: set the plan role and let the rest fall through to
+    whatever the run asked for."""
+    workspace, loop, inference = _role_loop(
+        tmp_path,
+        monkeypatch,
+        [
+            json.dumps({"tool": "read_file", "args": {"path": (tmp_path / "ws" / "a.txt").as_posix()}}),
+            json.dumps({"tool": "done", "summary": "done"}),
+        ],
+        plan_role=("planning", "deep"),
+    )
+    state = {
+        "run_id": "role-3",
+        "task": "t",
+        "workspace": str(workspace),
+        "capability": "coding",
+        "mode": "smart",
+    }
+    asyncio.run(loop.next_step(state))
+    asyncio.run(loop.next_step(state))
+    assert inference.routes == [("planning", "deep"), ("coding", "smart")]
