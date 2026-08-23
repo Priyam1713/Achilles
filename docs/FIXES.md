@@ -3604,6 +3604,57 @@ instead of an opinion.
   decision (it must not be anywhere an agent can write), and it deserves its own thought rather
   than a guess made while finishing something else.
 
+### F-068 — Added: deterministic replay — a run reconstructed from the journal alone
+
+- **Severity:** `medium` (the differentiator) · **Status:** `fixed` for replay; the wider
+  "auxiliary services on the event stream" half of adoption item 13 is partly covered by
+  hooks (F-067) and otherwise still open.
+- **Motivating problem:** research wave 7 named **authority legibility** as one of two
+  categories this project can win outright, and `D-030` explains why: no open competitor can
+  render *why an action was allowed*, because none of them has policy decisions, expiring
+  grants, trust labels and a hash-chained journal to render. We had all the data and no view
+  of it. OpenHands' V1 architecture (`knowledge/harness-research.md`) makes the same point
+  from the other direction — event-sourced state with deterministic replay is the substrate
+  everything else hangs off.
+- **Fix:** `kernel/replay.py` plus `sovereign replay <run-id>`.
+  - **Derived entirely from events the loop already appended.** Nothing is stored twice. A
+    summary written by the thing being summarised is not evidence, and a replay with its own
+    storage is a second source of truth that can disagree with the first.
+  - **Deterministic by construction:** it reads a stream and maps it, holding no state and
+    making no inference the events do not support. There is a test that replays the same
+    journal twice and asserts identical output, because that property is what makes a
+    transcript usable as evidence rather than as a report.
+  - **Denials are marked with `!`**, because "what did it try that I stopped?" is the
+    question this view exists to answer.
+  - **Unknown event types are kept, not dropped.** Silently discarding an event would make
+    the replay a summary rather than a record.
+  - Checkpoints render with the exact command to undo them, which closes the loop opened in
+    F-049: the system could restore a file and never told anyone how.
+- **Live verification** against a real tournament run, not a fixture:
+
+  ```
+  run agent-loop:tournament-surgical-edit-b14d2f99 — 4 recorded events, done
+      264    read_file
+      265    checkpoint 79b220a34f99 — this edit can be undone
+      266    edit_file
+      267    done: Successfully modified step_17 ... All other functions ... remain unchanged.
+
+  1 checkpoint(s) — restore with: sovereign checkpoints --restore 79b220a34f99
+  2 tool call(s), 0 denied, 3 entr(ies) recorded as untrusted model output
+  ```
+
+  Note the last line: **three of four entries are untrusted model output and one is not** —
+  the checkpoint, which the kernel recorded itself. That distinction is the entire reason the
+  events carry trust labels, and this is the first surface that shows it to a person.
+- **Verification:** 5 new tests, **248 passing**, ruff clean. They cover reconstruction of a
+  real loop's run including a denied write, determinism across two replays, checkpoint and
+  compaction rendering, accepting either a bare run id or a stream id, and unknown events
+  being preserved.
+- **What remains of item 13:** "auxiliary services hanging off the event stream" — stuck
+  detection, security review, memory compression as separable services rather than inline
+  calls. Hooks (F-067) provide the attachment mechanism; nothing yet uses it that way, and
+  the honest description is that the substrate now exists and the services do not.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

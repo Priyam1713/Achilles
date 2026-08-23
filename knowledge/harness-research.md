@@ -571,7 +571,7 @@ Effort is rough and assumes the kernel stays as-is.
 | 10 | ~~Architect/editor split~~ | Aider | **done 2026-08-23** (`docs/FIXES.md` F-066) | Per-role routing: turn zero can run on the deep brain, the rest on the fast one. Opt-in; benefit unmeasured because the tournament runs entirely on the fast brain |
 | 11 | ~~Boomerang-style subtasks~~ | Kilo + oh-my-pi | **done 2026-08-23** (`docs/FIXES.md` F-065) | Fresh child context, narrow structured hand-back, authority inherited not widened, depth capped structurally |
 | 12 | ACP (Zed) server | Zed | ~1 week | Every editor, one implementation |
-| 13 | Auxiliary services on the event stream + deterministic replay | OpenHands | ~1 week | Substrate for the authority-legibility inspector |
+| 13 | Deterministic replay ✅ / auxiliary services ◻ | OpenHands | **half done 2026-08-23** (`docs/FIXES.md` F-068) | `sovereign replay <run-id>` reconstructs a run from the journal alone, deterministically, with denials marked and trust labels shown. Services *on* the stream (stuck detection, security review) have an attachment mechanism in hooks and no implementations |
 | 14 | ~~Hooks as in-process extension points~~ | Pi | **done 2026-08-23** (`docs/FIXES.md` F-067) | Four points, in-process; a hook can refuse and annotate, never authorise. Default hooks directory not wired -- where it lives is a security decision |
 
 Items 1–2 gate everything. Items 3–7 are all "make a weak model succeed more often per token"

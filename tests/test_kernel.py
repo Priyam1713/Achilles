@@ -5645,3 +5645,109 @@ def test_unknown_hook_points_are_rejected_loudly():
 
     with pytest.raises(ValueError, match="unknown hook point"):
         HookRegistry().on("whenever_i_feel_like_it", lambda: None)
+
+
+# ---------------------------------------------------------------------------------------
+# Deterministic replay (adoption item 13's core; research wave 7 called this authority
+# legibility and D-030 calls it the category we can win outright). The property that makes
+# it evidence rather than a report: it is derived entirely from the journal, so replaying
+# the same events twice gives the same transcript.
+# ---------------------------------------------------------------------------------------
+
+
+def test_a_run_can_be_reconstructed_from_the_journal_alone(tmp_path, monkeypatch):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+    from sovereign_ai.kernel.replay import replay_run
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("alpha", encoding="utf-8")
+    k.workspaces.add(workspace, writable=True)
+
+    replies = [
+        json.dumps({"tool": "read_file", "args": {"path": (workspace / "a.txt").as_posix()}}),
+        # A denied write: the thing a reviewer most needs to see afterwards.
+        json.dumps({"tool": "write_file", "args": {"path": (workspace / "b.txt").as_posix(), "content": "x"}}),
+        json.dumps({"tool": "done", "summary": "read it, could not write"}),
+    ]
+    loop = NativeAgentLoop(
+        _RecordingInference(replies), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher,
+    )
+    state = {
+        "run_id": "replay-1",
+        "task": "read and try to write",
+        "workspace": str(workspace),
+        "agent_profile_id": "ungranted",
+    }
+    for _ in range(3):
+        asyncio.run(loop.next_step(state))
+
+    transcript = replay_run(k.events, "replay-1")
+    assert transcript.outcome == "done"
+    assert [e.payload.get("tool") for e in transcript.tool_calls] == ["read_file", "write_file"]
+
+    # The denial is reconstructed, not inferred: it is what a reviewer is looking for.
+    assert len(transcript.denials) == 1
+    assert transcript.denials[0].payload["tool"] == "write_file"
+
+    # Every model-sourced entry carries its trust label, which is the whole point of having
+    # labels on events in the first place.
+    assert transcript.untrusted_entries == len(transcript.entries)
+
+    rendered = transcript.render()
+    assert "DENIED" in rendered
+    assert "read it, could not write" in rendered
+
+
+def test_replaying_the_same_journal_twice_gives_the_same_transcript(tmp_path, monkeypatch):
+    """Determinism is what makes a replay usable as evidence rather than as a report."""
+    from sovereign_ai.kernel.replay import replay_run
+
+    k = kernel(tmp_path, monkeypatch)
+    k.events.append("agent-loop:replay-2", "agent.step.tool_call", {"tool": "grep"})
+    k.events.append("agent-loop:replay-2", "agent.step.done", {"summary": "found it"})
+
+    first = replay_run(k.events, "replay-2").render()
+    second = replay_run(k.events, "replay-2").render()
+    assert first == second
+
+
+def test_replay_surfaces_checkpoints_and_compaction(tmp_path, monkeypatch):
+    from sovereign_ai.kernel.replay import replay_run
+
+    k = kernel(tmp_path, monkeypatch)
+    k.events.append("agent-loop:replay-3", "agent.checkpoint.created", {"sha": "abc123def456789"})
+    k.events.append("agent-loop:replay-3", "agent.context.compacted", {"elided_turns": 7})
+    k.events.append("agent-loop:replay-3", "agent.advisor.verdict", {"severity": "note", "concern": "risky"})
+
+    transcript = replay_run(k.events, "replay-3")
+    rendered = transcript.render()
+    assert transcript.checkpoints == ["abc123def456789"]
+    assert "this edit can be undone" in rendered
+    assert "7 steps elided" in rendered
+    assert "advisor note: risky" in rendered
+    # And it tells the reader how to actually undo it.
+    assert "sovereign checkpoints --restore" in rendered
+
+
+def test_replay_accepts_a_bare_run_id_or_a_stream_id(tmp_path, monkeypatch):
+    from sovereign_ai.kernel.replay import replay_run
+
+    k = kernel(tmp_path, monkeypatch)
+    k.events.append("agent-loop:replay-4", "agent.step.done", {"summary": "x"})
+    assert replay_run(k.events, "replay-4").entries
+    assert replay_run(k.events, "agent-loop:replay-4").entries
+
+
+def test_an_unknown_event_type_is_kept_not_dropped(tmp_path, monkeypatch):
+    """Silently dropping an event would make the replay a summary rather than a record."""
+    from sovereign_ai.kernel.replay import replay_run
+
+    k = kernel(tmp_path, monkeypatch)
+    k.events.append("agent-loop:replay-5", "agent.something.new", {"detail": "x"})
+    transcript = replay_run(k.events, "replay-5")
+    assert len(transcript.entries) == 1
+    assert transcript.entries[0].kind == "other"
+    assert "agent.something.new" in transcript.render()

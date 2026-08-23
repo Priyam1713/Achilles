@@ -13,6 +13,7 @@ from rich.table import Table
 
 from sovereign_ai.api.server import create_app
 from sovereign_ai.kernel.app import SovereignKernel
+from sovereign_ai.kernel.replay import replay_run
 from sovereign_ai.kernel.secrets import SecretStore
 from sovereign_ai.kernel.shadow_git import ShadowRepository
 from sovereign_ai.kernel.types import CapabilityRequest, RoutingMode
@@ -341,6 +342,36 @@ def checkpoints(
     console.print(
         f"[dim]restore with: sovereign checkpoints --workspace {root} "
         f"--restore {history[0].sha[:12]}[/dim]"
+    )
+
+
+@app.command()
+def replay(
+    run_id: str,
+    config_root: str = "./configs",
+) -> None:
+    """Replay a run from the append-only journal.
+
+    The concrete form of what research wave 7 called **authority legibility** (`D-030`):
+    every step, its trust label, every denial and every checkpoint, reconstructed from
+    events the loop already recorded rather than from a summary written afterwards. A
+    denial is marked with `!` because "what did it try that I stopped?" is the question this
+    view exists to answer.
+
+    Nothing here is stored twice. If it is not in the journal it is not in the transcript.
+    """
+    kernel = SovereignKernel.build(config_root)
+    transcript = replay_run(kernel.events, run_id)
+    if not transcript.entries:
+        console.print(f"[yellow]No recorded events for run {run_id}.[/yellow]")
+        console.print("[dim]Run ids look like cli-xxxxxxxx or a kernel Run id.[/dim]")
+        raise typer.Exit(code=1)
+
+    console.print(transcript.render())
+    console.print(
+        f"\n[dim]{len(transcript.tool_calls)} tool call(s), "
+        f"{len(transcript.denials)} denied, "
+        f"{transcript.untrusted_entries} entr(ies) recorded as untrusted model output[/dim]"
     )
 
 
