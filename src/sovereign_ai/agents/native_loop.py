@@ -14,6 +14,7 @@ from sovereign_ai.kernel.types import CapabilityRequest, RoutingMode
 from sovereign_ai.tools.base import ToolContext
 from sovereign_ai.tools.dispatcher import MAX_BATCH, ToolDispatcher
 from sovereign_ai.tools.standard import build_file_tools
+from sovereign_ai.tools.subtask import SpawnSubtaskTool
 
 from .advisor import Advisor
 from .base import AgentLoop, AgentStep
@@ -79,6 +80,7 @@ class NativeAgentLoop(AgentLoop):
         budget: ContextBudget | None = None,
         focus_every: int = 4,
         advisor: Advisor | None = None,
+        allow_subtasks: bool = True,
     ):
         self.inference = inference
         self.execution = execution
@@ -106,6 +108,12 @@ class NativeAgentLoop(AgentLoop):
         # generation, which is cheap against the deep brain and roughly a doubling when
         # planner and advisor are the same fast model (F-061).
         self.advisor = advisor
+        # Sub-tasks are registered here rather than in `build_standard_tools` because the
+        # tool needs a factory that produces *another loop of this shape* -- fresh history,
+        # same tools, same policy -- and only the loop knows how to build one.
+        self.allow_subtasks = allow_subtasks
+        if allow_subtasks and self.tools.get("spawn_subtask") is None:
+            self.tools.register(SpawnSubtaskTool())
 
     async def next_step(self, state: dict[str, Any]) -> AgentStep:
         state.setdefault("history", [])
@@ -457,9 +465,63 @@ class NativeAgentLoop(AgentLoop):
         hand it to the dispatcher, which owns policy-gated execution. Adding a capability
         is therefore a registration, not a change to this file (D-034).
         """
+        if tool == "spawn_subtask" and self.allow_subtasks:
+            return await self._run_subtask(args, state)
         observation = await self.tools.invoke(tool, args, self._tool_context(state))
         self._checkpoint_if_mutating(tool, observation, state)
         return observation
+
+    async def _run_subtask(self, args: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+        """Run a sub-task in a loop of *this* loop's shape.
+
+        Intercepted here rather than executed by the registered tool because a tool in a
+        shared dispatcher holds a reference to whoever registered it first -- which made a
+        test loop with scripted inference delegate to the kernel's real model. Building the
+        child from `self` is what makes "same tools, same policy, its own history" true.
+        """
+        spawner = self.tools.get("spawn_subtask")
+        if spawner is None:
+            return {"error": "spawn_subtask is not registered"}
+        prepared = spawner.prepare(args, self._tool_context(state))
+        if "error" in prepared:
+            return prepared
+
+        child_state = prepared["state"]
+        loop = self._child_loop()
+        steps = 0
+        summary = ""
+        outcome = "incomplete"
+        while True:
+            step = await loop.next_step(child_state)
+            steps += 1
+            if step.done:
+                outcome = step.kind
+                summary = str((step.payload or {}).get("summary", ""))
+                break
+            if steps >= prepared["max_steps"] + 2:  # the child's own budget should stop first
+                outcome = "budget_exhausted"
+                break
+        return spawner.result(prepared["objective"], outcome, summary, steps)
+
+    def _child_loop(self) -> NativeAgentLoop:
+        """A loop for a sub-task: same tools, same policy, its own history.
+
+        `allow_subtasks=False` on the child is what enforces the depth limit structurally --
+        the child simply has no such tool -- rather than relying on it to respect a number.
+        """
+        return NativeAgentLoop(
+            self.inference,
+            self.execution,
+            self.workspaces,
+            self.events,
+            tools=self.tools,
+            constrain_output=self.constrain_output,
+            checkpoint_root=self.checkpoint_root,
+            budget=self.budget,
+            focus_every=self.focus_every,
+            advisor=self.advisor,
+            allow_subtasks=False,
+        )
 
     def _tool_context(self, state: dict[str, Any]) -> ToolContext:
         """The identity and scope one turn's tool calls act under."""

@@ -3485,6 +3485,51 @@ instead of an opinion.
   against a deliberately-nonexistent server (correct failure) and by its authority tests; the
   first real server is the operator's call.
 
+### F-065 — Added: sub-task isolation — the parent resumes with only the summary
+
+- **Severity:** `medium` (context economy) · **Status:** `fixed`.
+- **Motivating problem:** `knowledge/harness-research.md` adoption item 11, from Roo/Kilo's
+  Boomerang Tasks. The parent pauses, the child runs in its own context, and the parent
+  resumes **with only the summary**. That last clause is the whole value on a 16 K window: a
+  search that takes nine turns costs the parent one observation instead of nine, so the
+  expensive context is spent on the task rather than on the looking. `D-025` asked for exactly
+  this and `Delegation` carried the contract without the mechanism.
+- **Fix:** `tools/subtask.py` plus interception in `NativeAgentLoop`.
+  - **Authority is inherited, never widened.** The child runs with the parent's `subject_id`,
+    workspace, lease and approval state, so every grant check it faces is the one the parent
+    would have faced. A sub-task is a way to spend *context* differently, not *authority*
+    differently — and there is a test that issues no write grant and asserts the child's write
+    fails.
+  - **The hand-back is narrow on purpose** — `succeeded`, `outcome`, `summary`, `steps` — and
+    the summary is the only thing that reaches the parent's context. An unstructured hand-back
+    is how a child's prose becomes a parent's confusion, which is oh-my-pi's point about
+    schema-validated subagent results.
+  - **Depth is capped structurally, not by rule.** The child is built with
+    `allow_subtasks=False`, so it simply has no such tool; a sub-task that could spawn
+    sub-tasks turns a bounded step budget into an unbounded tree.
+- **A real bug this design was changed to avoid, found by a hanging test:** the tool was first
+  written to hold a loop factory. Registered into the *shared* dispatcher, it captured
+  whichever loop registered it first — so a test loop with scripted inference silently
+  delegated to **the kernel's real model**, and the test hung against a live router. The loop
+  now intercepts `spawn_subtask` and builds the child from `self`; the registered tool keeps
+  only the schema and, if reached through the bare plane, says plainly that only a loop can run
+  one. "Same tools, same policy, its own history" is now true by construction rather than by
+  luck of registration order.
+- **`spawn_subtask` is deliberately not bridged over MCP**, and the exclusion is written down
+  (`LOOP_ONLY_TOOLS`) rather than left as an omission: an external harness reaching it would be
+  asking our kernel to drive our agent loop on its behalf, which is a different capability from
+  "use a governed tool". Every serious harness already has a subagent mechanism; what they lack
+  is an authority model, and that is what the bridge is for. The anti-drift test now compares
+  against `plane - LOOP_ONLY_TOOLS`, so a tool that is not bridged has to be a decision someone
+  wrote down.
+- **Verification:** 5 new tests, **233 passing**, ruff clean. The load-bearing one asserts the
+  parent's history grew by **one** turn while the child took two, and that the child's raw file
+  content does **not** appear anywhere in the parent's history — isolation proven by absence,
+  not by inspection of the summary.
+- **Not measured against outcomes.** Whether a 9B model *chooses* to delegate is a different
+  question from whether delegation works, and the task set has nothing long enough to reward
+  it — the same gap that left Focus Chain unmeasured (F-060).
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

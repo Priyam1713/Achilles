@@ -51,6 +51,15 @@ from mcp.server.fastmcp import FastMCP
 from sovereign_ai.kernel.app import SovereignKernel
 from sovereign_ai.tools.base import ToolContext
 
+#: Tools that exist in the plane but are deliberately **not** bridged.
+#:
+#: `spawn_subtask` runs a nested loop of the *calling* loop's shape. An external harness
+#: reaching it would be asking our kernel to drive our agent loop on its behalf, which is a
+#: different capability from "use a governed tool" and is not one this bridge offers. Every
+#: serious harness already has its own subagent mechanism; what it lacks, and what this
+#: bridge is for, is an authority model.
+LOOP_ONLY_TOOLS = frozenset({"spawn_subtask"})
+
 mcp = FastMCP("sovereign-ai-kernel-tools")
 
 _kernel: SovereignKernel | None = None

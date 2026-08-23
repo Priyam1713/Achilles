@@ -4221,10 +4221,14 @@ def test_mcp_bridge_exposes_the_whole_tool_plane(tmp_path, monkeypatch):
         and not name.startswith("_")
         and name in set(k.tool_dispatcher.names())
     }
-    assert exposed == set(k.tool_dispatcher.names()), (
-        "bridge and tool plane disagree: "
-        f"missing={set(k.tool_dispatcher.names()) - exposed}"
+    # A small, explicitly justified exclusion list rather than a loose comparison: a tool
+    # that is not bridged must be a decision someone wrote down, not an omission.
+    expected = set(k.tool_dispatcher.names()) - set(bridge.LOOP_ONLY_TOOLS)
+    assert exposed == expected, (
+        f"bridge and tool plane disagree: missing={expected - exposed}, "
+        f"unexpected={exposed - expected}"
     )
+    assert set(bridge.LOOP_ONLY_TOOLS) <= set(k.tool_dispatcher.names())
 
 
 def test_mcp_bridge_write_is_denied_without_a_grant_then_allowed_with_one(
@@ -5252,3 +5256,144 @@ def test_external_mcp_has_its_own_high_risk_policy_rule(tmp_path, monkeypatch):
     assert decision.allowed is True
     assert decision.approval_required is True
     assert decision.risk.value == "high"
+
+
+# ---------------------------------------------------------------------------------------
+# Sub-task isolation (adoption item 11, from Roo/Kilo's Boomerang Tasks). The parent pauses,
+# the child runs in its own context, and the parent resumes with only the summary. On a 16K
+# window that last clause is the entire value.
+# ---------------------------------------------------------------------------------------
+
+
+def _subtask_kernel(tmp_path, monkeypatch, replies):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "target.txt").write_text("the answer is 1234", encoding="utf-8")
+    k.workspaces.add(workspace, writable=False)
+    loop = NativeAgentLoop(
+        _RecordingInference(replies), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher,
+    )
+    return k, workspace, loop
+
+
+def test_a_subtask_returns_only_its_summary_to_the_parent(tmp_path, monkeypatch):
+    workspace_probe = tmp_path / "ws" / "target.txt"
+    replies = [
+        # Parent delegates.
+        json.dumps({"tool": "spawn_subtask", "args": {"objective": "find the answer"}}),
+        # Child: two steps of its own, which the parent must never see.
+        json.dumps({"tool": "read_file", "args": {"path": workspace_probe.as_posix()}}),
+        json.dumps({"tool": "done", "summary": "The answer is 1234"}),
+        # Parent finishes.
+        json.dumps({"tool": "done", "summary": "Done: 1234"}),
+    ]
+    _k, workspace, loop = _subtask_kernel(tmp_path, monkeypatch, replies)
+    state = {"run_id": "sub-1", "task": "find it", "workspace": str(workspace)}
+
+    step = asyncio.run(loop.next_step(state))
+    observation = step.payload["observation"]
+    assert observation["succeeded"] is True
+    assert observation["summary"] == "The answer is 1234"
+    assert observation["steps"] == 2
+
+    # The parent's context gained ONE turn, not the child's two.
+    assert len(state["history"]) == 1
+    rendered = json.dumps(state["history"])
+    assert "the answer is 1234" not in rendered, "the child's raw file content leaked upward"
+
+
+def test_subtasks_cannot_nest(tmp_path, monkeypatch):
+    """A sub-task that can spawn sub-tasks turns a bounded budget into an unbounded tree.
+    The child simply has no such tool, which is structural rather than a rule it must obey."""
+    replies = [
+        json.dumps({"tool": "spawn_subtask", "args": {"objective": "outer"}}),
+        json.dumps({"tool": "spawn_subtask", "args": {"objective": "inner"}}),
+        json.dumps({"tool": "done", "summary": "child finished"}),
+        json.dumps({"tool": "done", "summary": "parent finished"}),
+    ]
+    _k, workspace, loop = _subtask_kernel(tmp_path, monkeypatch, replies)
+    step = asyncio.run(
+        loop.next_step({"run_id": "sub-2", "task": "t", "workspace": str(workspace)})
+    )
+    # The child's attempt to delegate again came back as an unknown tool, not a new loop.
+    assert step.payload["observation"]["succeeded"] is True
+
+
+def test_a_subtask_inherits_authority_and_cannot_exceed_it(tmp_path, monkeypatch):
+    """A sub-task is a way to spend context differently, never authority differently."""
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    k.workspaces.add(workspace, writable=True)
+    target = workspace / "child.txt"
+
+    replies = [
+        json.dumps({"tool": "spawn_subtask", "args": {"objective": "write the file"}}),
+        json.dumps(
+            {"tool": "write_file", "args": {"path": target.as_posix(), "content": "x"}}
+        ),
+        json.dumps({"tool": "done", "summary": "tried to write"}),
+        json.dumps({"tool": "done", "summary": "parent done"}),
+    ]
+    loop = NativeAgentLoop(
+        _RecordingInference(replies), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher,
+    )
+    asyncio.run(
+        loop.next_step(
+            {
+                "run_id": "sub-3",
+                "task": "t",
+                "workspace": str(workspace),
+                "agent_profile_id": "ungranted",
+            }
+        )
+    )
+    # The parent held no write grant, so neither did the child.
+    assert not target.exists()
+
+
+def test_a_failed_subtask_reports_failure_rather_than_a_summary(tmp_path, monkeypatch):
+    replies = [
+        json.dumps({"tool": "spawn_subtask", "args": {"objective": "impossible", "max_steps": 2}}),
+        json.dumps({"tool": "read_file", "args": {"path": "/nope"}}),
+        json.dumps({"tool": "read_file", "args": {"path": "/nope"}}),
+        json.dumps({"tool": "read_file", "args": {"path": "/nope"}}),
+        json.dumps({"tool": "done", "summary": "parent done"}),
+    ]
+    _k, workspace, loop = _subtask_kernel(tmp_path, monkeypatch, replies)
+    step = asyncio.run(
+        loop.next_step({"run_id": "sub-4", "task": "t", "workspace": str(workspace)})
+    )
+    observation = step.payload["observation"]
+    assert observation["succeeded"] is False
+    assert observation["summary"] == ""
+    assert "did not finish" in observation["note"]
+
+
+def test_spawn_subtask_refuses_outside_a_loop_and_needs_an_objective(tmp_path, monkeypatch):
+    """Two different refusals, both deliberate.
+
+    Through the bare tool plane it explains that only a loop can run a sub-task -- because a
+    tool in a shared dispatcher would otherwise delegate to whichever loop registered it,
+    which is exactly the bug this design avoids. Inside a loop, a missing objective is a
+    plain argument error."""
+    from sovereign_ai.tools.base import ToolContext
+
+    _k, workspace, loop = _subtask_kernel(tmp_path, monkeypatch, [])
+
+    bare = asyncio.run(
+        loop.tools.invoke("spawn_subtask", {"objective": "x"}, ToolContext(run_id="x"))
+    )
+    assert "only be used from inside an agent loop" in bare["error"]
+
+    in_loop = asyncio.run(
+        loop._execute_tool("spawn_subtask", {}, {"run_id": "y", "workspace": str(workspace)})
+    )
+    assert "objective" in in_loop["error"]
