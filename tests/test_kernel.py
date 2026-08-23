@@ -5500,3 +5500,148 @@ def test_a_role_can_be_set_for_planning_only(tmp_path, monkeypatch):
     asyncio.run(loop.next_step(state))
     asyncio.run(loop.next_step(state))
     assert inference.routes == [("planning", "deep"), ("coding", "smart")]
+
+
+# ---------------------------------------------------------------------------------------
+# In-process hooks (adoption item 14, from Pi). The property that matters is the same one
+# the advisor has: a hook can refuse and annotate, and can never authorise.
+# ---------------------------------------------------------------------------------------
+
+
+def _hook_loop(tmp_path, monkeypatch, replies, hooks):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("alpha", encoding="utf-8")
+    k.workspaces.add(workspace, writable=True)
+    loop = NativeAgentLoop(
+        _RecordingInference(replies), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher, hooks=hooks,
+    )
+    return k, workspace, loop
+
+
+def test_a_hook_can_refuse_a_tool_call(tmp_path, monkeypatch):
+    from sovereign_ai.agents.hooks import HookRegistry
+
+    hooks = HookRegistry()
+    hooks.on("before_tool", lambda tool, args, state: "not on my watch" if tool == "read_file" else None)
+    _k, workspace, loop = _hook_loop(
+        tmp_path, monkeypatch,
+        [json.dumps({"tool": "read_file", "args": {"path": str(tmp_path / "ws" / "a.txt")}})],
+        hooks,
+    )
+    step = asyncio.run(
+        loop.next_step({"run_id": "hook-1", "task": "t", "workspace": str(workspace)})
+    )
+    assert step.payload["observation"]["hook_refused"] is True
+    assert "not on my watch" in step.payload["observation"]["error"]
+
+
+def test_a_hook_cannot_authorise_what_policy_refuses(tmp_path, monkeypatch):
+    """The one property that must never regress. A hook returning None means 'no
+    objection', never 'permitted'."""
+    from sovereign_ai.agents.hooks import HookRegistry
+
+    hooks = HookRegistry()
+    hooks.on("before_tool", lambda tool, args, state: None)  # maximally permissive
+    _k, workspace, loop = _hook_loop(
+        tmp_path, monkeypatch,
+        [json.dumps({"tool": "write_file", "args": {"path": str(tmp_path / "ws" / "new.txt"), "content": "x"}})],
+        hooks,
+    )
+    step = asyncio.run(
+        loop.next_step(
+            {
+                "run_id": "hook-2",
+                "task": "t",
+                "workspace": str(workspace),
+                "agent_profile_id": "ungranted",
+            }
+        )
+    )
+    assert step.payload["observation"]["denied"] is True
+    assert not (workspace / "new.txt").exists()
+
+
+def test_a_hook_can_inject_context_before_a_turn(tmp_path, monkeypatch):
+    from sovereign_ai.agents.hooks import HookRegistry
+
+    seen = []
+
+    def inject(state, messages):
+        augmented = [*messages, {"role": "user", "content": "REMEMBER THE RULE"}]
+        seen.append(augmented)
+        return augmented
+
+    hooks = HookRegistry()
+    hooks.on("before_turn", inject)
+    _k, workspace, loop = _hook_loop(
+        tmp_path, monkeypatch, [json.dumps({"tool": "done", "summary": "ok"})], hooks
+    )
+    state = {"run_id": "hook-3", "task": "t", "workspace": str(workspace)}
+    asyncio.run(loop.next_step(state))
+
+    # The hook ran as part of the real turn, not just when called directly.
+    assert seen, "before_turn was never invoked by the loop"
+    # And what it returned is what the model would have been sent.
+    assert seen[-1][-1]["content"] == "REMEMBER THE RULE"
+
+
+def test_a_broken_hook_is_recorded_and_skipped(tmp_path, monkeypatch):
+    """One bad extension should cost its own functionality, not the loop."""
+    from sovereign_ai.agents.hooks import HookRegistry
+
+    def explode(tool, args, state):
+        raise RuntimeError("boom")
+
+    hooks = HookRegistry()
+    hooks.on("before_tool", explode)
+    _k, workspace, loop = _hook_loop(
+        tmp_path, monkeypatch,
+        [json.dumps({"tool": "read_file", "args": {"path": str(tmp_path / "ws" / "a.txt")}})],
+        hooks,
+    )
+    step = asyncio.run(
+        loop.next_step({"run_id": "hook-4", "task": "t", "workspace": str(workspace)})
+    )
+    assert step.payload["observation"]["content"] == "alpha", "the loop did not survive"
+    assert any("boom" in e for e in hooks.errors)
+
+
+def test_hooks_load_from_a_directory_the_operator_names(tmp_path):
+    from sovereign_ai.agents.hooks import load_hooks
+
+    directory = tmp_path / "hooks"
+    directory.mkdir()
+    (directory / "guard.py").write_text(
+        "def register(hooks):\n"
+        "    hooks.on('before_tool', lambda tool, args, state: 'no deletes' if tool == 'delete_file' else None)\n",
+        encoding="utf-8",
+    )
+    (directory / "_ignored.py").write_text("raise RuntimeError('should not load')\n", encoding="utf-8")
+    (directory / "broken.py").write_text("import nonexistent_module_xyz\n", encoding="utf-8")
+
+    hooks = load_hooks(directory)
+    assert hooks.count() == 1
+    assert hooks.before_tool("delete_file", {}, {}) == "no deletes"
+    assert hooks.before_tool("read_file", {}, {}) is None
+    # A file that fails to import is recorded, not fatal, and underscore files are skipped.
+    assert any("broken.py" in e for e in hooks.errors)
+    assert not any("_ignored" in e for e in hooks.errors)
+
+
+def test_loading_hooks_from_nowhere_is_fine(tmp_path):
+    from sovereign_ai.agents.hooks import load_hooks
+
+    assert load_hooks(None).count() == 0
+    assert load_hooks(tmp_path / "does-not-exist").count() == 0
+
+
+def test_unknown_hook_points_are_rejected_loudly():
+    from sovereign_ai.agents.hooks import HookRegistry
+
+    with pytest.raises(ValueError, match="unknown hook point"):
+        HookRegistry().on("whenever_i_feel_like_it", lambda: None)

@@ -3564,6 +3564,46 @@ instead of an opinion.
   from the loop. Until now a run picked one capability and lived with it; the 30B and the 27B
   were things the router could load and the loop could not selectively spend.
 
+### F-067 — Added: in-process hooks — operator code inside the loop
+
+- **Severity:** `medium` (extensibility) · **Status:** `fixed`.
+- **Motivating problem:** `knowledge/harness-research.md` adoption item 14. Pi's 25+ hooks are
+  described there as "Claude Code's hook idea without the subprocess cost", and the cost is the
+  point: a subprocess per tool call is a process spawn on a machine whose entire budget is
+  already latency, while an in-process call is a function call. For a system meant to be handed
+  to strangers who will each want it to behave slightly differently, this is what lets them
+  customise **without forking**.
+- **Fix:** `agents/hooks.py` — a `HookRegistry` with four points (`before_turn`,
+  `before_tool`, `after_tool`, `after_run`) and `load_hooks(directory)`.
+  - **Four points, not thirty.** Claude Code documents around thirty lifecycle events; the
+    research file records that the *shape* is worth stealing rather than the surface area.
+    Each point is a promise to keep working, so they get added when something needs one.
+  - **A hook can refuse and annotate. It can never authorise.** `before_tool` may return a
+    reason and the call is blocked; returning nothing means "no objection", never "permitted",
+    and the action still faces every policy and grant check. This is the same one-directional
+    rule the advisor follows (F-061) and it has its own test: a maximally permissive hook
+    paired with an ungranted subject still cannot make a write succeed.
+  - **A broken hook costs its own functionality, not the loop.** Handlers that raise are
+    recorded in `registry.errors` and skipped — recorded rather than swallowed, because a
+    silent extension failure is undebuggable.
+  - **Loading is deliberately unclever:** every `*.py` in a directory the operator names,
+    each exporting `register(hooks)`. No entry points, no package discovery, no import from
+    anywhere the operator did not choose. A hook is code this kernel runs with its own
+    privileges, so where it comes from must be a decision, not an inference — and it must
+    never be loadable from a workspace an agent can write to.
+  - Child loops inherit the registry, so a sub-task is subject to the same extensions as its
+    parent.
+- **Verification:** 7 new tests, **243 passing**, ruff clean. They cover refusal, the
+  cannot-authorise invariant, context injection proven to run inside a real turn (not merely
+  when called directly), a raising hook leaving the loop intact, directory loading including a
+  file that fails to import and an underscore-prefixed file that is skipped, and an unknown
+  hook point rejected loudly rather than silently ignored.
+- **What this does not include:** hooks cannot yet be configured from `configs/`, so nothing
+  loads them automatically — a caller passes a registry in. Wiring a default hooks directory is
+  a small follow-up, deliberately not done blind: where that directory lives is a security
+  decision (it must not be anywhere an agent can write), and it deserves its own thought rather
+  than a guess made while finishing something else.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

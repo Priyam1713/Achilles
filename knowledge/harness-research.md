@@ -572,7 +572,7 @@ Effort is rough and assumes the kernel stays as-is.
 | 11 | ~~Boomerang-style subtasks~~ | Kilo + oh-my-pi | **done 2026-08-23** (`docs/FIXES.md` F-065) | Fresh child context, narrow structured hand-back, authority inherited not widened, depth capped structurally |
 | 12 | ACP (Zed) server | Zed | ~1 week | Every editor, one implementation |
 | 13 | Auxiliary services on the event stream + deterministic replay | OpenHands | ~1 week | Substrate for the authority-legibility inspector |
-| 14 | Hooks as in-process extension points | Pi | ~1 week | Our hook story is currently "the policy engine", which is not user-programmable |
+| 14 | ~~Hooks as in-process extension points~~ | Pi | **done 2026-08-23** (`docs/FIXES.md` F-067) | Four points, in-process; a hook can refuse and annotate, never authorise. Default hooks directory not wired -- where it lives is a security decision |
 
 Items 1–2 gate everything. Items 3–7 are all "make a weak model succeed more often per token"
 and should be measured against the tournament baseline, individually.

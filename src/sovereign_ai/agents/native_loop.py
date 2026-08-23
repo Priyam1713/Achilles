@@ -24,6 +24,7 @@ from .context import (
     load_project_instructions,
     truncate_observation,
 )
+from .hooks import HookRegistry
 
 SYSTEM_PROMPT = """You are an agent working inside a sandboxed workspace. Every turn, reply
 with EXACTLY ONE JSON object describing the next action, and nothing else -- no prose before
@@ -83,6 +84,7 @@ class NativeAgentLoop(AgentLoop):
         allow_subtasks: bool = True,
         plan_role: tuple[str, str] | None = None,
         act_role: tuple[str, str] | None = None,
+        hooks: HookRegistry | None = None,
     ):
         self.inference = inference
         self.execution = execution
@@ -123,6 +125,9 @@ class NativeAgentLoop(AgentLoop):
         # Both default to None, meaning "use whatever the run asked for". Enabling it is a
         # decision about which brains are in play, and it makes every task slower before it
         # makes any task better -- so it is opt-in, like the advisor.
+        # Operator-authored extensions running in-process (F-067). An empty registry
+        # is the default and costs nothing.
+        self.hooks = hooks or HookRegistry()
         self.plan_role = plan_role
         self.act_role = act_role
         self.allow_subtasks = allow_subtasks
@@ -143,7 +148,7 @@ class NativeAgentLoop(AgentLoop):
 
         capability, mode = self._role_for(step_count, state)
         request = CapabilityRequest(capability=capability, mode=RoutingMode(mode))
-        messages = self._build_messages(state)
+        messages = self.hooks.before_turn(state, self._build_messages(state))
         try:
             result = await self._chat(request, messages, constrained=self._constrain_now())
         except Exception as exc:
@@ -492,11 +497,18 @@ class NativeAgentLoop(AgentLoop):
         hand it to the dispatcher, which owns policy-gated execution. Adding a capability
         is therefore a registration, not a change to this file (D-034).
         """
+        refusal = self.hooks.before_tool(tool, args, state)
+        if refusal:
+            # A hook may veto. It may not authorise: an action it says nothing about still
+            # faces every policy and grant check it would have faced.
+            return {"error": f"refused by a hook: {refusal}", "hook_refused": True}
+
         if tool == "spawn_subtask" and self.allow_subtasks:
-            return await self._run_subtask(args, state)
-        observation = await self.tools.invoke(tool, args, self._tool_context(state))
-        self._checkpoint_if_mutating(tool, observation, state)
-        return observation
+            observation = await self._run_subtask(args, state)
+        else:
+            observation = await self.tools.invoke(tool, args, self._tool_context(state))
+            self._checkpoint_if_mutating(tool, observation, state)
+        return self.hooks.after_tool(tool, args, observation)
 
     async def _run_subtask(self, args: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """Run a sub-task in a loop of *this* loop's shape.
@@ -548,6 +560,9 @@ class NativeAgentLoop(AgentLoop):
             focus_every=self.focus_every,
             advisor=self.advisor,
             allow_subtasks=False,
+            plan_role=self.plan_role,
+            act_role=self.act_role,
+            hooks=self.hooks,
         )
 
     def _tool_context(self, state: dict[str, Any]) -> ToolContext:
