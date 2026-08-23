@@ -5751,3 +5751,143 @@ def test_an_unknown_event_type_is_kept_not_dropped(tmp_path, monkeypatch):
     assert len(transcript.entries) == 1
     assert transcript.entries[0].kind == "other"
     assert "agent.something.new" in transcript.render()
+
+
+# ---------------------------------------------------------------------------------------
+# The cumulative diff sandbox (adoption item 8, from Plandex). Wave 8 called it possibly the
+# best single idea in Tier 3, because it answers two severity-1 findings with one mechanism:
+# approvals with no evidence (X-03) and no diff view anywhere (X-04).
+# ---------------------------------------------------------------------------------------
+
+
+def _sandboxed(tmp_path, monkeypatch, replies):
+    from sovereign_ai.agents.native_loop import NativeAgentLoop
+    from sovereign_ai.kernel.sandbox import DiffSandbox
+
+    k = kernel(tmp_path, monkeypatch)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "existing.txt").write_text("original\n", encoding="utf-8")
+    k.workspaces.add(workspace, writable=True)
+    sandbox = DiffSandbox.create(tmp_path / "state", "sb-run", workspace)
+    loop = NativeAgentLoop(
+        _RecordingInference(replies), k.execution, k.workspaces, k.events,
+        tools=k.tool_dispatcher, sandbox=sandbox,
+    )
+    return k, workspace, sandbox, loop
+
+
+def test_a_sandboxed_write_needs_no_grant_and_touches_nothing(tmp_path, monkeypatch):
+    """The boundary moves: writing into a sandbox changes nothing real, so it needs no
+    authority. Committing does."""
+    _k, workspace, sandbox, loop = _sandboxed(
+        tmp_path,
+        monkeypatch,
+        [json.dumps({"tool": "write_file", "args": {"path": str(tmp_path / "ws" / "new.txt"), "content": "hello"}})],
+    )
+    step = asyncio.run(
+        loop.next_step(
+            {
+                "run_id": "sb-run",
+                "task": "write",
+                "workspace": str(workspace),
+                "agent_profile_id": "ungranted-subject",
+            }
+        )
+    )
+    observation = step.payload["observation"]
+    assert observation.get("denied") is None, "a sandboxed write should not need a grant"
+    assert observation["staged"] is True
+    # Nothing real changed.
+    assert not (workspace / "new.txt").exists()
+    assert [c.relative for c in sandbox.changes()] == ["new.txt"]
+
+
+def test_the_agent_can_read_back_its_own_staged_changes(tmp_path, monkeypatch):
+    """A run that could not read what it just wrote could not make two edits to one file."""
+    _k, workspace, _sandbox, loop = _sandboxed(
+        tmp_path,
+        monkeypatch,
+        [
+            json.dumps({"tool": "edit_file", "args": {
+                "path": str(tmp_path / "ws" / "existing.txt"),
+                "old_string": "original", "new_string": "changed once"}}),
+            json.dumps({"tool": "read_file", "args": {"path": str(tmp_path / "ws" / "existing.txt")}}),
+        ],
+    )
+    state = {"run_id": "sb-run", "task": "edit twice", "workspace": str(workspace)}
+    asyncio.run(loop.next_step(state))
+    step = asyncio.run(loop.next_step(state))
+
+    assert step.payload["observation"]["content"].strip() == "changed once"
+    # ...while the real file is still untouched.
+    assert (workspace / "existing.txt").read_text(encoding="utf-8") == "original\n"
+
+
+def test_the_diff_is_the_evidence_an_approval_needs(tmp_path, monkeypatch):
+    _k, workspace, sandbox, loop = _sandboxed(
+        tmp_path,
+        monkeypatch,
+        [json.dumps({"tool": "edit_file", "args": {
+            "path": str(tmp_path / "ws" / "existing.txt"),
+            "old_string": "original", "new_string": "replacement"}})],
+    )
+    asyncio.run(
+        loop.next_step({"run_id": "sb-run", "task": "edit", "workspace": str(workspace)})
+    )
+    diff = sandbox.diff()
+    assert "-original" in diff
+    assert "+replacement" in diff
+    assert "a/existing.txt" in diff and "b/existing.txt" in diff
+
+
+def test_applying_commits_everything_atomically_and_discarding_commits_nothing(
+    tmp_path, monkeypatch
+):
+    from sovereign_ai.kernel.sandbox import DiffSandbox
+
+    _k, workspace, sandbox, _loop = _sandboxed(tmp_path, monkeypatch, [])
+    sandbox.stage_write(workspace / "one.txt", "first")
+    sandbox.stage_write(workspace / "two.txt", "second")
+    sandbox.stage_delete(workspace / "existing.txt")
+
+    assert not (workspace / "one.txt").exists()
+    applied = sandbox.apply()
+    assert sorted(applied) == ["existing.txt", "one.txt", "two.txt"]
+    assert (workspace / "one.txt").read_text(encoding="utf-8") == "first"
+    assert (workspace / "two.txt").read_text(encoding="utf-8") == "second"
+    assert not (workspace / "existing.txt").exists()
+
+    # A discarded sandbox leaves the workspace exactly as it was.
+    second = DiffSandbox.create(tmp_path / "state", "sb-discard", workspace)
+    second.stage_write(workspace / "three.txt", "third")
+    second.discard()
+    assert not (workspace / "three.txt").exists()
+
+
+def test_a_path_outside_the_workspace_is_not_silently_captured(tmp_path, monkeypatch):
+    """Silently capturing a write outside the sandboxed workspace would hide it from the
+    diff the human is going to approve."""
+    from sovereign_ai.kernel.sandbox import DiffSandbox
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sandbox = DiffSandbox.create(tmp_path / "state", "sb-outside", workspace)
+    assert sandbox.stage_write(tmp_path / "elsewhere.txt", "x") is None
+    assert sandbox.changes() == []
+
+
+def test_a_staged_delete_hides_the_file_from_the_run(tmp_path, monkeypatch):
+    from sovereign_ai.kernel.sandbox import DiffSandbox
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "doomed.txt").write_text("still here", encoding="utf-8")
+    sandbox = DiffSandbox.create(tmp_path / "state", "sb-del", workspace)
+
+    assert sandbox.exists(workspace / "doomed.txt") is True
+    sandbox.stage_delete(workspace / "doomed.txt")
+    assert sandbox.exists(workspace / "doomed.txt") is False
+    # And the real file survives until apply.
+    assert (workspace / "doomed.txt").is_file()
+    assert [c.kind for c in sandbox.changes()] == ["deleted"]

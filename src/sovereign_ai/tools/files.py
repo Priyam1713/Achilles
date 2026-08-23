@@ -101,6 +101,11 @@ class _WorkspaceTool(Tool):
         return candidate.expanduser().resolve(strict=False)
 
     def _authorize_write(self, target: Path, ctx: ToolContext, description: str) -> None:
+        if ctx.sandbox is not None:
+            # Nothing real changes, so nothing needs authorising yet. The grant check moves
+            # to `apply`, where a human has actually seen the diff -- which is a better
+            # boundary than authorising a class of writes in advance and never seeing them.
+            return
         if self.execution is None:
             raise PermissionError(
                 "this tool has no ExecutionBroker and therefore cannot authorise a mutation"
@@ -133,9 +138,10 @@ class ReadFileTool(_WorkspaceTool):
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         target = self._resolve(str(args.get("path", "")), ctx, write=False)
-        if not target.is_file():
+        source = ctx.sandbox.read_path(target) if ctx.sandbox is not None else target
+        if not source.is_file():
             return tool_error(f"not a file: {target}")
-        text = target.read_text(encoding="utf-8", errors="replace")
+        text = source.read_text(encoding="utf-8", errors="replace")
         offset = int(args.get("offset") or 0)
         limit = int(args.get("limit") or 0)
         if offset or limit:
@@ -218,13 +224,21 @@ class WriteFileTool(_WorkspaceTool):
             return tool_error(f"content exceeds {MAX_WRITE_CHARS} characters")
         target = self._resolve(str(args.get("path", "")), ctx, write=True)
         self._authorize_write(target, ctx, "write_file")
-        existed = target.is_file()
-        previous = target.read_text(encoding="utf-8", errors="replace") if existed else ""
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        existed = ctx.sandbox.exists(target) if ctx.sandbox is not None else target.is_file()
+        previous = ""
+        if existed:
+            source = ctx.sandbox.read_path(target) if ctx.sandbox is not None else target
+            previous = source.read_text(encoding="utf-8", errors="replace")
+        if ctx.sandbox is not None:
+            if ctx.sandbox.stage_write(target, content) is None:
+                return tool_error(f"{target} is outside the sandboxed workspace")
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
         return {
             "path": str(target),
             "created": not existed,
+            "staged": ctx.sandbox is not None,
             "bytes_written": len(content.encode("utf-8")),
             "previous_lines": previous.count("\n") + 1 if previous else 0,
             "lines": content.count("\n") + 1 if content else 0,
@@ -270,9 +284,10 @@ class EditFileTool(_WorkspaceTool):
         if old == new:
             return tool_error("old_string and new_string are identical")
         target = self._resolve(str(args.get("path", "")), ctx, write=True)
-        if not target.is_file():
+        source = ctx.sandbox.read_path(target) if ctx.sandbox is not None else target
+        if not source.is_file() or (ctx.sandbox is not None and not ctx.sandbox.exists(target)):
             return tool_error(f"not a file: {target}")
-        text = target.read_text(encoding="utf-8", errors="replace")
+        text = source.read_text(encoding="utf-8", errors="replace")
         occurrences = text.count(old)
         if occurrences == 0:
             return tool_error("old_string not found in file", occurrences=0)
@@ -285,9 +300,13 @@ class EditFileTool(_WorkspaceTool):
             )
         self._authorize_write(target, ctx, "edit_file")
         updated = text.replace(old, new) if replace_all else text.replace(old, new, 1)
-        target.write_text(updated, encoding="utf-8")
+        if ctx.sandbox is not None:
+            ctx.sandbox.stage_write(target, updated)
+        else:
+            target.write_text(updated, encoding="utf-8")
         return {
             "path": str(target),
+            "staged": ctx.sandbox is not None,
             "replacements": occurrences if replace_all else 1,
             "lines_before": text.count("\n") + 1,
             "lines_after": updated.count("\n") + 1,
@@ -309,8 +328,12 @@ class DeleteFileTool(_WorkspaceTool):
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         target = self._resolve(str(args.get("path", "")), ctx, write=True)
-        if not target.is_file():
+        exists = ctx.sandbox.exists(target) if ctx.sandbox is not None else target.is_file()
+        if not exists:
             return tool_error(f"not a file: {target}")
+        if ctx.sandbox is not None:
+            ctx.sandbox.stage_delete(target)
+            return {"path": str(target), "deleted": True, "staged": True}
         if self.execution is None:
             raise PermissionError("delete_file has no ExecutionBroker to authorise against")
         # Deliberately its own action: configs/policies.yaml rates delete:workspace high and
@@ -324,8 +347,11 @@ class DeleteFileTool(_WorkspaceTool):
             mutates_state=True,
             subject_id=ctx.subject_id,
         )
-        target.unlink()
-        return {"path": str(target), "deleted": True}
+        if ctx.sandbox is not None:
+            ctx.sandbox.stage_delete(target)
+        else:
+            target.unlink()
+        return {"path": str(target), "deleted": True, "staged": ctx.sandbox is not None}
 
 
 class GlobTool(_WorkspaceTool):

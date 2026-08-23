@@ -24,6 +24,10 @@ class ToolContext:
     subject_id: str | None = None
     workspace_lease_id: str | None = None
     run_id: str | None = None
+    #: When set, file mutations accumulate here instead of touching the workspace, and are
+    #: applied atomically after a human reads the diff (`kernel/sandbox.py`). Writing into a
+    #: sandbox needs no grant because it changes nothing real; applying does.
+    sandbox: Any | None = None
 
 
 class Tool(abc.ABC):

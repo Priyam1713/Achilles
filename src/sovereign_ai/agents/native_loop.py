@@ -85,6 +85,7 @@ class NativeAgentLoop(AgentLoop):
         plan_role: tuple[str, str] | None = None,
         act_role: tuple[str, str] | None = None,
         hooks: HookRegistry | None = None,
+        sandbox: Any | None = None,
     ):
         self.inference = inference
         self.execution = execution
@@ -128,6 +129,9 @@ class NativeAgentLoop(AgentLoop):
         # Operator-authored extensions running in-process (F-067). An empty registry
         # is the default and costs nothing.
         self.hooks = hooks or HookRegistry()
+        # When set, file mutations accumulate outside the workspace and are applied
+        # only after a human reads the diff (F-069).
+        self.sandbox = sandbox
         self.plan_role = plan_role
         self.act_role = act_role
         self.allow_subtasks = allow_subtasks
@@ -563,6 +567,7 @@ class NativeAgentLoop(AgentLoop):
             plan_role=self.plan_role,
             act_role=self.act_role,
             hooks=self.hooks,
+            sandbox=self.sandbox,
         )
 
     def _tool_context(self, state: dict[str, Any]) -> ToolContext:
@@ -573,6 +578,7 @@ class NativeAgentLoop(AgentLoop):
             subject_id=state.get("agent_profile_id"),
             workspace_lease_id=state.get("workspace_lease_id"),
             run_id=state.get("run_id"),
+            sandbox=self.sandbox,
         )
 
     def _checkpoint_if_mutating(

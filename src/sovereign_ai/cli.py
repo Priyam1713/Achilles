@@ -14,9 +14,10 @@ from rich.table import Table
 from sovereign_ai.api.server import create_app
 from sovereign_ai.kernel.app import SovereignKernel
 from sovereign_ai.kernel.replay import replay_run
+from sovereign_ai.kernel.sandbox import DiffSandbox
 from sovereign_ai.kernel.secrets import SecretStore
 from sovereign_ai.kernel.shadow_git import ShadowRepository
-from sovereign_ai.kernel.types import CapabilityRequest, RoutingMode
+from sovereign_ai.kernel.types import CapabilityRequest, RoutingMode, TrustLabel
 from sovereign_ai.resources.telemetry import snapshot
 
 app = typer.Typer(no_args_is_help=True, help="Local Sovereign AI kernel control CLI")
@@ -75,6 +76,13 @@ def run(
     subject: str = typer.Option(
         "cli-operator", help="Subject id whose CapabilityGrants apply to this run"
     ),
+    sandbox: bool = typer.Option(
+        False,
+        "--sandbox",
+        help="Accumulate file changes outside the workspace instead of writing to it, then "
+        "review the diff and apply it deliberately. Needs no write grant, because nothing "
+        "real changes until you say so",
+    ),
     capability: str = typer.Option("coding", help="Capability to route the model by"),
     mode: RoutingMode = RoutingMode.SMART,
     config_root: str = "./configs",
@@ -110,6 +118,9 @@ def run(
         raise typer.Exit(code=2)
 
     run_id = f"cli-{uuid.uuid4().hex[:12]}"
+    if sandbox:
+        # Changes land here, not in the workspace, until `sovereign apply` commits them.
+        agent_loop.sandbox = DiffSandbox.create(kernel.config.state_dir, run_id, root)
     state = {
         "run_id": run_id,
         "task": task,
@@ -144,6 +155,23 @@ def run(
         f"\n[dim]{outcome['steps']} steps · {total:.1f}s · "
         f"{total / max(1, outcome['steps']):.1f}s per step[/dim]"
     )
+    if sandbox and getattr(agent_loop, "sandbox", None) is not None:
+        changes = agent_loop.sandbox.changes()
+        if changes:
+            console.print(
+                f"\n[bold]{len(changes)} staged change(s)[/bold] — nothing has been written "
+                f"to {root} yet."
+            )
+            for change in changes:
+                console.print(f"  {change.kind:<9} {change.relative}")
+            console.print(
+                f"\n[dim]review:  sovereign diff {run_id}\n"
+                f"apply :  sovereign apply {run_id}\n"
+                f"discard: sovereign discard {run_id}[/dim]"
+            )
+        else:
+            console.print("\n[dim]no file changes were staged[/dim]")
+
     if outcome["kind"] == "done":
         console.print(f"[bold green]done[/bold green] {outcome['payload'].get('summary', '')}")
     else:
@@ -373,6 +401,108 @@ def replay(
         f"{len(transcript.denials)} denied, "
         f"{transcript.untrusted_entries} entr(ies) recorded as untrusted model output[/dim]"
     )
+
+
+def _open_sandbox(kernel, run_id: str, workspace: str | None) -> DiffSandbox:
+    root = Path(kernel.config.state_dir) / "sandboxes" / run_id
+    if not root.is_dir():
+        console.print(f"[yellow]No staged changes for run {run_id}.[/yellow]")
+        raise typer.Exit(code=1)
+    target = Path(workspace).expanduser().resolve(strict=False) if workspace else None
+    if target is None:
+        console.print(
+            "[red]--workspace is required[/red]: a sandbox records changes relative to a "
+            "workspace, and applying to the wrong one would be worse than not applying."
+        )
+        raise typer.Exit(code=2)
+    sandbox = DiffSandbox(root=root, workspace=target)
+    # Rebuild the staged set from what is actually on disk, so these commands work in a
+    # fresh process -- the run that staged them is long gone by the time a human reviews.
+    for path in root.rglob("*"):
+        if path.is_file():
+            sandbox.touched.add(path.relative_to(root).as_posix())
+    return sandbox
+
+
+@app.command()
+def diff(
+    run_id: str,
+    workspace: str = typer.Option(..., help="The workspace the changes were staged against"),
+    config_root: str = "./configs",
+) -> None:
+    """Show what a sandboxed run wants to change, before anything is written.
+
+    This is the evidence an approval is supposed to have (`knowledge/research.md` D-028):
+    not a risk badge and a sentence, but the actual diff.
+    """
+    kernel = SovereignKernel.build(config_root)
+    sandbox = _open_sandbox(kernel, run_id, workspace)
+    body = sandbox.diff()
+    if not body.strip():
+        console.print("[dim]nothing staged[/dim]")
+        return
+    console.print(body)
+    console.print(f"[dim]apply with: sovereign apply {run_id} --workspace {workspace}[/dim]")
+
+
+@app.command()
+def apply(
+    run_id: str,
+    workspace: str = typer.Option(..., help="The workspace the changes were staged against"),
+    subject: str = typer.Option("cli-operator", help="Subject whose grant authorises this"),
+    config_root: str = "./configs",
+) -> None:
+    """Commit a sandboxed run's staged changes to the workspace.
+
+    **This** is the authorised action, not the writing that produced it. The agent worked
+    freely against a copy; committing to real files is a decision a human makes after
+    reading the diff, and it is checked against the same `write:workspace` grant every other
+    mutation faces.
+    """
+    kernel = SovereignKernel.build(config_root)
+    sandbox = _open_sandbox(kernel, run_id, workspace)
+    changes = sandbox.changes()
+    if not changes:
+        console.print("[dim]nothing staged[/dim]")
+        return
+    try:
+        kernel.execution.authorize(
+            action="write",
+            scope="workspace",
+            description=f"apply sandbox {run_id} ({len(changes)} file(s))",
+            trust=TrustLabel.TRUSTED_USER,
+            approved=True,
+            mutates_state=True,
+            subject_id=subject,
+        )
+    except PermissionError as exc:
+        console.print(f"[red]refused:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    applied = sandbox.apply()
+    kernel.events.append(
+        stream_id=f"sandbox:{run_id}",
+        event_type="sandbox.applied",
+        payload={"run_id": run_id, "workspace": workspace, "files": applied},
+        trust="trusted_user",
+    )
+    console.print(f"[green]applied[/green] {len(applied)} file(s) to {workspace}")
+    for name in applied:
+        console.print(f"  {name}")
+
+
+@app.command()
+def discard(
+    run_id: str,
+    workspace: str = typer.Option(..., help="The workspace the changes were staged against"),
+    config_root: str = "./configs",
+) -> None:
+    """Throw away a sandboxed run's staged changes. The workspace was never touched."""
+    kernel = SovereignKernel.build(config_root)
+    sandbox = _open_sandbox(kernel, run_id, workspace)
+    count = len(sandbox.changes())
+    sandbox.discard()
+    console.print(f"[dim]discarded {count} staged change(s); {workspace} was never modified[/dim]")
 
 
 @app.command()

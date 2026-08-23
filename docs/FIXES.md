@@ -3655,6 +3655,43 @@ instead of an opinion.
   calls. Hooks (F-067) provide the attachment mechanism; nothing yet uses it that way, and
   the honest description is that the substrate now exists and the services do not.
 
+### F-069 — Added: the cumulative diff sandbox — approve the change, not the permission
+
+- **Severity:** `high` (it moves an authority boundary) · **Status:** `fixed` for file
+  mutations; execution is deliberately **not** sandboxed.
+- **Motivating problem:** `knowledge/harness-research.md` adoption item 8, from Plandex, which
+  research wave 8 called possibly the best single idea in Tier 3 — because it answers two of
+  wave 7's severity-1 findings with **one** mechanism:
+  - **X-03, approvals with no evidence.** A human authorised `write:workspace` in advance and
+    never saw the change. Now they approve *the actual diff*, after reading it.
+  - **X-04, no diff view anywhere.** The diff already exists as an object, so rendering one
+    stops being a feature to build.
+- **Fix:** `kernel/sandbox.py` plus `--sandbox` on `sovereign run` and three new commands.
+  - Writes, edits and deletes accumulate in an overlay under `state/sandboxes/<run-id>`.
+    Reads prefer the overlay, so **an agent can build on its own pending edits** — a run that
+    could not read what it just wrote could not make two changes to one file.
+  - **`sovereign diff <run> --workspace <dir>`** renders the unified diff, **`apply`** commits
+    it atomically, **`discard`** throws it away. `apply` is the authorised action and is
+    checked against the same `write:workspace` grant every other mutation faces; it also
+    appends a `sandbox.applied` event, so committing is in the journal like everything else.
+- **What this changes about authority, stated precisely:** writing into a sandbox needs **no
+  grant**, because it changes nothing real. That is not a loosening — it is a better
+  boundary. Exploration becomes free and commitment becomes deliberate, which is the
+  opposite of the previous arrangement where a human granted a *class* of writes up front and
+  never saw the result.
+- **What it does not cover, and must not be assumed to:** `run_command` runs a real program
+  against the real filesystem, so a sandboxed run still gates commands exactly as before. This
+  is a **file-mutation sandbox, not a container**; `docs/AUTOMATION.md` and the
+  OpenShell/Docker path remain the answer for execution isolation. A run that shells out can
+  still change the workspace, and the diff will not show it.
+- **One deliberate refusal:** a staged write to a path *outside* the sandboxed workspace is
+  rejected rather than captured. Silently absorbing it would hide a change from the very diff
+  the human is about to approve.
+- **Verification:** 7 new tests, **254 passing**, ruff clean. The load-bearing ones: an
+  ungranted subject's sandboxed write succeeds *and leaves the real file absent*; an edit
+  followed by a read returns the staged content while the real file still reads `original`;
+  `apply` commits creates and deletes together and `discard` leaves the workspace untouched.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.
