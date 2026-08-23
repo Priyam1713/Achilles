@@ -3441,6 +3441,50 @@ instead of an opinion.
   repeats. It says the current edit format holds at this scale; it says nothing about a
   2,000-line file with ambiguous context, which is where anchors would earn their keep.
 
+### F-064 — Added: the MCP client — the kernel can finally consume the ecosystem
+
+- **Severity:** `high` (capability) · **Status:** `fixed`; opt-in and empty by default.
+- **Motivating problem:** `D-023` and `knowledge/harness-research.md` adoption item 9. This
+  project has been an MCP **server** since F-045 — exposing our governed tools *to* external
+  harnesses — and could not consume a single external server. The asymmetry cost us the entire
+  ecosystem, and specifically Serena, whose LSP-backed symbol tools are the one thing that
+  turns editing code by text into editing it by symbol, which is exactly what a 16 K context
+  rewards.
+- **Fix:** `tools/mcp_client.py` plus `configs/mcp-servers.yaml`.
+  - **Two tools, not one proxy per external tool.** `mcp_list_tools` discovers, `mcp_call`
+    invokes. A server with forty tools would otherwise push forty schemas into the model's
+    context every single turn — which is precisely the context weight that made OpenCode score
+    1/5 with four timeouts on this hardware (F-055). Discovery is a call the agent makes when
+    it needs one.
+  - **Opt-in, and empty by default.** An MCP server is an arbitrary program this kernel would
+    launch, so it arrives by an operator writing it into a config file, never by something
+    being found on the machine. When no servers are configured the two tools are not
+    registered at all, rather than sitting in front of the model unable to do anything.
+  - **Fails closed on the unknown.** The kernel cannot know whether a third-party tool reads,
+    writes or sends mail, so `mcp_call` is treated as a **mutating execution every time** and
+    gated on `execute:external_mcp` — a new policy rule rated **high risk, approval required**,
+    deliberately *not* inheriting `execute:workspace`'s medium rating. A third-party program is
+    a different risk from a command in a directory the operator registered.
+  - **What comes back is untrusted content**, labelled and warned exactly like web search
+    results. `D-009` said MCP is a transport and tool boundary rather than an authority
+    boundary; this is that rule applied in the consuming direction.
+- **One engineering choice worth defending: spawn per call.** A persistent session would save
+  roughly a second of process startup and would buy it with a lifecycle this kernel does not
+  have — sessions to reap on shutdown, servers to restart after a crash, and state living
+  across policy decisions. At 6-52 tok/s a second of startup is not the bottleneck, and a
+  stateless bridge **cannot leak a session between two runs holding different grants**.
+  Revisit when a measurement says the spawn cost matters.
+- **Verification:** 7 new tests, 228 passing overall, ruff clean. The load-bearing one issues
+  no grant, asserts `PermissionError`, then issues exactly `execute:external_mcp` and asserts
+  the *next* failure is the server itself — proving the grant was the only thing in the way
+  rather than an unrelated error masking the gate. Another asserts the policy rule is high/
+  approval-required rather than inherited.
+- **Not yet exercised against a real server.** The config ships with Serena documented and
+  disabled. Running it needs `uvx` and a language server, which is an install decision for the
+  operator, not something this session should make on their machine. The client is proven
+  against a deliberately-nonexistent server (correct failure) and by its authority tests; the
+  first real server is the operator's call.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

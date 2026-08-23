@@ -28,11 +28,22 @@ class ConfigBundle:
         self.policies = self._load("policies.yaml")
         self.install_profiles = self._load("install-profiles.yaml")
         self.collaboration = self._load("collaboration.yaml")
+        # Optional, and absent means none: consuming the MCP ecosystem is opt-in,
+        # because each entry is an arbitrary program this kernel would launch.
+        self.mcp_servers = self._load_optional("mcp-servers.yaml")
 
     def _load(self, filename: str) -> dict[str, Any]:
         path = self.root / filename
         if not path.exists():
             raise FileNotFoundError(f"Missing configuration: {path}")
+        with path.open("r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+
+    def _load_optional(self, filename: str) -> dict[str, Any]:
+        """Like `_load`, but a missing file is a legitimate configuration."""
+        path = self.root / filename
+        if not path.exists():
+            return {}
         with path.open("r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
 

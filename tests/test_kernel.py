@@ -5149,3 +5149,106 @@ def test_a_quiet_verdict_costs_nothing_but_the_call(tmp_path, monkeypatch):
     # A quiet verdict is not worth an event; only a note or a stop is.
     events = [e["event_type"] for e in k.events.read_stream("agent-loop:adv-3")]
     assert "agent.advisor.verdict" not in events
+
+
+# ---------------------------------------------------------------------------------------
+# MCP client (knowledge/research.md D-023, harness-research.md adoption item 9). We have
+# been an MCP *server* since F-045 and could not consume the ecosystem at all. The tests
+# that matter here are the authority ones: an external tool is opaque, so it fails closed.
+# ---------------------------------------------------------------------------------------
+
+
+def test_mcp_servers_are_opt_in_and_absent_by_default(tmp_path, monkeypatch):
+    """Consuming the ecosystem must never turn itself on: each entry is an arbitrary
+    program this kernel would launch."""
+    k = kernel(tmp_path, monkeypatch)
+    assert "mcp_call" not in k.tool_dispatcher.names()
+    assert "mcp_list_tools" not in k.tool_dispatcher.names()
+
+
+def test_mcp_server_config_ignores_incomplete_and_disabled_entries():
+    from sovereign_ai.tools.mcp_client import load_mcp_servers
+
+    servers = load_mcp_servers(
+        {
+            "servers": {
+                "good": {"command": "uvx", "args": ["serena"], "timeout_s": 30},
+                "no_command": {"args": ["x"]},
+                "switched_off": {"command": "uvx", "enabled": False},
+            }
+        }
+    )
+    assert set(servers) == {"good"}
+    assert servers["good"].args == ["serena"]
+    assert servers["good"].timeout_s == 30
+
+
+def test_mcp_call_is_denied_without_a_grant_and_allowed_with_one(tmp_path, monkeypatch):
+    """An external tool is opaque -- this kernel cannot know whether it reads, writes or
+    sends mail -- so it is treated as a mutating execution and fails closed."""
+    from sovereign_ai.tools.base import ToolContext
+    from sovereign_ai.tools.mcp_client import CallMCPToolTool, MCPServerConfig
+
+    k = kernel(tmp_path, monkeypatch)
+    servers = {"demo": MCPServerConfig(name="demo", command="/nonexistent/server")}
+    tool = CallMCPToolTool(servers, k.execution)
+    ctx = ToolContext(subject_id="mcp-subject")
+
+    with pytest.raises(PermissionError):
+        asyncio.run(tool.run({"server": "demo", "tool": "anything"}, ctx))
+
+    k.capability_grants.issue(
+        "mcp-subject", "execute", "external_mcp", "operator", ttl_seconds=60
+    )
+    # Now policy allows it and the *server* is what fails -- which is the correct next
+    # failure, and proves the grant was the only thing standing in the way.
+    result = asyncio.run(tool.run({"server": "demo", "tool": "anything"}, ctx))
+    assert "failed" in result["error"] or "did not respond" in result["error"]
+
+
+def test_mcp_call_reports_an_unknown_server_without_launching_anything(tmp_path, monkeypatch):
+    from sovereign_ai.tools.base import ToolContext
+    from sovereign_ai.tools.mcp_client import CallMCPToolTool, MCPServerConfig
+
+    k = kernel(tmp_path, monkeypatch)
+    tool = CallMCPToolTool({"demo": MCPServerConfig("demo", "true")}, k.execution)
+    result = asyncio.run(
+        tool.run({"server": "typo", "tool": "x"}, ToolContext(subject_id="s"))
+    )
+    assert "unknown MCP server" in result["error"]
+    assert result["available"] == ["demo"]
+
+
+def test_mcp_tools_appear_only_when_servers_are_configured(tmp_path, monkeypatch):
+    from sovereign_ai.tools.standard import build_standard_tools
+
+    k = kernel(tmp_path, monkeypatch)
+    dispatcher = build_standard_tools(
+        workspaces=k.workspaces,
+        execution=k.execution,
+        mcp_servers={"servers": {"demo": {"command": "true"}}},
+    )
+    assert {"mcp_call", "mcp_list_tools"} <= set(dispatcher.names())
+    spec = dispatcher.get("mcp_call").spec
+    assert spec.risk_scope == "external_mcp"
+    assert spec.mutating is True
+
+
+def test_external_mcp_has_its_own_high_risk_policy_rule(tmp_path, monkeypatch):
+    """It must not inherit execute:workspace's medium rating: a third-party program is a
+    different risk from a command in a directory the operator registered."""
+    from sovereign_ai.kernel.types import ActionRequest, TrustLabel
+
+    k = kernel(tmp_path, monkeypatch)
+    decision = k.policy.evaluate(
+        ActionRequest(
+            action="execute",
+            scope="external_mcp",
+            trust=TrustLabel.TRUSTED_USER,
+            description="serena",
+            mutates_state=True,
+        )
+    )
+    assert decision.allowed is True
+    assert decision.approval_required is True
+    assert decision.risk.value == "high"

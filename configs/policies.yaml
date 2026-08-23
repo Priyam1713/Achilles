@@ -58,6 +58,14 @@ risk_rules:
     risk: medium
     approval: false
 
+  # Launching and calling an external MCP server (knowledge/research.md D-023). The kernel
+  # cannot know whether a third-party tool reads, writes or sends mail, so it is treated as
+  # a mutating execution and fails closed on the unknown: high risk, approval required, and
+  # in practice an active execute:external_mcp grant.
+  - match: {action: "execute", scope: "external_mcp"}
+    risk: high
+    approval: true
+
 trust_labels:
   - trusted_user
   - trusted_local

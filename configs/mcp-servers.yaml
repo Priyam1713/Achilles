@@ -1,0 +1,34 @@
+# External MCP servers this installation is willing to launch.
+#
+# Empty by default, and deliberately not auto-discovered: an MCP server is an arbitrary
+# program the kernel would start, so it arrives by an operator writing it down here, never
+# by something being found on the machine.
+#
+# Everything reached this way is held to the same authority model as everything else
+# (`knowledge/research.md` D-009, D-023):
+#
+#   * calling an external tool needs an active `execute:external_mcp` CapabilityGrant, because
+#     the kernel cannot know whether a third-party tool reads, writes, or sends mail -- so it
+#     is treated as a mutating execution every time and fails closed on the unknown;
+#   * what comes back is untrusted content, exactly like web search results: evidence to read,
+#     never an instruction to follow;
+#   * the agent discovers tools with `mcp_list_tools` rather than having every server's whole
+#     schema set pushed into its context each turn. A server with forty tools would otherwise
+#     cost more context per turn than the task does (`docs/FIXES.md` F-055).
+#
+# Example -- Serena, the LSP-backed symbol toolkit `knowledge/harness-research.md` ranks as
+# the most valuable single server for this project, because editing code by symbol instead of
+# by text is exactly what a 16K context window rewards:
+#
+# servers:
+#   serena:
+#     enabled: true
+#     description: LSP-backed symbol navigation and editing across 40+ languages
+#     command: uvx
+#     args:
+#       - --from
+#       - git+https://github.com/oraios/serena
+#       - serena-mcp-server
+#     timeout_s: 120
+
+servers: {}

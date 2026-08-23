@@ -567,7 +567,7 @@ Effort is rough and assumes the kernel stays as-is.
 | 6 | ~~Hash-anchored edits~~ | oh-my-pi + Aider | **closed by measurement 2026-08-23** (`docs/FIXES.md` F-063) | Built the edit task set first, and the current unique-match format scored **8/8** on tasks designed to break it, including 40 near-identical functions. The failure mode anchors fix does not appear at this scale; revisit on larger files |
 | 7 | ~~Advisor role on the fast brain~~ | oh-my-pi | **done 2026-08-23** (`docs/FIXES.md` F-061) | Can object, never approve; off by default because it costs a generation per turn. Semantics tested, usefulness unmeasured |
 | 8 | Cumulative diff sandbox | Plandex | ~1 week | Solves approval evidence + diff view together; may amend `D-021`/`D-028` |
-| 9 | MCP client with elicitations | fast-agent | ~1 week | Unlocks Serena/LSP and makes our approvals reachable by other tools |
+| 9 | ~~MCP client~~ | fast-agent | **done 2026-08-23** (`docs/FIXES.md` F-064) | Two tools (discover + call) rather than per-tool proxies, so a forty-tool server does not cost forty schemas per turn. Opt-in, fails closed on `execute:external_mcp`. **Elicitations not implemented** -- that half remains open |
 | 10 | Architect/editor split across our two brains | Aider | ~3 days | Best use of the hardware we already have |
 | 11 | Boomerang-style subtasks with schema-validated returns | Kilo + oh-my-pi | ~1 week | Context isolation with a contract |
 | 12 | ACP (Zed) server | Zed | ~1 week | Every editor, one implementation |

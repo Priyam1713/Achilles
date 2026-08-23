@@ -20,6 +20,7 @@ from .files import (
     ReadFileTool,
     WriteFileTool,
 )
+from .mcp_client import CallMCPToolTool, ListMCPToolsTool, load_mcp_servers
 from .plan import UpdatePlanTool
 from .registry import ToolRegistry
 from .shell import RunCommandTool
@@ -63,6 +64,7 @@ def build_standard_tools(
     memory=None,
     context=None,
     search_url: str = "http://127.0.0.1:8888",
+    mcp_servers: dict | None = None,
     registry: ToolRegistry | None = None,
 ) -> ToolDispatcher:
     """Every capability the kernel can currently reach, as tools.
@@ -94,4 +96,10 @@ def build_standard_tools(
     if memory is not None:
         dispatcher.register(RememberTool(memory, execution))
     dispatcher.register(WebSearchTool(execution, search_url))
+    # Only when an operator has written servers down. Registering these unconditionally
+    # would put two tools in front of the model that can never do anything.
+    servers = load_mcp_servers(mcp_servers)
+    if servers:
+        dispatcher.register(ListMCPToolsTool(servers, execution))
+        dispatcher.register(CallMCPToolTool(servers, execution))
     return dispatcher

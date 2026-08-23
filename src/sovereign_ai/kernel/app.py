@@ -152,6 +152,7 @@ class SovereignKernel:
             search_url=str(
                 config.system.get("search", {}).get("searxng_url", "http://127.0.0.1:8888")
             ),
+            mcp_servers=config.mcp_servers,
         )
         agent_loops = AgentLoopRegistry()
         agent_loops.register(
