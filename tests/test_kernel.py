@@ -3062,7 +3062,9 @@ def test_harness_tournament_runs_native_loop_against_all_tasks(tmp_path, monkeyp
         # task id so two loops cannot collide. Scripting a different path was harmless
         # while every task's post-condition read the final summary or expected a denial,
         # and became a real failure the moment a task actually wrote a file.
-        workspace = workspace_root / "native" / task.id
+        # Must match run_task()'s layout exactly, attempt suffix included: repeats get
+        # their own directory so a later attempt cannot inherit an earlier one's files.
+        workspace = workspace_root / "native" / f"{task.id}-1"
         replies = [reply.format(workspace=workspace) for reply in scripts[task.id]]
         # NativeAgentLoop was constructed once at kernel-build time and holds its own
         # `inference` reference internally -- patching k.inference itself would not

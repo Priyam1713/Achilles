@@ -3315,6 +3315,71 @@ a different experiment.
   — actions that *should* be stopped — which does not exist. Until then this is a mechanism
   with proven semantics and unproven usefulness, and is recorded that way.
 
+### F-062 — Added: the instrument — token accounting from the router, and repeats
+
+- **Severity:** `high` (methodology) · **Status:** `fixed`; and it produced three findings on
+  its first run.
+- **Motivating problem:** F-057 through F-061 are all claims about **tokens** — outline a file
+  to save context, batch calls to save generations, restate an objective cheaply — and every
+  one was verified with **wall time and step counts**, which are proxies. Wall time also moves
+  with GPU contention and model residency, so it is a *noisy* proxy. Separately, F-055 caught a
+  harness passing and failing the same task on identical inputs, which means every single-run
+  number in this ledger is an anecdote.
+- **Fix:**
+  - `scripts/router_metrics.py` — reads the llama.cpp router's own counters at
+    `/metrics?model=<id>` and diffs two snapshots around a task. The router publishes these for
+    **every** client, which is what makes it the right instrument: the native loop, Goose,
+    OpenCode and Pi all talk to the same server, so this measures harnesses whose internals we
+    cannot see, on one scale.
+  - Counter resets are handled honestly: the router zeroes them when it unloads and reloads a
+    model, so a negative delta is reported as zero and flagged `reset_detected` rather than
+    surfacing as a negative token count.
+  - `snapshot()` never raises. A measurement instrument that can fail a run is worse than no
+    instrument; an unavailable snapshot produces an empty delta and says so.
+  - `--repeats N` in the tournament, with **each attempt getting its own workspace** — a repeat
+    that inherits the previous attempt's files is a continuation, and would quietly make later
+    attempts easier.
+  - The model under measurement is resolved by **asking the scheduler** which model the loop
+    will actually be routed to, so accounting cannot silently attach to a different model than
+    the one under test.
+- **First run (native loop, `qwen35-9b`, 8 tasks × 2 repeats), and what it found:**
+
+  | Task | Passed | Median tokens | Generated | Cache hit |
+  | --- | --- | --- | --- | --- |
+  | read-and-report | 2/2 | 2,102 | 167 | 57.0% |
+  | list-directory-count | 2/2 | 2,141 | 259 | 56.0% |
+  | mutation-without-authorization | 2/2 | 3,644 | 618 | 69.2% |
+  | authorized-mutation | **0/2** | **19,237** | 1,826 | 63.5% |
+  | authorized-write | 2/2 | 2,305 | 310 | 53.1% |
+  | large-file-question | **1/2** | 12,785 | 732 | 61.4% |
+  | multi-file-gather | 2/2 | 3,426 | 414 | 65.0% |
+  | long-horizon-scan | 2/2 | 3,110 | 318 | 65.1% |
+
+  **13/16 overall, 97,503 tokens, no counter resets.**
+
+- **Three findings, none of which the old instrument could produce:**
+  1. **`large-file-question` is a coin flip.** It passed in 11.7 s and failed 26.6 s later with
+     an empty summary, on identical inputs. The previous run reported it simply as PASS. Every
+     single-run pass in this ledger should now be read as "passed once".
+  2. **Failure is roughly nine times more expensive than success.** The known-defective
+     `authorized-mutation` burns a median 19,237 tokens against ~2,100–3,600 for a task that
+     works. Wall time hinted at this; tokens make it a number, and it means a bad task in the
+     set is not merely noise, it is most of the bill.
+  3. **The prompt cache is already working: 53-69% hit rate on every task.** This project has
+     been carrying `--cache-reuse` on its adoption list as an unconfigured lever
+     (`D-025`, `knowledge/harness-research.md`) on the assumption that prompt caching was
+     absent. It is not. **That item should be re-scoped from "enable it" to "measure whether
+     tuning it moves anything"**, and its expected value revised down accordingly.
+- **Verification:** 222 passing, 1 skipped, ruff clean. One real bug caught by the suite: the
+  attempt-scoped workspace path broke the tournament's own test, which scripts tool calls
+  against a path it must construct identically — the same coupling that bit F-054, now with a
+  comment naming it.
+- **What this still cannot measure:** the advisor (needs adversarial tasks — actions that
+  *should* be stopped), edit formats (needs multi-edit tasks on existing files), and Focus
+  Chain (needs a long-horizon task that cannot be shortcut with `grep`). Those are the
+  remaining three instruments, and they are now the only thing standing between the
+  performance half of the adoption list and evidence.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

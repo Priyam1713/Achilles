@@ -37,6 +37,7 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "scripts"))
 
 from harness_tasks import TASKS, HarnessTask  # noqa: E402
+from router_metrics import snapshot, summarise  # noqa: E402
 
 from sovereign_ai.kernel.app import SovereignKernel  # noqa: E402
 
@@ -48,12 +49,17 @@ async def run_task(
     workspace_root: Path,
     capability: str = "coding",
     mode: str = "smart",
+    metrics_url: str | None = None,
+    metrics_model: str | None = None,
+    attempt: int = 1,
 ) -> dict[str, Any]:
     # Scoped by loop_name as well as task.id: two loops running the same task must not
     # share a workspace, or the second loop's setup() collides with the first loop's
     # leftover files (a real FileExistsError hit live the first time this ran two loops
     # back to back).
-    workspace = workspace_root / loop_name / task.id
+    # Attempts get their own workspace: a repeat that inherits the previous attempt's files
+    # is not a repeat, it is a continuation, and it would quietly make later attempts easier.
+    workspace = workspace_root / loop_name / f"{task.id}-{attempt}"
     if workspace.exists():
         shutil.rmtree(workspace)
     workspace.mkdir(parents=True)
@@ -85,6 +91,10 @@ async def run_task(
 
     steps: list[dict[str, Any]] = []
     denied_attempts = 0
+    # Token cost is read from the router's own counters rather than inferred from wall time
+    # or step counts. Every harness talks to the same server, so this measures all of them
+    # on one scale -- including the subprocess ones whose internals we cannot see.
+    before = snapshot(metrics_url, metrics_model) if metrics_url and metrics_model else None
     started = time.perf_counter()
     while True:
         try:
@@ -99,6 +109,10 @@ async def run_task(
         if step.done:
             break
     elapsed = time.perf_counter() - started
+    tokens: dict[str, Any] = {"available": False}
+    if before is not None:
+        after = snapshot(metrics_url, metrics_model)
+        tokens = summarise(after.since(before))
 
     final_summary = ""
     if steps and steps[-1]["kind"] == "done":
@@ -121,6 +135,8 @@ async def run_task(
         "task_id": task.id,
         "category": task.category,
         "loop": loop_name,
+        "attempt": attempt,
+        "tokens": tokens,
         "passed": passed,
         "detail": detail,
         "outcome": steps[-1]["kind"] if steps else "no_steps",
@@ -138,6 +154,9 @@ async def run_tournament(
     workspace_root: Path,
     capability: str = "coding",
     mode: str = "smart",
+    repeats: int = 1,
+    metrics_url: str | None = None,
+    metrics_model: str | None = None,
 ) -> list[dict[str, Any]]:
     results = []
     for loop_name in loop_names:
@@ -147,14 +166,45 @@ async def run_tournament(
             print(f"  SKIP {loop_name}: not registered on this kernel")
             continue
         for task in tasks:
-            print(f"  {loop_name} / {task.id}...", end=" ", flush=True)
-            result = await run_task(
-                kernel, loop_name, task, workspace_root, capability, mode
-            )
-            status = "PASS" if result["passed"] else "FAIL"
-            print(f"{status} ({result['wall_time_s']}s, {result['steps_taken']} steps): {result['detail'][:100]}")
-            results.append(result)
+            for attempt in range(1, repeats + 1):
+                label = f"  {loop_name} / {task.id}"
+                if repeats > 1:
+                    label += f" [{attempt}/{repeats}]"
+                print(f"{label}...", end=" ", flush=True)
+                result = await run_task(
+                    kernel, loop_name, task, workspace_root, capability, mode,
+                    metrics_url, metrics_model, attempt,
+                )
+                status = "PASS" if result["passed"] else "FAIL"
+                cost = ""
+                if result["tokens"].get("available"):
+                    cost = (
+                        f", {result['tokens']['total_tokens']} tok"
+                        f" ({result['tokens']['generated_tokens']} gen)"
+                    )
+                print(
+                    f"{status} ({result['wall_time_s']}s, {result['steps_taken']} steps{cost})"
+                    f": {result['detail'][:80]}"
+                )
+                results.append(result)
     return results
+
+
+def _native_model(kernel: SovereignKernel, capability: str, mode: str) -> str | None:
+    """Which model the native loop will actually be routed to.
+
+    Asked of the scheduler rather than assumed, so token accounting cannot silently attach
+    to a different model than the one under test.
+    """
+    from sovereign_ai.kernel.types import CapabilityRequest, RoutingMode
+
+    try:
+        decision = kernel.scheduler.route(
+            CapabilityRequest(capability=capability, mode=RoutingMode(mode))
+        )
+    except Exception:
+        return None
+    return decision.candidates[0].model_id if decision.candidates else None
 
 
 def main() -> int:
@@ -177,6 +227,19 @@ def main() -> int:
         help="Capability the native loop routes by (e.g. tool_routing for the fast brain)",
     )
     parser.add_argument("--mode", default="smart", help="Routing mode: fast, smart or deep")
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="Run each task this many times. F-055 saw a harness flip on identical inputs, "
+        "so a single run is an anecdote; pass rate over repeats is the honest number",
+    )
+    parser.add_argument(
+        "--metrics-url",
+        default=None,
+        help="llama.cpp router base URL for token accounting (defaults to the llama_cpp "
+        "engine's own base_url)",
+    )
     parser.add_argument(
         "--external-model",
         default=None,
@@ -227,9 +290,21 @@ def main() -> int:
 
     print(f"brain: capability={args.capability} mode={args.mode}"
           f"{' goose_model=' + args.goose_model if args.goose_model else ''}")
+    metrics_url = args.metrics_url
+    if metrics_url is None:
+        engine = kernel.registry.engines.get("llama_cpp")
+        metrics_url = engine.base_url if engine else None
+    # Token counters are per-model, so accounting needs to know which one is being driven.
+    metrics_model = args.external_model or _native_model(kernel, args.capability, args.mode)
+    if metrics_url and metrics_model:
+        print(f"token accounting: {metrics_url} model={metrics_model}")
+    else:
+        print("token accounting: unavailable (no llama.cpp engine or model resolved)")
+
     results = asyncio.run(
         run_tournament(
-            kernel, loop_names, TASKS, workspace_root, args.capability, args.mode
+            kernel, loop_names, TASKS, workspace_root, args.capability, args.mode,
+            args.repeats, metrics_url, metrics_model,
         )
     )
 
