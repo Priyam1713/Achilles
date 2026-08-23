@@ -564,7 +564,7 @@ Effort is rough and assumes the kernel stays as-is.
 | 3 | ~~Summarising `read` + ripgrep `grep`~~ | oh-my-pi | **done 2026-08-23** (`docs/FIXES.md` F-057) | Measured **74.8-91.5% smaller observations** on this repo's own files, with both grep engines asserted to return identical matches |
 | 4 | ~~Focus Chain (re-injected todo list)~~ | Cline | **done 2026-08-23** (`docs/FIXES.md` F-058) | Restated on a cadence *and* unconditionally after any elision, from a model-written plan; costs no generation |
 | 5 | ~~Parallel tool dispatch~~ | ForgeCode | **done 2026-08-23** (`docs/FIXES.md` F-059) | Batch of up to 5; concurrent only when every call is non-mutating, so audit order and write safety are preserved |
-| 6 | Hash-anchored edits, per-model edit format | oh-my-pi + Aider | ~3 days | Biggest output-token saving; needs care to keep the refuse-don't-corrupt property |
+| 6 | ~~Hash-anchored edits~~ | oh-my-pi + Aider | **closed by measurement 2026-08-23** (`docs/FIXES.md` F-063) | Built the edit task set first, and the current unique-match format scored **8/8** on tasks designed to break it, including 40 near-identical functions. The failure mode anchors fix does not appear at this scale; revisit on larger files |
 | 7 | ~~Advisor role on the fast brain~~ | oh-my-pi | **done 2026-08-23** (`docs/FIXES.md` F-061) | Can object, never approve; off by default because it costs a generation per turn. Semantics tested, usefulness unmeasured |
 | 8 | Cumulative diff sandbox | Plandex | ~1 week | Solves approval evidence + diff view together; may amend `D-021`/`D-028` |
 | 9 | MCP client with elicitations | fast-agent | ~1 week | Unlocks Serena/LSP and makes our approvals reachable by other tools |

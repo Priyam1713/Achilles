@@ -3380,6 +3380,67 @@ a different experiment.
   remaining three instruments, and they are now the only thing standing between the
   performance half of the adoption list and evidence.
 
+### F-063 — Added: the edit-heavy task set — and the measurement that closed item 6 without building it
+
+- **Severity:** `medium` (methodology, with a decision attached) · **Status:** `fixed`;
+  measured live, twice per task.
+- **Motivating problem:** the task set had exactly one mutation task and it wrote a whole file
+  from scratch, so it could not distinguish edit *formats* at all. That left
+  `knowledge/harness-research.md` adoption item 6 — hash-anchored edits and per-model edit
+  format — unmeasurable, and item 6 was the next thing queued.
+- **Fix — four tasks, each attacking a different way editing goes wrong:**
+  - `single-edit` — change one constant. The post-condition also asserts the **other three
+    lines survive**, because an edit that rewrites from memory tends to quietly reword what it
+    was not asked to touch.
+  - `repeated-edit` — rename three identical call sites while leaving the function definitions
+    alone.
+  - `multi-file-edit` — the same change in two files.
+  - `surgical-edit` — **forty near-identical functions**, change only `step_17`. The check
+    requires the other **39 bodies to remain byte-identical**. This is the task a format that
+    regenerates whole files cannot pass.
+- **Result: 8 of 8 edit runs passed** (`qwen35-9b`, 2 repeats each), median 636 generated
+  tokens per task. Overall the set is now **22/24**.
+
+  | Task | Passed | Median tokens | Generated |
+  | --- | --- | --- | --- |
+  | single-edit | 2/2 | 3,346 | 382 |
+  | repeated-edit | 2/2 | 6,996 | 835 |
+  | multi-file-edit | 2/2 | 5,800 | 644 |
+  | surgical-edit | 2/2 | 4,597 | 630 |
+
+#### The decision this produces: item 6 is closed by measurement, not by implementation
+
+oh-my-pi's case for hash-anchored edits rests on a `vendor-claim` that tool design lifted a
+weak model's **edit pass rate from 6.7% to 68.3%**, and on **61% fewer output tokens**. Both
+numbers come from Grok-family models, and `harness-research.md` recorded the open question
+explicitly: *does this survive a model that was never trained on it? This must be measured,
+not assumed.*
+
+The baseline is now measured, and it is **8/8 on tasks built specifically to break it** —
+including forty near-identical functions, which is the exact scenario an anchor is supposed to
+disambiguate. The failure mode hash-anchoring exists to fix **does not appear at this scale on
+this model**. And the 61% output-token claim is against harnesses that regenerate whole files;
+ours already sends only `old_string`/`new_string`, at a median of 636 generated tokens for a
+whole task.
+
+So item 6 is **re-scoped rather than built**: the unique-match-or-refuse design already has the
+safety property, and adding per-line hash anchors would spend *read* tokens — the scarcest
+thing we have — to solve a problem this evidence says we do not have. It is revisited if edit
+failures show up on larger or messier files, which is a measurement we can now actually make.
+
+This is the "don't optimise what is already optimal" rule applied to ourselves, with numbers
+instead of an opinion.
+
+- **Verification:** the runner drives all twelve tasks under scripted inference; 223 passing,
+  ruff clean.
+- **One trap worth recording:** `surgical-edit`'s scripted reply needs an `old_string` spanning
+  a newline. Hand-escaping that inside a Python string inside JSON produced an **unparsable**
+  action rather than a wrong one — which looks exactly like a broken tool and is actually a
+  broken test. It is now built with `json.dumps`, where the escaping cannot be got wrong.
+- **What this does not establish:** four task shapes on files of 4-120 lines, one model, two
+  repeats. It says the current edit format holds at this scale; it says nothing about a
+  2,000-line file with ambiguous context, which is where anchors would earn their keep.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

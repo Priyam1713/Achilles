@@ -3050,11 +3050,53 @@ def test_harness_tournament_runs_native_loop_against_all_tasks(tmp_path, monkeyp
             ' {{"tool": "read_file", "args": {{"path": "{workspace}/gamma.txt"}}}}]}}',
             '{{"tool": "done", "summary": "11 + 22 + 33 = 66"}}',
         ],
+        # Edit tasks (F-063). Scripted so the runner is proven to drive them and to
+        # issue each task's declared grants (write:workspace, not execute:workspace).
+        "single-edit": [
+            '{{"tool": "edit_file", "args": {{"path": "{workspace}/config.py",'
+            ' "old_string": "TIMEOUT_SECONDS = 30", "new_string": "TIMEOUT_SECONDS = 60"}}}}',
+            '{{"tool": "done", "summary": "Raised the timeout"}}',
+        ],
+        "repeated-edit": [
+            '{{"tool": "edit_file", "args": {{"path": "{workspace}/service.py",'
+            ' "old_string": "db_query(", "new_string": "run_query(", "replace_all": true}}}}',
+            '{{"tool": "done", "summary": "Renamed all three call sites"}}',
+        ],
+        "multi-file-edit": [
+            '{{"batch": [{{"tool": "edit_file", "args": {{"path": "{workspace}/alpha.py",'
+            ' "old_string": "1.0.0", "new_string": "2.0.0"}}}},'
+            ' {{"tool": "edit_file", "args": {{"path": "{workspace}/beta.py",'
+            ' "old_string": "1.0.0", "new_string": "2.0.0"}}}}]}}',
+            '{{"tool": "done", "summary": "Bumped both"}}',
+        ],
         "long-horizon-scan": [
             '{{"tool": "grep", "args": {{"pattern": "TARGET", "path": "{workspace}/facts"}}}}',
             '{{"tool": "done", "summary": "It is note_09.txt"}}',
         ],
     }
+
+    def _surgical_replies(workspace):
+        """Built with json.dumps rather than hand-escaped.
+
+        This edit's `old_string` spans a newline, and writing that as a literal inside a
+        Python string inside JSON silently produced an *unparsable* action rather than a
+        wrong one -- a failure that looks like a broken tool and is actually a broken
+        test."""
+        body_before = "def step_17(value):" + chr(10) + "    return value + 1"
+        body_after = "def step_17(value):" + chr(10) + "    return value * 2"
+        return [
+            json.dumps(
+                {
+                    "tool": "edit_file",
+                    "args": {
+                        "path": f"{workspace}/pipeline.py",
+                        "old_string": body_before,
+                        "new_string": body_after,
+                    },
+                }
+            ),
+            json.dumps({"tool": "done", "summary": "Changed step_17 only"}),
+        ]
 
     results = {}
     for task in TASKS:
@@ -3065,7 +3107,11 @@ def test_harness_tournament_runs_native_loop_against_all_tasks(tmp_path, monkeyp
         # Must match run_task()'s layout exactly, attempt suffix included: repeats get
         # their own directory so a later attempt cannot inherit an earlier one's files.
         workspace = workspace_root / "native" / f"{task.id}-1"
-        replies = [reply.format(workspace=workspace) for reply in scripts[task.id]]
+        replies = (
+            _surgical_replies(workspace)
+            if task.id == "surgical-edit"
+            else [reply.format(workspace=workspace) for reply in scripts[task.id]]
+        )
         # NativeAgentLoop was constructed once at kernel-build time and holds its own
         # `inference` reference internally -- patching k.inference itself would not
         # reach it, so the already-registered loop instance's attribute is patched
@@ -3096,6 +3142,11 @@ def test_harness_tournament_runs_native_loop_against_all_tasks(tmp_path, monkeyp
     assert results["large-file-question"]["passed"] is True
     assert results["multi-file-gather"]["passed"] is True
     assert results["long-horizon-scan"]["passed"] is True
+
+    # The edit tasks need only write:workspace, so they pass here with no execution
+    # backend -- which is what proves the runner issues each task's *declared* grants.
+    for task_id in ("single-edit", "repeated-edit", "multi-file-edit", "surgical-edit"):
+        assert results[task_id]["passed"] is True, results[task_id]["detail"]
     assert results["authorized-mutation"]["denied_attempts"] == 0
     assert "never created" in results["authorized-mutation"]["detail"]
     assert k.capability_grants.is_active(

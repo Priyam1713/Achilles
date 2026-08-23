@@ -168,6 +168,105 @@ def _check_long_horizon_scan(workspace: Path, final_summary: str) -> tuple[bool,
         return True, "found the TARGET file and still knew what it was asked"
     return False, f"did not identify note_09; got: {final_summary[:120]!r}"
 
+
+# --- tasks that exercise editing ---------------------------------------------------------
+#
+# The set had exactly one mutation task that wrote a whole file from scratch, so it could not
+# distinguish edit *formats* at all -- which left `knowledge/harness-research.md` adoption
+# item 6 (hash-anchored edits, per-model edit format) unmeasurable. These four exist to make
+# an edit format falsifiable: precision, repetition, spread across files, and the cost of
+# rewriting versus patching.
+
+
+def _setup_single_edit(workspace: Path) -> None:
+    (workspace / "config.py").write_text(
+        "\n".join(
+            [
+                "TIMEOUT_SECONDS = 30",
+                "RETRIES = 3",
+                "ENDPOINT = 'http://localhost:8080'",
+                "DEBUG = False",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _check_single_edit(workspace: Path, final_summary: str) -> tuple[bool, str]:
+    text = (workspace / "config.py").read_text(encoding="utf-8")
+    if "TIMEOUT_SECONDS = 60" not in text:
+        return False, "TIMEOUT_SECONDS was not changed to 60"
+    # Precision matters as much as the change: an edit that rewrites the file from memory
+    # tends to quietly drop or reword the lines it was not asked to touch.
+    for survivor in ("RETRIES = 3", "ENDPOINT = 'http://localhost:8080'", "DEBUG = False"):
+        if survivor not in text:
+            return False, f"collateral damage: {survivor!r} no longer present"
+    return True, "changed one value and left the rest of the file intact"
+
+
+def _setup_repeated_edit(workspace: Path) -> None:
+    (workspace / "service.py").write_text(
+        "\n".join(
+            [
+                "def fetch_user(user_id):",
+                "    return db_query(user_id)",
+                "",
+                "def delete_user(user_id):",
+                "    return db_query(user_id)",
+                "",
+                "def audit_user(user_id):",
+                "    return db_query(user_id)",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _check_repeated_edit(workspace: Path, final_summary: str) -> tuple[bool, str]:
+    text = (workspace / "service.py").read_text(encoding="utf-8")
+    if "db_query(" in text:
+        return False, f"still {text.count('db_query(')} call(s) to db_query"
+    if text.count("run_query(") != 3:
+        return False, f"expected 3 run_query calls, found {text.count('run_query(')}"
+    if text.count("def ") != 3:
+        return False, "function definitions were damaged"
+    return True, "renamed all three call sites without damaging the definitions"
+
+
+def _setup_multi_file_edit(workspace: Path) -> None:
+    (workspace / "alpha.py").write_text("VERSION = '1.0.0'\nNAME = 'alpha'\n", encoding="utf-8")
+    (workspace / "beta.py").write_text("VERSION = '1.0.0'\nNAME = 'beta'\n", encoding="utf-8")
+
+
+def _check_multi_file_edit(workspace: Path, final_summary: str) -> tuple[bool, str]:
+    for name in ("alpha.py", "beta.py"):
+        text = (workspace / name).read_text(encoding="utf-8")
+        if "VERSION = '2.0.0'" not in text:
+            return False, f"{name} was not bumped to 2.0.0"
+        if f"NAME = '{name[:-3]}'" not in text:
+            return False, f"{name} lost its NAME line"
+    return True, "bumped the version in both files and kept the rest"
+
+
+def _setup_surgical_edit(workspace: Path) -> None:
+    lines = ['"""A module with many similar functions."""', ""]
+    for i in range(40):
+        lines += [f"def step_{i}(value):", "    return value + 1", ""]
+    (workspace / "pipeline.py").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _check_surgical_edit(workspace: Path, final_summary: str) -> tuple[bool, str]:
+    text = (workspace / "pipeline.py").read_text(encoding="utf-8")
+    if "def step_17(value):\n    return value * 2" not in text:
+        return False, "step_17 was not changed to multiply by 2"
+    # Every other step must be untouched: 39 unchanged bodies is the whole point, and it is
+    # what an edit format that rewrites whole files gets wrong.
+    if text.count("return value + 1") != 39:
+        return False, f"expected 39 untouched bodies, found {text.count('return value + 1')}"
+    return True, "changed one function among forty and left the other 39 exactly as they were"
+
 TASKS: list[HarnessTask] = [
     HarnessTask(
         id="read-and-report",
@@ -273,5 +372,61 @@ TASKS: list[HarnessTask] = [
         setup=_setup_long_horizon_scan,
         check=_check_long_horizon_scan,
         max_steps=16,
+    ),
+    HarnessTask(
+        id="single-edit",
+        category="editing",
+        objective_template=(
+            "In {workspace}/config.py change TIMEOUT_SECONDS from 30 to 60. Change nothing "
+            "else."
+        ),
+        setup=_setup_single_edit,
+        check=_check_single_edit,
+        max_steps=8,
+        requires_capability_grant=True,
+        required_grants=(("write", "workspace"),),
+    ),
+    HarnessTask(
+        id="repeated-edit",
+        category="editing",
+        objective_template=(
+            "In {workspace}/service.py rename every call to db_query so it calls run_query "
+            "instead. There are three. Leave the function definitions alone."
+        ),
+        setup=_setup_repeated_edit,
+        check=_check_repeated_edit,
+        max_steps=10,
+        requires_capability_grant=True,
+        required_grants=(("write", "workspace"),),
+    ),
+    HarnessTask(
+        id="multi-file-edit",
+        category="editing",
+        objective_template=(
+            "Both alpha.py and beta.py in {workspace} declare VERSION = '1.0.0'. Change both "
+            "to '2.0.0' and leave their NAME lines untouched."
+        ),
+        setup=_setup_multi_file_edit,
+        check=_check_multi_file_edit,
+        max_steps=10,
+        requires_capability_grant=True,
+        required_grants=(("write", "workspace"),),
+    ),
+    HarnessTask(
+        id="surgical-edit",
+        category="editing",
+        # 40 near-identical functions. A format that rewrites the file from memory will
+        # damage neighbours; one that patches in place will not. That difference is the
+        # whole reason this task exists.
+        objective_template=(
+            "In {workspace}/pipeline.py there are forty functions step_0 to step_39, each "
+            "returning value + 1. Change ONLY step_17 so it returns value * 2. Every other "
+            "function must be left exactly as it is."
+        ),
+        setup=_setup_surgical_edit,
+        check=_check_surgical_edit,
+        max_steps=10,
+        requires_capability_grant=True,
+        required_grants=(("write", "workspace"),),
     ),
 ]
