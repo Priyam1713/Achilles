@@ -590,7 +590,7 @@ Recording this matters as much as the gap list, because it says where **not** to
 | Context compaction | **Claude Code** `/compact` plus automatic microcompaction; **Cline** `ContextManager` | Summarise-and-continue with the working set preserved, plus tool-result pruning | none — unbounded growth into a 16K context | **build now** — currently the hard ceiling on task length |
 | Sub-task isolation | **Claude Code** subagents; **Goose** subagents | A child run gets a *fresh context*, returns only its result, and never pollutes the parent | `Delegation` exists but carries no context discipline | **wire ours up** — the contract exists, the mechanism does not |
 | Failure recovery | 2026 self-healing-orchestrator literature (`unverified`, arXiv 2606.01416) | monitor→detect→diagnose→recover→verify; reports 98.8% task success versus 94.5% for retry-only, and verifier-guided repair driving silent failures to 0% | one retry, as a new `Run` | **build on ours** — we already own the verifier the literature identifies as the difference |
-| Prompt-cache economics | **llama.cpp** `--cache-reuse`, slot reuse, `--cache-ram` | Keep the stable prefix resident so each agent turn reprocesses only the changed suffix | not configured anywhere | **adopt (configuration only)** |
+| Prompt-cache economics | **llama.cpp** `--cache-reuse`, slot reuse, `--cache-ram` | Keep the stable prefix resident so each agent turn reprocesses only the changed suffix | **already working** — measured 53-69% prompt-cache hit rate per task once the router's own counters were read (`docs/FIXES.md` F-062) | **re-scoped**: not "enable it" but "measure whether tuning it moves anything". This row assumed caching was absent; it was not, and the item's expected value is revised down accordingly |
 | Speculative decoding | llama.cpp `spec-type` family (recorded in wave 5, unused) | A draft head multiplies generation speed on a memory-bound path | recorded, unused | **promote** — it is on the critical path now, not a curiosity |
 
 ### Gap matrix 3 — control, safety and system access
@@ -1446,7 +1446,10 @@ repository and the name Achilles is not research. It is wiring, and then legitim
 - **Status:** `adopted`. **Implemented 2026-08-22** (`docs/FIXES.md` F-049): `ContextBudget`
   plus deterministic history elision and a per-observation budget, with an
   `agent.context.compacted` event so the prompt shrinks while the audit record does not.
-  Prompt-cache reuse (`--cache-reuse`) and context-isolated child runs remain open.
+  Context-isolated child runs remain open. Prompt-cache reuse turned out **not** to be open:
+  reading the router's own counters (`docs/FIXES.md` F-062) measured a 53-69% cache hit rate
+  on every task, so the cache was already working and this decision had been carrying a
+  lever that was not off.
 - **Reason:** The loop appends every assistant reply and every observation to history with no
   compaction, into a 16 K operating context, with a flat 4,000-character truncation per
   observation as the only control. On this hardware the context window is a scarcer resource
