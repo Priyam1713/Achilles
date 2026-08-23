@@ -228,6 +228,56 @@ Silicon *install* path; every installer is PowerShell plus WSL2.
 `D-033` through `D-042` record the corrections, and the revised order puts the licence, CI and
 the tool plane ahead of everything previously planned.
 
+## The harness-adoption stretch (2026-08-23)
+
+`knowledge/harness-research.md` dissected ~21 open harnesses and produced a 14-item adoption
+order. Twelve of those items are now resolved — ten built, one **closed by measurement without
+being built**, and one half-built. What follows is the state, not the plan.
+
+| # | Item | State |
+| --- | --- | --- |
+| 1 | Widen the MCP bridge to the whole tool plane | **done** (F-054) |
+| 2 | Run the harness tournament for real | **done, four loops** (F-054, F-055, F-056) |
+| 3 | Summarising `read` + ripgrep `grep` | **done, measured 74.8-91.5% smaller observations** (F-057) |
+| 4 | Focus Chain | **done**, unmeasured (F-058) |
+| 5 | Parallel tool dispatch | **done, measured** — the 9B batches unprompted (F-059, F-060) |
+| 6 | Hash-anchored edits | **closed by measurement** — current format scored 8/8 on tasks built to break it (F-063) |
+| 7 | Advisor role | **done**, usefulness unmeasured (F-061) |
+| 8 | Cumulative diff sandbox | **done** (F-069) |
+| 9 | MCP client | **done**; elicitations not implemented (F-064) |
+| 10 | Architect/editor split | **done** as per-role routing, benefit unmeasured (F-066) |
+| 11 | Boomerang sub-tasks | **done** (F-065) |
+| 12 | ACP server | **not started** — a wire protocol that needs its spec read at primary source |
+| 13 | Aux services on the event stream + replay | **half done**: replay works (F-068); no services use the stream yet |
+| 14 | In-process hooks | **done**; no default hooks directory is wired (F-067) |
+
+### What the system can do now that it could not
+
+- **15 tools**, all policy-gated, including an MCP *client* so external servers (Serena and
+  the rest of the ecosystem) are reachable, opt-in and fail-closed.
+- **Four agent loops**: the native one, plus Goose, OpenCode and Pi, each bridged to the same
+  governed tools. Pi needed a different bridge entirely — it has no MCP, so its adapter drives
+  an in-process extension against `POST /tools/{name}`.
+- **A measuring instrument**: `--repeats` plus token accounting read from the router's own
+  counters, so claims about context are checked against tokens rather than wall time.
+- **`sovereign replay <run-id>`** reconstructs any run from the journal alone, deterministically,
+  with denials marked and trust labels shown.
+- **`--sandbox`**, so an agent's file changes accumulate outside the workspace and a human
+  approves the actual diff rather than a class of permissions in advance.
+
+### What was measured, and what was not
+
+Measured on `qwen35-9b` across 12 tasks with repeats: **read outlining saves 74.8-91.5%** of an
+observation; **batching is used unprompted** (verified in the event journal, not inferred);
+**the current edit format is 8/8** on tasks designed to break it; **the prompt cache was already
+working at 53-69% hit rate**, which corrected a two-wave-old assumption that it was off.
+
+Not measured, and each says why in its `docs/FIXES.md` entry: Focus Chain (no task long enough
+to trigger compaction — the one built for it was solved with `grep` in two steps), the advisor
+(needs an adversarial task set that does not exist), and the architect/editor split (the
+tournament runs entirely on the fast brain, so it would measure the cost and none of the
+benefit).
+
 ## Hardware-bound steps performed by the one-shot bootstrap on the target workstation
 
 These cannot be truthfully pre-certified from a different machine:
