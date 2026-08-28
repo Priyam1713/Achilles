@@ -1,182 +1,216 @@
 # Achilles
 
-*(formerly, and still architecturally, Local Sovereign AI — see `knowledge/research.md` `D-018`.
-The Python package remains `sovereign_ai` until a rename is scheduled with its own migration.)*
+<div align="center">
 
-A hardware-aware local AI kernel whose defining rule is:
+**A hardware-aware, local-first AI kernel where the model is a component—not the system.**
+
+[![CI](https://github.com/Priyam1713/Achilles/actions/workflows/ci.yml/badge.svg)](https://github.com/Priyam1713/Achilles/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Priyam1713/Achilles/actions/workflows/codeql.yml/badge.svg)](https://github.com/Priyam1713/Achilles/actions/workflows/codeql.yml)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/status-pre--alpha-orange)](#project-status)
+
+</div>
+
+Achilles is an open-source control plane for capable local AI systems. It keeps policy,
+identity, approvals, durable state, resource arbitration, tool execution, verification and
+audit outside the model so models, runtimes, agent harnesses and memory systems can compete
+without taking ownership of the machine.
 
 ```text
 THE MODEL IS A COMPONENT. THE KERNEL IS THE SYSTEM.
 ```
 
-No model, harness, sandbox, inference engine or UI owns the architecture. The kernel owns policy, state, capability routing, resource arbitration, transactions, verification, provenance, checkpoints and audit. Everything fast-moving sits behind adapters.
+Achilles is built for people who want local models to do real work—not just chat—without
+turning whichever agent framework is fashionable this month into a permanent security and
+architecture boundary.
 
-## What is implemented
+> [!WARNING]
+> Achilles is pre-alpha research software that can execute model-proposed actions. Use
+> disposable workspaces, review approvals, keep backups, and read the
+> [security model](docs/SECURITY.md) before granting write, shell, network or credential
+> capabilities.
 
-> **Read this first.** Research wave 8 (2026-08-22) found that 19 of 21 capability domains
-> were unreachable by the agent: `ToolRegistry` had zero tools registered in it and the loop
-> had three hard-coded ones. **That is now fixed** — 13 tools cover files, search, execution,
-> specialists, media, memory and web (`docs/FIXES.md` F-047), and `sovereign run "<task>"` is
-> a real front door, live-verified against a local model (F-048).
->
-> What is still honestly *not* there: `ComputerController` has **no registered controllers**,
-> so there is no browser or desktop control; **7 of 14 specialist workers return HTTP 501**
-> (audio reasoning, segmentation, GUI grounding, materials, medical, music), so those are
-> reachable-but-unimplemented; nothing **streams** yet; and there is no TUI or desktop task
-> composer. See `knowledge/research.md` waves 6-8 and `docs/IMPLEMENTATION_STATUS.md`.
+## Why Achilles
 
+- **Authority stays outside the model.** Fail-closed policy, scoped capability grants,
+  explicit approvals and post-condition verification decide what actually happens.
+- **Local-first and replaceable.** llama.cpp today; alternative inference engines, model
+  routers, harnesses, memory layers and specialist workers sit behind adapters.
+- **Hardware is part of the architecture.** GPU leases, residency decisions, model
+  load/unload and measured local benchmarks prevent imaginary capacity planning.
+- **Durable work, not ephemeral chat.** Jobs, runs, checkpoints, workflows, replay,
+  collaboration events and tamper-evident audit records survive process boundaries.
+- **Evidence before promotion.** Challengers run the same tasks under the same constraints.
+  Discovery, benchmarking and promotion are deliberately separate operations.
+- **Honest capability accounting.** Installed, reachable, implemented and locally proven are
+  different states, tracked in the repository instead of collapsed into a feature claim.
 
-- capability/model registry with source, license/gating and hardware-fit metadata
-- dual cognition: fast resident brain + heavyweight quality brain
-- llama.cpp router integration with automatic VRAM fitting, dynamic loading/unloading and idle sleep
-- heterogeneous inference adapter plane (llama.cpp; vLLM/SGLang candidates; Pulsar optional; specialist dependency islands; WanGP media)
-- local benchmark DB that can override internet priors
-- GPU heavy-job arbiter
-- fail-closed policy engine and explicit trust labels
-- Windows→WSL2 OpenShell security bridge + Docker fallback
-- OS credential-store secret handles
-- append-only events, checkpoint persistence primitives, transaction journal/rollback hooks
-- lexical memory, persistent vector adapter, graph memory and provenance metadata
-- a real tool plane: `read_file` (ranged), `list_directory`, `write_file`, `edit_file`,
-  `delete_file`, `grep`, `glob`, `run_command`, `invoke_specialist`, `generate_media`,
-  `search_memory`, `remember`, `web_search` — every one policy-gated, with contextual
-  discovery so an agent sees a small relevant roster
-- schema-constrained tool calls: the action schema is derived from the registered tools and
-  enforced during decoding, with a recorded fallback when a backend cannot honour it
-- `AGENTS.md` project instructions, deterministic context compaction, and shadow-git
-  file-state checkpoints so an agent's edit can be undone
-- deterministic post-condition verification
-- hierarchical computer-control interface: API → CLI → plugin → DOM → UIA → vision GUI
-  (**interface only - no controller is registered, so no computer control executes**)
-- watcher/event bus
-- durable background job journals with cancellation, result/error records and restart
-  interruption detection (automatic resume/retry is not implemented yet)
-- native collaboration rooms with human/agent identities, threads, reactions, shared canvases,
-  mention-to-job dispatch and per-room tamper-evident history
-- local SearXNG deployment option (**deployment only - nothing in the kernel queries it**)
-- exact Hugging Face revision locks, post-install Git runtime commit records and a
-  non-promoting official release radar
-- isolated specialist environments so conflicting ML stacks cannot poison the kernel
-- no-build local control UI
-- one-go Windows bootstrap, start and stop scripts
+## Architecture
 
-## One-go installation
+```mermaid
+flowchart TD
+    UI[CLI / Web / Desktop] --> K[Achilles authority kernel]
+    K --> A[Agent-loop adapters]
+    K --> M[Model scheduler]
+    K --> R[Global resource scheduler]
+    A --> T[Governed tool plane]
+    M --> I[Replaceable inference runtimes]
+    R --> I
+    R --> S[Specialist workers]
+    T --> X[Staged workspace / sandbox]
+    X --> V[Deterministic verification]
+    V --> K
+    K --> D[(Runs / events / memory / audit)]
+```
 
-> **Pre-build gate:** do not run the heavyweight `workstation` bootstrap yet. Complete
-> decision D-011 in [knowledge/research.md](knowledge/research.md) first: migrations, local
-> authentication and bounded job/run recovery. Then perform the smaller `core` physical
-> baseline before expanding the profile.
->
-> Two of the original gate's findings are now closed. Upstream runtime inputs are pinned to
-> immutable commits in `configs/runtime-sources.env`. The port collision was **resolved in
-> commit `b1a5b29`**, which moved this installation's llama.cpp router from `8080` to `18080`
-> and added a service-identity probe so startup refuses to adopt a foreign listener. The
-> other local router on `127.0.0.1:8080` is still running and is left strictly alone.
->
-> Verify before every install rather than trusting this paragraph:
->
-> ```powershell
-> uv run python scripts/verify_host.py --check-ports
-> ```
->
-> That check enumerates **both** the Windows host and the WSL2 namespace. Checking only the
-> host is not a weaker check, it is the wrong one: WSL2 forwards connections to services bound
-> inside the distro but does not publish their listening sockets in the Windows TCP table, so
-> a host-only scan reports a busy port as free. See `docs/FIXES.md` F-019.
+The kernel owns the final state transition. Harnesses, models, tools, memory services and
+telemetry return untrusted evidence; none of them can authorize themselves. See the
+[architecture](docs/ARCHITECTURE.md), [security boundary](docs/SECURITY.md), and
+[tournament design](docs/TOURNAMENT_ARCHITECTURE.md).
 
-From PowerShell in the repository root. `core` (~78 GB) is the default and recommended
-starting profile — a genuinely useful daily assistant: coding, retrieval, documents,
-speech. Heavy artifacts are stored on WSL ext4, not the smaller/slower `D:` filesystem:
+## What works today
+
+| Plane | Current implementation |
+| --- | --- |
+| Authority | Policy engine, capability grants, approvals, local authentication, provenance and append-only audit events |
+| Agency | Native tool-calling loop plus Pi, OpenCode and Goose adapters; context compaction, hooks, subtasks and deterministic replay |
+| Tools | Governed file operations, search, shell execution, specialists, media, memory and web search with contextual discovery |
+| Durability | Jobs, immutable run attempts, checkpoints, workflow DAGs, recurring triggers, transactions and restart recovery primitives |
+| Resources | Cross-process GPU/workspace leases, residency management, scheduling and telemetry |
+| Memory | Lexical, vector and graph stores with provenance and project-scope filtering |
+| Collaboration | Rooms, identities, threads, mentions, reactions, shared canvases, mailbox and derived presence |
+| Interfaces | CLI, authenticated local API, web control surface and an early Tauri desktop client |
+| Evaluation | Local benchmark database, harness tournaments, runtime tournaments and explicit non-promoting scorecards |
+
+The detailed truth—including incomplete and unreachable capabilities—is maintained in
+[Implementation Status](docs/IMPLEMENTATION_STATUS.md). In particular, browser/desktop
+control has an interface but no production controller, several specialist workers still
+return `501`, and streaming is not implemented.
+
+## Quick start for contributors
+
+You can develop and run the kernel test suite without a GPU or downloading model weights.
+
+```bash
+git clone https://github.com/Priyam1713/Achilles.git
+cd Achilles
+uv sync --extra dev
+uv run pytest -q
+uv run ruff check .
+```
+
+Requirements:
+
+- Python 3.11 or newer; Python 3.12 is the primary development version
+- [uv](https://docs.astral.sh/uv/) for locked environment management
+- Windows 11 + WSL2 Ubuntu 24.04 for the currently proven full workstation path
+- NVIDIA CUDA for local GPU inference; CPU-only kernel development remains supported
+
+## Build a local workstation
+
+The bootstrap is intentionally separate from the lightweight development setup because
+model and specialist artifacts are large. From PowerShell:
 
 ```powershell
+git clone https://github.com/Priyam1713/Achilles.git
+cd Achilles
 Set-ExecutionPolicy -Scope Process Bypass
 $env:HF_TOKEN="YOUR_TOKEN_IF_NEEDED"
 ./Install.ps1
 ```
 
-`workstation` adds ~212 GB more (creative/audio/vision/computer-use/data specialists, ~290
-GB total) on top of `core` — install it deliberately once you know you want that coverage,
-not by default (`docs/FIXES.md` F-014):
+The default `core` profile targets coding, retrieval, documents and speech. Run the physical
+storage and port preflights before downloading anything; sparse WSL2 VHDX capacity can be
+much larger than the free space on its Windows backing volume.
 
 ```powershell
-./Install.ps1 -Profile workstation
+uv run python scripts/verify_host.py --check-ports
+wsl bash -lc 'source scripts/runtime_env.sh && scripts/verify_storage.sh "$SOAI_DATA_HOME" core'
 ```
 
-The installer never accepts licenses for you. Accept upstream gated terms first and set
-`HF_TOKEN`; use `-WithoutGatedModels` when you want to skip them.
+The installer does not accept gated model licences for you. Model weights are downloaded
+from their upstream projects and are not part of this repository or its Apache-2.0 licence.
+See [Local Build](docs/LOCAL_BUILD.md) and [Windows](docs/WINDOWS.md) before using the much
+larger `workstation` profile.
 
-Use `-WithoutGatedModels` to skip gated checkpoints. `core` is the smaller daily-assistant
-profile; `full` adds niche scientific specialists. The installer can provision Python 3.12
-through `winget` when Windows Python is absent and keeps Windows/WSL environments separate.
-
-The bootstrap is designed to provision WSL dependencies, install OpenShell and replaceable
-inference runtimes, create isolated CUDA/Python worker environments, check official release
-sources, download revision-resolved model snapshots, prepare the Qwen GGUFs, perform actual
-llama.cpp load/inference smoke tests, validate the registry and run kernel tests. Its runtime
-and specialist sources must be made immutable before this path is treated as reproducible.
-
-## Give it a task
+## Give Achilles a task
 
 ```powershell
 uv run sovereign workspace add C:\path\to\your\project
-uv run sovereign run "summarise what this project does and how its tests run" --workspace C:\path\to\your\project
+uv run sovereign run "explain this repository and run its tests" `
+  --workspace C:\path\to\your\project
 ```
 
-Every step prints as it happens with its own timing, because on this hardware an
-undifferentiated wait is the worst possible way to present a slow model. Mutating actions are
-refused unless a `CapabilityGrant` covers them or you pass `--approve`; that refusal is the
-kernel working, not a bug. `uv run sovereign tools` lists what an agent can actually invoke.
+Mutating actions are refused unless a capability grant covers them or the operator explicitly
+approves them. `uv run sovereign tools` shows the tools currently reachable by an agent.
 
-## Run the control plane
+Start the local control plane:
 
 ```powershell
 ./scripts/start.ps1
 ```
 
-Open the local control surface at `http://127.0.0.1:7788/ui`.
+Then open `http://127.0.0.1:7788/ui`. Stop it with `./scripts/stop.ps1`.
 
-The control surface includes `Commons` and `Build Lab` rooms. Mention `@swift` for a
-fast coordination response, `@sage` for careful synthesis, or `@forge` for deep
-engineering review. Agent responses remain untrusted model output and cannot authorize
-execution, writes or credential access.
+## Runtime tournaments
 
-Stop:
+Achilles does not promote an inference engine because a README says it is faster. Runtime
+candidates are pinned and measured on the exact workstation:
 
-```powershell
-./scripts/stop.ps1
+```bash
+source scripts/runtime_env.sh
+uv run python scripts/benchmark_runtimes.py --list
+uv run python scripts/benchmark_runtimes.py
+uv run python scripts/benchmark_runtimes.py --reverse-cells
 ```
 
-## Useful diagnostics
+The first upstream llama.cpp versus ik_llama.cpp contest found a directional upstream lead
+for Qwen3.8-27B IQ4_XS and an inconclusive Q6_K result whose sub-2% decode winner changed
+between passes. Upstream remains incumbent because the challenger did not clear stable
+throughput and correctness gates. Raw samples, medians, execution order, commits, VRAM and
+thermal/memory telemetry are preserved without changing model routing.
 
-```powershell
-uv run sovereign preflight
-uv run sovereign route reasoning --mode deep
-uv run sovereign route ocr --mode smart
-uv run python scripts/doctor.py --strict
-uv run python scripts/check_release_radar.py
-```
+## Project status
 
-## Important truth about the artifact
+Achilles is **pre-alpha**. The authority kernel and test suite are substantial, but the public
+API, migrations and installation experience may change before `1.0`. Current priorities are:
 
-This repository has been syntax-checked and kernel-tested here, but the hundreds of gigabytes of upstream checkpoints cannot be downloaded or benchmarked against your physical GPU from this execution environment. The bootstrap performs those hardware-dependent steps on the target workstation and writes exact locks and smoke-test artifacts into `state/`. A component is not considered locally proven until those tests pass.
+1. expand the real-task Agent Olympics and evaluate additional harnesses behind the governed
+   tool seam;
+2. complete deterministic browser control before vision-based desktop autonomy;
+3. deepen crash/restart and idempotency testing for durable workflows;
+4. evaluate memory and observability challengers in shadow mode;
+5. make the workstation installation reproducible across more hardware.
 
-See `docs/ARCHITECTURE.md`, `docs/COLLABORATION.md`, `docs/SECURITY.md`,
-`docs/FINAL_STACK.md`, and `configs/models.yaml`.
-The machine-specific build sequence is in `docs/LOCAL_BUILD.md`.
-The selected browser, Windows UI, human-takeover and desktop-shell design is in
-`docs/AUTOMATION.md`.
-The dated reasoning, evaluated upstreams, rejected alternatives, and recheck triggers live
-in [knowledge/research.md](knowledge/research.md).
-Confirmed defects, their evidence, and the order in which they are being fixed live in
-[docs/FIXES.md](docs/FIXES.md).
+The project keeps a dated [decision ledger](knowledge/research.md), an evidence-backed
+[fix ledger](docs/FIXES.md), and an explicit [implementation inventory](docs/IMPLEMENTATION_STATUS.md).
+Those documents are long by design: ambitious local-agent claims should remain auditable.
 
-## Licence and contributing
+## Documentation
 
-Achilles is licensed under the [Apache License 2.0](LICENSE). Adapted third-party designs and
-formats are recorded in [NOTICE](NOTICE); model weights are downloaded from their own
-upstreams under their own terms and are not covered by this licence.
+- [Architecture](docs/ARCHITECTURE.md)
+- [Security model](docs/SECURITY.md)
+- [Implementation status](docs/IMPLEMENTATION_STATUS.md)
+- [Tournament architecture](docs/TOURNAMENT_ARCHITECTURE.md)
+- [Local workstation build](docs/LOCAL_BUILD.md)
+- [Automation and computer control](docs/AUTOMATION.md)
+- [Collaboration](docs/COLLABORATION.md)
+- [Sources and model provenance](docs/SOURCES.md)
+- [Research decision ledger](knowledge/research.md)
 
-Contributions are welcome — read [CONTRIBUTING.md](CONTRIBUTING.md) first, because this
-project has two non-negotiable rules (open source end to end, and the kernel owns authority)
-that shape what can be merged. Security issues go through [SECURITY.md](SECURITY.md), not
-public issues.
+## Contributing and security
+
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md). Architectural changes must state their authority and
+rollback boundaries; new capabilities need tests that begin at a real caller and end at a
+verified result.
+
+Do not open a public issue for a vulnerability. Follow [SECURITY.md](SECURITY.md) and use
+GitHub private vulnerability reporting.
+
+## License
+
+Achilles is licensed under the [Apache License 2.0](LICENSE). Model weights and independently
+licensed runtimes retain their upstream terms; see [NOTICE](NOTICE) and
+[Sources](docs/SOURCES.md).

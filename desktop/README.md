@@ -1,7 +1,22 @@
-# Tauri + React + Typescript
+# Achilles desktop
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+This directory contains the early Tauri + React operator client for Achilles. It talks to the
+authenticated local kernel API; it does not own policy, approvals, task state or model
+lifecycle.
 
-## Recommended IDE Setup
+## Development
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```bash
+npm ci
+npm run build
+npm run tauri dev
+```
+
+The Achilles kernel must be running locally for live data:
+
+```powershell
+../scripts/start.ps1
+```
+
+The desktop client is pre-alpha. See the root [implementation status](../docs/IMPLEMENTATION_STATUS.md)
+for supported and incomplete surfaces.

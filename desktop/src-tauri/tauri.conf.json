@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Local Sovereign AI",
+  "productName": "Achilles",
   "version": "0.1.0",
-  "identifier": "ai.localsovereign.desktop",
+  "identifier": "io.github.priyam1713.achilles",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

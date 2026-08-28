@@ -1,7 +1,6 @@
 name: ci
 
-# The 153 tests in tests/test_kernel.py existed for weeks with nothing running them on a
-# change (knowledge/research.md research wave 8, D-040). This workflow is that gate.
+# The kernel suite must remain runnable without downloading models or accessing a GPU.
 #
 # Nothing here downloads model weights, starts a GPU runtime or touches WSL: the kernel
 # suite is deliberately runnable without any of them, which is what makes it a usable CI
@@ -50,6 +49,36 @@ jobs:
       - name: Test
         run: uv run pytest -q
 
+  desktop:
+    name: desktop build
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Check Tauri crate
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+
   docs:
     name: documentation invariants
     runs-on: ubuntu-latest
@@ -69,7 +98,8 @@ jobs:
       # specific failure cannot recur silently.
       - name: Required project files
         run: |
-          for f in LICENSE NOTICE CONTRIBUTING.md SECURITY.md README.md \
+          for f in LICENSE NOTICE CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md \
+                   SUPPORT.md CHANGELOG.md README.md \
                    knowledge/research.md docs/IMPLEMENTATION_STATUS.md; do
             test -f "$f" || { echo "missing required file: $f"; exit 1; }
           done

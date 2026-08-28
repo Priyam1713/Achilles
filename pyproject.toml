@@ -34,6 +34,13 @@ dependencies = [
   "numpy>=2.2",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Priyam1713/Achilles"
+Documentation = "https://github.com/Priyam1713/Achilles/tree/main/docs"
+Repository = "https://github.com/Priyam1713/Achilles.git"
+Issues = "https://github.com/Priyam1713/Achilles/issues"
+Changelog = "https://github.com/Priyam1713/Achilles/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 dev = ["pytest>=8.4", "pytest-asyncio>=1.1", "ruff>=0.12"]
 ml = ["sentence-transformers>=5.0,<6"]
@@ -46,6 +53,27 @@ sovereign = "sovereign_ai.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sovereign_ai"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/sovereign_ai",
+  "tests",
+  "configs",
+  "scripts",
+  "README.md",
+  "LICENSE",
+  "NOTICE",
+  "CHANGELOG.md",
+  "CONTRIBUTING.md",
+  "SECURITY.md",
+]
+exclude = [
+  "configs/models.local.yaml",
+  "state",
+  "models",
+  "runtimes",
+  "outputs",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "scripts"]

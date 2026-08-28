@@ -1,0 +1,40 @@
+name: Feature proposal
+description: Propose a capability or architectural challenger
+title: "[Proposal]: "
+labels: ["proposal", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user outcome is currently difficult or impossible?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest useful implementation and its alternatives.
+    validations:
+      required: true
+  - type: textarea
+    id: authority
+    attributes:
+      label: Authority and failure boundary
+      description: What can it read, write, execute, authorize or persist? How does it fail closed?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Promotion evidence
+      description: How should it compete with the incumbent on task success, safety, latency and resources?
+    validations:
+      required: true
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback path
+      description: How can it be removed without corrupting authoritative state?
+    validations:
+      required: true
