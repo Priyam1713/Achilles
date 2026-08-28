@@ -20,6 +20,11 @@ interfaces and state formats may change without compatibility guarantees.
 - Kept upstream llama.cpp as the dense-GGUF incumbent; IQ4_XS directionally favored upstream,
   while Q6_K throughput remains explicitly inconclusive.
 
+### Fixed
+
+- Included the MCP bridge dependency in the development extra so the complete test suite runs
+  in a clean contributor or CI environment.
+
 ## [0.1.0] - 2026-08-28
 
 Initial public development baseline: authority kernel, governed tool plane, durable runs and
