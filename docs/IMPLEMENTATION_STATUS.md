@@ -278,6 +278,25 @@ to trigger compaction — the one built for it was solved with `grep` in two ste
 tournament runs entirely on the fast brain, so it would measure the cost and none of the
 benefit).
 
+## Research reconciliation and inference-runtime contest (2026-08-28)
+
+The proposed Cordis/Prime/DBOS/Hindsight/Buzz/OpenLIT stack has been reconciled against what
+this repository already implements and what 32 GiB RAM can sustain. The result is recorded in
+`docs/TOURNAMENT_ARCHITECTURE.md`: these systems remain challengers behind existing seams,
+not simultaneous resident services and not alternate sources of authority.
+
+One previously unresolved contest has now run on the exact GPU. A pinned, CUDA-built
+`ik_llama.cpp` loaded both personal Qwen3.8-27B GGUFs. Two passes directionally favored
+upstream for IQ4_XS, while the Q6_K decode leader flipped by sub-2% margins under fixed
+placement (F-070). Upstream therefore remains the dense GGUF incumbent because ik has not
+cleared a stable promotion gate; Q6 throughput itself is explicitly inconclusive. ik stays an
+on-demand MoE/novel-quant/Flash-Next challenger. No route changed.
+
+The same audit found a critical pre-download issue: WSL ext4's sparse VHDX reported roughly
+700 GiB free while the physical D: backing volume had only roughly 61 GiB. The storage gate now
+checks both and uses the smaller figure (F-071). A large checkpoint download is intentionally
+blocked until the physical layout changes.
+
 ## Hardware-bound steps performed by the one-shot bootstrap on the target workstation
 
 These cannot be truthfully pre-certified from a different machine:

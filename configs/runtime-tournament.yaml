@@ -1,0 +1,42 @@
+# Exact-machine GGUF engine tournament. Listing a runtime here never enables or promotes it.
+defaults:
+  n_prompt: 512
+  n_gen: 128
+  repetitions: 3
+  batch_size: 2048
+  ubatch_size: 512
+  threads: 10
+  cache_type_k: q8_0
+  cache_type_v: q8_0
+  flash_attention: true
+
+runtimes:
+  - id: llama-cpp
+    label: upstream llama.cpp (incumbent)
+    dialect: upstream
+    checkout: llama.cpp
+    binary: llama.cpp/build/bin/llama-bench
+    status: incumbent
+  - id: ik-llama-cpp
+    label: ik_llama.cpp (hybrid/low-bit challenger)
+    dialect: ik
+    checkout: ik_llama.cpp
+    binary: ik_llama.cpp/build-cuda/bin/llama-bench
+    status: challenger
+
+models:
+  - id: qwen38-27b-obliterated-iq4xs
+    label: Qwen3.8-27B OBLITERATED IQ4_XS
+    path: qwen38-27b-obliterated/gguf/Qwen3.8-27B-OBLITERATED-IQ4_XS.gguf
+    gpu_layers: 37
+  - id: qwen38-27b-obliterated-q6k
+    label: Qwen3.8-27B OBLITERATED Q6_K
+    path: qwen38-27b-obliterated/gguf/Qwen3.8-27B-OBLITERATED-Q6_K.gguf
+    gpu_layers: 26
+
+promotion_gates:
+  min_repetitions: 3
+  require_load_success: true
+  require_quality_eval: true
+  require_stability_eval: true
+  auto_promote: false

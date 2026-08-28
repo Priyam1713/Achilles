@@ -3692,6 +3692,55 @@ instead of an opinion.
   followed by a read returns the staged content while the real file still reads `original`;
   `apply` commits creates and deletes together and `discard` leaves the workspace untouched.
 
+### F-070 — Measured: upstream llama.cpp keeps the dense-Qwen runtime slot; ik_llama.cpp is now a reproducible challenger
+
+- **Severity:** `high` (the new research explicitly left the engine contest unresolved) ·
+  **Status:** `fixed` as an instrument and first measurement; promotion deliberately not
+  performed.
+- **Problem:** the architecture admitted `ik_llama.cpp` on plausible hybrid/low-bit strengths
+  but had no pinned source, reproducible build or same-machine A/B path. The workstation also
+  had an unrelated build under `~/src`, which is evidence of an experiment, not a project lock.
+- **Fix:** pinned `ikawrakow/ik_llama.cpp` at
+  `7cff686d3732bfef5ce18bc4a6115fbceda29c14`; added the opt-in
+  `scripts/install_runtime_contenders.sh`; and added
+  `configs/runtime-tournament.yaml` + `scripts/benchmark_runtimes.py`. The runner translates
+  the two CLIs' different Flash Attention values, fixes the same GPU-layer placement, records
+  commits/model identity/sample statistics/medians/peak VRAM/thermal and memory snapshots,
+  supports a reversed cell order, and writes evidence without changing a route.
+- **Live result (2026-08-28):** two passes with three repetitions per cell, pp512/tg128, ten threads, batch 2048,
+  ubatch 512, Q8_0 K/V, Flash Attention, 37 IQ4 layers and 26 Q6 layers on the GPU:
+
+  | Pass / model | upstream `dc72703fc` pp/tg | ik `7cff686d` pp/tg | Reading |
+  | --- | ---: | ---: | --- |
+  | A / IQ4_XS | **456.11 / 6.392** | 317.96 / 6.031 | upstream leads |
+  | B / IQ4_XS | **233.97 / 5.429** | 221.65 / 5.273 | upstream leads |
+  | A / Q6_K | **240.24 / 3.817** | 117.18 / 3.752 | upstream decode +1.7% |
+  | B / Q6_K | 97.59 / 3.751 | **158.10 / 3.802** | ik decode +1.4% |
+
+  IQ4 directionally favors upstream. Q6 is inconclusive: its decode winner flipped between
+  two sub-2% margins, and prompt samples exposed severe cold/warm variance. No routing change
+  is justified because a challenger must clear a stable promotion margin. The engines also
+  report different loaded
+  parameter counts for the same file (~27.321B vs ~26.896B), making a shared correctness/
+  quality run mandatory before a future promotion.
+- **Why ik stays:** current ik explicitly supports Qwen-3.8-Flash-Next and novel low-bit/MoE
+  paths that the existing dense files do not exercise. Losing this contest rejects a promotion,
+  not the contender.
+
+### F-071 — Fixed: sparse WSL2 VHDX capacity could overrun the physical Windows volume
+
+- **Severity:** `critical` (host-volume exhaustion during model download) · **Status:** `fixed`.
+- **Problem:** `scripts/verify_storage.sh` trusted `df` inside WSL. This distro's ext4 reports
+  roughly 700 GiB free, but its sparse `ext4.vhdx` lives under `D:\WSL` and D: has only about
+  61 GiB free. A `core`/Flash/large-model download could pass the 150 GiB virtual check and fill
+  the Windows volume underneath it.
+- **Fix:** the preflight now resolves the active distro's `BasePath` from the Windows Lxss
+  registry, reads the physical backing drive's free bytes, and gates on the smaller of virtual
+  and physical capacity. On WSL2 it fails closed when the backing volume cannot be resolved.
+- **Consequence:** this machine correctly refuses even the `core` 150 GiB safety gate until
+  physical space is freed or the distro/model store is deliberately moved. Flash-Next is a
+  metadata/runtime study only under the present storage layout.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.
