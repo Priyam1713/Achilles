@@ -3741,6 +3741,26 @@ instead of an opinion.
   physical space is freed or the distro/model store is deliberately moved. Flash-Next is a
   metadata/runtime study only under the present storage layout.
 
+### F-072 — Fixed: clean CI depended on an undeclared extra and live retrieval service
+
+- **Severity:** `high` (the public default development setup could not pass its own tests) ·
+  **Status:** `fixed`.
+- **Problem:** the full suite imports the MCP bridge, but `mcp` was declared only in the
+  optional `harness` extra while contributor and CI instructions installed `dev`. The local
+  workstation masked that omission because its environment already contained both extras.
+  Once fixed, GitHub's isolated runner exposed a second hidden dependency: searching lexical
+  memory tried to embed the query even when the local vector index was empty. A running local
+  specialist happened to satisfy that unnecessary call on the workstation; CI correctly had
+  no such external service.
+- **Fix:** `mcp` is now part of the declared development environment. `LocalVectorStore`
+  gained a scope-aware `has_vectors()` preflight, and `SpecialistVectorRetriever` returns an
+  empty vector result before loading/calling the embedder when there can be no candidates.
+  Lexical memory therefore remains usable with the optional specialist offline, and scope
+  filtering does not leak whether excluded vectors exist.
+- **Verification:** a newly created environment containing exactly `--extra dev` passes all
+  259 tests and ruff. New assertions prove an empty index makes zero embedding/reranking calls
+  and that the preflight honors unscoped, allowed and excluded project scopes.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

@@ -81,6 +81,26 @@ class LocalVectorStore:
         with self._con() as c:
             c.execute("DELETE FROM vectors WHERE id=?", (id,))
 
+    def has_vectors(self, allowed_projects: list[str] | None = None) -> bool:
+        """Return whether a scoped search has anything to query.
+
+        This cheap preflight lets callers avoid loading an embedding worker when the local
+        index is empty. It deliberately mirrors ``search_vector`` scope semantics so a
+        profile cannot infer that vectors exist outside its allowed projects.
+        """
+        sql = "SELECT 1 FROM vectors"
+        params: list[str] = []
+        if allowed_projects is not None:
+            if allowed_projects:
+                placeholders = ",".join("?" for _ in allowed_projects)
+                sql += f" WHERE (project IS NULL OR project IN ({placeholders}))"
+                params.extend(allowed_projects)
+            else:
+                sql += " WHERE project IS NULL"
+        sql += " LIMIT 1"
+        with self._con() as c:
+            return c.execute(sql, params).fetchone() is not None
+
     def search_vector(
         self, query: Iterable[float], limit: int = 20, allowed_projects: list[str] | None = None
     ):

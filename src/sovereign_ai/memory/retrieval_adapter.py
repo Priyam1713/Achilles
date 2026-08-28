@@ -61,6 +61,12 @@ class SpecialistVectorRetriever:
         """`allowed_projects` mirrors `MemoryStore.search_lexical`'s parameter of the same
         name (FIXES.md Tier 5) -- applied at the first (vector) stage, before reranking,
         so a scoped-out memory never even reaches the reranker."""
+        # An empty index has no candidates regardless of the query vector. Checking before
+        # embedding avoids launching a GPU worker for guaranteed-empty retrieval and keeps
+        # lexical memory usable when the optional specialist service is offline.
+        if not self.vector_store.has_vectors(allowed_projects=allowed_projects):
+            return []
+
         (query_vector,) = await self.embed([query])
         first_stage = self.vector_store.search_vector(
             query_vector, limit=limit * self.first_stage_multiplier, allowed_projects=allowed_projects

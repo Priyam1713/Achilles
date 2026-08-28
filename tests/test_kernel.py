@@ -1181,8 +1181,22 @@ def test_specialist_vector_retriever_returns_empty_when_index_is_empty(tmp_path)
 
     results = asyncio.run(drive())
     assert results == []
+    # No vector candidates means no reason to load or call the embedding worker either.
+    assert fake.embed_calls == []
     # No candidates to rerank -- must not call the reranker with an empty list.
     assert fake.rerank_calls == []
+
+
+def test_vector_store_empty_preflight_respects_project_scopes(tmp_path):
+    from sovereign_ai.memory.vector import LocalVectorStore
+
+    store = LocalVectorStore(tmp_path / "vec.db")
+    store.put("alpha", [1.0, 0.0], project="alpha")
+
+    assert store.has_vectors() is True
+    assert store.has_vectors(allowed_projects=["alpha"]) is True
+    assert store.has_vectors(allowed_projects=["beta"]) is False
+    assert store.has_vectors(allowed_projects=[]) is False
 
 
 def test_memory_indexer_embeds_and_stores_into_vector_store(tmp_path):

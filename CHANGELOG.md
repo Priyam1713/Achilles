@@ -24,6 +24,8 @@ interfaces and state formats may change without compatibility guarantees.
 
 - Included the MCP bridge dependency in the development extra so the complete test suite runs
   in a clean contributor or CI environment.
+- Kept lexical memory retrieval available without a specialist worker by avoiding query
+  embedding when the scoped vector index is empty.
 
 ## [0.1.0] - 2026-08-28
 
