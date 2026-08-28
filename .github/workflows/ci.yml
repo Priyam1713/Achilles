@@ -21,16 +21,11 @@ concurrency:
 
 jobs:
   kernel:
-    name: kernel tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    # Windows is the project's primary host but the suite has only ever been run on
-    # Linux/WSL here, so it stays informational until D-035's cross-platform work makes
-    # that claim honest in both directions.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+    name: kernel tests
+    runs-on: ubuntu-latest
+    # The proven workstation path executes the Python kernel inside WSL2. Native Windows
+    # kernel coverage returns only after its Unix-specific process tests have explicit
+    # platform boundaries; the separate desktop job still validates Tauri on Windows.
 
     steps:
       - uses: actions/checkout@v4

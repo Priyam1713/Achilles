@@ -26,6 +26,9 @@ interfaces and state formats may change without compatibility guarantees.
   in a clean contributor or CI environment.
 - Kept lexical memory retrieval available without a specialist worker by avoiding query
   embedding when the scoped vector index is empty.
+- Kept mandatory kernel CI on its proven Linux/WSL execution surface while validating the
+  Tauri desktop separately on Windows, instead of presenting a hanging native-Windows matrix
+  as meaningful coverage.
 
 ## [0.1.0] - 2026-08-28
 
