@@ -137,10 +137,24 @@ larger `workstation` profile.
 
 ## Give Achilles a task
 
+The fastest development path starts only the proven llama.cpp + Qwen3.5-9B + native-agent
+stack, authorizes the selected workspace for one hour, and immediately runs the task:
+
+```powershell
+.\Use.ps1 "fix the failing tests and explain the change" -Workspace C:\path\to\your\project
+```
+
+This is the provisional development profile: Qwen3.5-9B for fast/smart coding, governed
+native tools, and local execution. The heavier Qwen3.8-27B remains available through
+`--mode deep`; optional harness/runtime contests no longer block development.
+
+The equivalent explicit commands are:
+
 ```powershell
 uv run sovereign workspace add C:\path\to\your\project
+uv run sovereign grant cli-operator write workspace --ttl-seconds 3600
 uv run sovereign run "explain this repository and run its tests" `
-  --workspace C:\path\to\your\project
+  --workspace C:\path\to\your\project --subject cli-operator
 ```
 
 Mutating actions are refused unless a capability grant covers them or the operator explicitly

@@ -28,8 +28,14 @@ if ((Port-Up 18080) -and -not (Expected-Router)) {
   throw "Port 18080 is occupied by a service that is not this installation's llama.cpp router."
 }
 if (-not (Port-Up 18080)) {
-  & wsl -d $Distro bash -lc "cd '$linuxPath' && source scripts/runtime_env.sh && nohup ./scripts/start_llama_router.sh '$linuxPath' > \"`$SOAI_STATE_DIR/llama-router.log\" 2>&1 &"
-  if ($LASTEXITCODE -ne 0) { throw "Failed to launch llama.cpp router." }
+  $statePath = Join-Path $wslData "state"
+  $routerProcess = Start-Process -FilePath "wsl.exe" `
+    -ArgumentList @("-d", $Distro, "--", "$linuxPath/scripts/start_llama_router.sh", $linuxPath) `
+    -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput (Join-Path $statePath "llama-router.stdout.log") `
+    -RedirectStandardError (Join-Path $statePath "llama-router.stderr.log")
+  if ($null -eq $routerProcess) { throw "Failed to launch llama.cpp router." }
+  $routerProcess.Dispose()
   $ready = $false
   for ($attempt = 0; $attempt -lt 60; $attempt++) {
     Start-Sleep -Seconds 1

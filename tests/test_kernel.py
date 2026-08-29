@@ -59,6 +59,18 @@ def test_route_fast_brain(tmp_path, monkeypatch):
     assert d.selected.model_id == "qwen35-9b"
 
 
+def test_route_coding_uses_resident_model_until_deep_mode(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+
+    smart = k.scheduler.route(CapabilityRequest(capability="coding", mode=RoutingMode.SMART))
+    deep = k.scheduler.route(CapabilityRequest(capability="coding", mode=RoutingMode.DEEP))
+
+    assert smart.selected is not None
+    assert smart.selected.model_id == "qwen35-9b"
+    assert deep.selected is not None
+    assert deep.selected.model_id == "qwen38-27b"
+
+
 def test_route_dispatches_without_weighted_scoring_when_uncontested(tmp_path, monkeypatch):
     """FIXES.md F-006: 84 of 89 capabilities have exactly one eligible candidate, so
     weighing it against itself cannot change the outcome. `orchestration_fast` is one of

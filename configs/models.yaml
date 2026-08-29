@@ -58,6 +58,7 @@ models:
   status: final
   install_policy: sync
   capabilities:
+  - coding
   - orchestration_fast
   - tool_routing
   - vision_language
@@ -72,7 +73,10 @@ models:
       local_build: true
   quality_prior: 0.88
   resident_priority: 100
-  notes: System-1 resident loop brain; benchmark against smaller/faster future models.
+  notes: >-
+    Provisional fast/smart coding and resident loop brain. It won the valid local canary
+    on efficiency and remains the development default while the incomplete harness
+    tournament is deferred; deep coding can still route to Qwen3.8-27B.
   estimated_vram_mb: 9000
   can_cpu_offload: true
   commercial_allowed: true
