@@ -3816,6 +3816,8 @@ def test_action_schema_is_derived_from_the_registered_tools(tmp_path, monkeypatc
     # requiring `tool` would make every batch structurally invalid (F-059).
     assert "required" not in schema
     assert "batch" in schema["properties"]
+    batch_names = schema["properties"]["batch"]["items"]["properties"]["tool"]["enum"]
+    assert "done" not in batch_names
 
 
 def test_loop_constrains_decoding_with_the_action_schema(tmp_path, monkeypatch):
@@ -3950,6 +3952,28 @@ def test_short_history_is_left_alone():
     history = [{"assistant": "one", "action": {"tool": "read_file"}, "observation": {}}]
     rendered, note = compact_history(history, ContextBudget())
     assert rendered == history and note is None
+
+
+def test_compact_history_accepts_batched_observation_lists():
+    from sovereign_ai.agents.context import ContextBudget, compact_history
+
+    batch = {
+        "assistant": "batch",
+        "action": {"batch": [{"tool": "read_file"}, {"tool": "write_file"}]},
+        "observation": [
+            {"tool": "read_file", "observation": {"content": "x"}},
+            {"tool": "write_file", "observation": {"error": "denied", "denied": True}},
+        ],
+    }
+    history = [
+        {"assistant": "first", "action": {"tool": "read_file"}, "observation": {}},
+        batch,
+        {"assistant": "recent", "action": {"tool": "read_file"}, "observation": {}},
+    ]
+    _, note = compact_history(
+        history, ContextBudget(keep_leading_turns=1, keep_recent_turns=1)
+    )
+    assert note["tools"] == {"batch(2)(denied)": 1}
 
 
 def test_loop_compacts_a_long_history_and_records_it(tmp_path, monkeypatch):
@@ -4894,7 +4918,9 @@ def test_action_schema_offers_a_bounded_batch(tmp_path, monkeypatch):
     batch = schema["properties"]["batch"]
     assert batch["type"] == "array"
     assert batch["maxItems"] == MAX_BATCH
-    assert set(batch["items"]["properties"]["tool"]["enum"]) == set(k.tool_dispatcher.names()) | {"done"}
+    assert set(batch["items"]["properties"]["tool"]["enum"]) == set(
+        k.tool_dispatcher.names()
+    )
 
 
 def test_read_only_batches_run_concurrently(tmp_path, monkeypatch):

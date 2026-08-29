@@ -118,7 +118,8 @@ class ToolDispatcher:
         their own arguments and return a legible error, which a model can act on, whereas
         an over-tight grammar produces a truncated or looping generation, which it cannot.
         """
-        names = [*(spec.id for spec in (specs if specs is not None else self.specs())), "done"]
+        tool_names = [spec.id for spec in (specs if specs is not None else self.specs())]
+        names = [*tool_names, "done"]
         return {
             "type": "object",
             "properties": {
@@ -136,7 +137,10 @@ class ToolDispatcher:
                     "items": {
                         "type": "object",
                         "properties": {
-                            "tool": {"type": "string", "enum": names},
+                            # Completion is a top-level action, never one element of a
+                            # batch. Treating `done` as a tool produced an unknown-tool
+                            # observation and forced another turn after work was complete.
+                            "tool": {"type": "string", "enum": tool_names},
                             "args": {"type": "object"},
                         },
                         "required": ["tool"],

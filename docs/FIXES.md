@@ -3837,6 +3837,25 @@ instead of an opinion.
   the coordinator deadline; native is bounded by the same coordinator clock. A live
   five-second OpenCode timeout returned `harness_timeout` at 4.04s, preserved that root cause
   ahead of verifier evidence, and left no `opencode run` child behind.
+
+### F-076 — Fixed: batched native observations crashed only after successful long tasks
+
+- **Severity:** `critical` (a coordinator type error penalized a harness after its candidate
+  already passed held-out verification) · **Status:** `fixed`; the interrupted eight-cell
+  campaign is invalid and will not be resumed.
+- **Problem:** native batch history correctly stores a list of per-tool observations. Once
+  history crossed the compaction threshold, `_observation_digest()` assumed every observation
+  was a dictionary and called `.get()` on that list. The live cross-file task changed both
+  modules correctly and passed its held-out contract, then was reported `harness_error` on the
+  next turn. The action schema separately allowed `done` inside a batch, which dispatched it as
+  a nonexistent tool instead of ending the run.
+- **Fix:** compaction now digests batch lists, including nested denial/error state. Batch schema
+  tool names exclude `done`; completion remains top-level only. Unexpected coordinator
+  exceptions now retain a bounded traceback in schema-v3 results so future infrastructure
+  defects are diagnosable from the checkpoint itself.
+- **Verification:** regression tests cover a denied two-tool batch crossing the compaction
+  boundary and assert `done` is absent from the batch-item enum. The partial campaign and all
+  subprocesses were stopped cleanly before changing the composition under test.
 - **Verification:** a unit test pins the full two-task/two-repeat rotation. The production
   checkpoint is written once before inference and after each result, so even termination
   between cells leaves valid partial evidence rather than an absent final report. A live

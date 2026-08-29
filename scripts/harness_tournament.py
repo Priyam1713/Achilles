@@ -33,6 +33,7 @@ import statistics
 import subprocess
 import sys
 import time
+import traceback
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -246,7 +247,15 @@ async def run_task(
             )
             break
         except Exception as exc:
-            steps.append({"kind": "harness_error", "payload": {"error": f"{type(exc).__name__}: {exc}"}})
+            steps.append(
+                {
+                    "kind": "harness_error",
+                    "payload": {
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "traceback": traceback.format_exc()[-4000:],
+                    },
+                }
+            )
             break
         steps.append({"kind": step.kind, "payload": step.payload})
         observation = step.payload.get("observation") if step.kind == "observation" else None
@@ -293,6 +302,7 @@ async def run_task(
         "detail": detail,
         "outcome": terminal,
         "terminal_error": terminal_error,
+        "terminal_traceback": terminal_payload.get("traceback"),
         "steps_taken": len(steps),
         "denied_attempts": denied_attempts,
         "wall_time_s": round(elapsed, 2),

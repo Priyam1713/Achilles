@@ -59,8 +59,23 @@ def load_project_instructions(workspace: str | Path | None) -> str | None:
 
 def _observation_digest(turn: dict[str, Any]) -> str:
     action = turn.get("action") or {}
-    tool = action.get("tool") or "reply"
+    tool = action.get("tool") or (
+        f"batch({len(action.get('batch') or ())})" if action.get("batch") else "reply"
+    )
     observation = turn.get("observation") or {}
+    if isinstance(observation, list):
+        nested = [
+            item.get("observation")
+            for item in observation
+            if isinstance(item, dict) and isinstance(item.get("observation"), dict)
+        ]
+        if any(item.get("denied") for item in nested):
+            return f"{tool}(denied)"
+        if any(item.get("error") for item in nested):
+            return f"{tool}(error)"
+        return str(tool)
+    if not isinstance(observation, dict):
+        return str(tool)
     if observation.get("denied"):
         return f"{tool}(denied)"
     if observation.get("error"):
