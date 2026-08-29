@@ -185,6 +185,7 @@ async def run_task(
     metrics_url: str | None = None,
     metrics_model: str | None = None,
     attempt: int = 1,
+    attempt_timeout_s: float = 300.0,
 ) -> dict[str, Any]:
     # Scoped by loop_name as well as task.id: two loops running the same task must not
     # share a workspace, or the second loop's setup() collides with the first loop's
@@ -229,9 +230,21 @@ async def run_task(
     # on one scale -- including the subprocess ones whose internals we cannot see.
     before = snapshot(metrics_url, metrics_model) if metrics_url and metrics_model else None
     started = time.perf_counter()
+    deadline = started + attempt_timeout_s
     while True:
         try:
-            step = await loop.next_step(state)
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                raise TimeoutError
+            step = await asyncio.wait_for(loop.next_step(state), timeout=remaining)
+        except TimeoutError:
+            steps.append(
+                {
+                    "kind": "harness_timeout",
+                    "payload": {"error": f"attempt exceeded {attempt_timeout_s:g}s"},
+                }
+            )
+            break
         except Exception as exc:
             steps.append({"kind": "harness_error", "payload": {"error": f"{type(exc).__name__}: {exc}"}})
             break
@@ -300,6 +313,7 @@ async def run_tournament(
     metrics_model: str | None = None,
     initial_results: list[dict[str, Any]] | None = None,
     on_result: Callable[[list[dict[str, Any]]], None] | None = None,
+    attempt_timeout_s: float = 300.0,
 ) -> list[dict[str, Any]]:
     results = list(initial_results or ())
     completed = {
@@ -320,7 +334,7 @@ async def run_tournament(
         print(f"{label}...", end=" ", flush=True)
         result = await run_task(
             kernel, loop_name, task, workspace_root, capability, mode,
-            metrics_url, metrics_model, attempt,
+            metrics_url, metrics_model, attempt, attempt_timeout_s,
         )
         status = "PASS" if result["passed"] else "FAIL"
         cost = ""
@@ -369,6 +383,7 @@ async def run_tournament_with_tool_plane(
     metrics_model: str | None,
     initial_results: list[dict[str, Any]] | None = None,
     on_result: Callable[[list[dict[str, Any]]], None] | None = None,
+    attempt_timeout_s: float = 300.0,
 ) -> list[dict[str, Any]]:
     """Run with an embedded API when a selected harness reaches tools over HTTP."""
     tool_clients = []
@@ -436,6 +451,7 @@ async def run_tournament_with_tool_plane(
             metrics_model,
             initial_results,
             on_result,
+            attempt_timeout_s,
         )
     finally:
         if server is not None and server_task is not None:
@@ -618,6 +634,12 @@ def main() -> int:
         "the same brain rather than on whatever each defaulted to",
     )
     parser.add_argument(
+        "--attempt-timeout",
+        type=float,
+        default=300.0,
+        help="Equal wall-time budget in seconds for every harness attempt (minimum 5)",
+    )
+    parser.add_argument(
         "--allow-model-mismatch",
         action="store_true",
         help="Permit native and subprocess loops to use different models. Token accounting "
@@ -630,6 +652,8 @@ def main() -> int:
         "can be compared on the same brain rather than on whatever each defaulted to",
     )
     args = parser.parse_args()
+    if args.attempt_timeout < 5:
+        parser.error("--attempt-timeout must be at least 5 seconds")
 
     try:
         selected_tasks = select_tasks(args.suite, args.tasks, args.categories)
@@ -673,6 +697,15 @@ def main() -> int:
                 print(f"  {name}: model set to {args.external_model}")
 
     loop_names = args.loops or kernel.agent_loops.names()
+    # External adapters own their subprocess cleanup and therefore fire one second before
+    # the coordinator's universal deadline. Native uses the coordinator deadline directly.
+    for name in loop_names:
+        try:
+            loop = kernel.agent_loops.get(name)
+        except KeyError:
+            continue
+        if hasattr(loop, "timeout_s"):
+            loop.timeout_s = args.attempt_timeout - 1
     native_model = _native_model(kernel, args.capability, args.mode)
     model_mismatch = bool(
         "native" in loop_names
@@ -727,6 +760,7 @@ def main() -> int:
         "mode": args.mode,
         "metrics_model": metrics_model,
         "external_model": args.external_model,
+        "attempt_timeout_s": args.attempt_timeout,
         "git_head": git_provenance["head"],
         "cell_order": cell_order,
     }
@@ -781,6 +815,7 @@ def main() -> int:
             "metrics_model": metrics_model,
             "metrics_prewarmed": metrics_prewarmed,
             "external_model": args.external_model,
+            "attempt_timeout_s": args.attempt_timeout,
             "git": git_provenance,
             "environment": {
                 "platform": platform.platform(),
@@ -804,6 +839,7 @@ def main() -> int:
         run_tournament_with_tool_plane(
             kernel, loop_names, selected_tasks, workspace_root, args.capability, args.mode,
             args.repeats, metrics_url, metrics_model, initial_results, checkpoint,
+            args.attempt_timeout,
         )
     )
 

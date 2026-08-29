@@ -226,6 +226,7 @@ class OpenCodeAgentLoop(AgentLoop):
             "--auto",
             task,
         ]
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -236,6 +237,9 @@ class OpenCodeAgentLoop(AgentLoop):
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self.timeout_s)
         except TimeoutError:
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+                await proc.wait()
             return AgentStep(
                 kind="harness_timeout",
                 payload={"error": f"opencode exceeded {self.timeout_s}s"},

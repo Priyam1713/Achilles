@@ -68,7 +68,9 @@ recoverable evidence, never a finished scorecard.
 
 The default remains `micro` so an old command cannot quietly produce an incomparable report.
 Use at least three attempts per stochastic task and hold the model endpoint, tool plane and
-workspace fixture constant when comparing loops. Do not collapse categories into one winner:
+workspace fixture constant when comparing loops. `--attempt-timeout` applies one recorded
+whole-attempt budget to every loop; subprocess adapters terminate and reap their child before
+the coordinator deadline. Do not collapse categories into one winner:
 a composition advances only when its task profile improves enough to justify its latency,
 memory, authority surface and operational footprint, with no safety regression.
 

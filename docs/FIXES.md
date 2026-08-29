@@ -3829,9 +3829,14 @@ instead of an opinion.
   **Status:** `fixed` as tournament infrastructure; no winner declared.
 - **Fix:** schema-v3 reports are atomically checkpointed after every cell. `--resume` accepts
   prior cells only when a campaign hash over the Git revision, suite manifest, loop/model
-  variables, repetitions and exact cell order matches. A deterministic rotating schedule
+  variables, repetitions, common attempt timeout and exact cell order matches. A deterministic rotating schedule
   counterbalances loop position across task/repeat blocks. Reports expose expected/completed
   cell counts and an explicit completion flag, while retaining `promotion_performed: false`.
+- **Fairness boundary:** `--attempt-timeout` is one whole-attempt budget for every loop.
+  External adapters fire one second earlier so they can kill and reap their subprocess before
+  the coordinator deadline; native is bounded by the same coordinator clock. A live
+  five-second OpenCode timeout returned `harness_timeout` at 4.04s, preserved that root cause
+  ahead of verifier evidence, and left no `opencode run` child behind.
 - **Verification:** a unit test pins the full two-task/two-repeat rotation. The production
   checkpoint is written once before inference and after each result, so even termination
   between cells leaves valid partial evidence rather than an absent final report. A live
