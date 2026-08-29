@@ -3862,6 +3862,23 @@ instead of an opinion.
   one-cell campaign wrote a complete schema-v3 checkpoint; rerunning the identical command
   with `--resume` loaded `1/1` cells and performed no task inference.
 
+### F-077 — Fixed: OpenShell uploaded the verifier one directory below its execution cwd
+
+- **Severity:** `critical` (correct candidate patches were deterministically scored as
+  failures whenever authenticated OpenShell became the preferred verifier backend) ·
+  **Status:** `fixed`; affected campaign cells are invalid infrastructure evidence.
+- **Problem:** OpenShell preserves the basename of an uploaded directory. Uploading a host
+  workspace to `/tmp/project` therefore produced `/tmp/project/<workspace-name>`, while the
+  backend executed from `/tmp/project`. The held-out `verify.py` existed and was uploaded but
+  was one level below the command's working directory.
+- **Fix:** upload each workspace to `/tmp`, execute inside `/tmp/<workspace-name>`, and
+  download that same directory for transactional reconciliation. The directory name is shell
+  quoted and the existing tree validation, read-only verifier registration and rollback
+  boundaries remain unchanged.
+- **Verification:** unit tests pin both the execution cwd and sync-back download directory.
+  A live `swe-empty-mean` canary then passed through the native harness and authenticated
+  OpenShell held-out verification in 16.69 seconds and four agent steps.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

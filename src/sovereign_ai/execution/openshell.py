@@ -125,11 +125,16 @@ class OpenShellBackend(ExecutionBackend):
         sandbox = f"soai-{secrets.token_hex(5)}"  # short names avoid driver/name edge cases.
         policy = self._host_path_for_cli(self.policy_path)
         source = self._host_path_for_cli(workspace)
-        # The current base image runs as an unprivileged user and does not permit creating
-        # /workspace.  /tmp is explicitly writable in our policy and is already isolated
-        # per sandbox, so it is the correct copy-in root.
-        sandbox_workspace = "/tmp/project"
-        command = f"cd {sandbox_workspace} && exec {shlex.join(list(argv))}"
+        # OpenShell uploads a directory *under* the requested destination, preserving its
+        # basename; it does not copy the directory's contents directly into that path.
+        # Therefore `source:/tmp` becomes `/tmp/<source.name>`.  Treating the destination
+        # itself as the workspace made every command run one level too high and caused the
+        # held-out verifier to disappear from view (F-077).
+        #
+        # The current base image runs as an unprivileged user and /tmp is the writable,
+        # sandbox-isolated upload root allowed by our policy.
+        sandbox_workspace = f"/tmp/{workspace.name}"
+        command = f"cd {shlex.quote(sandbox_workspace)} && exec {shlex.join(list(argv))}"
         backend = "openshell-wsl2" if self._prefix() else "openshell"
 
         # Keep the sandbox only long enough to retrieve successful mutations.
@@ -142,7 +147,7 @@ class OpenShellBackend(ExecutionBackend):
             "--policy",
             policy,
             "--upload",
-            f"{source}:{sandbox_workspace}",
+            f"{source}:/tmp",
             "--no-git-ignore",
             "--",
             "sh",
@@ -167,7 +172,7 @@ class OpenShellBackend(ExecutionBackend):
                     "sandbox",
                     "download",
                     sandbox,
-                    "project",
+                    workspace.name,
                     stage_cli,
                 )
                 stdout += dl_out
@@ -175,7 +180,7 @@ class OpenShellBackend(ExecutionBackend):
                 if dl_rc != 0:
                     return ExecutionResult(dl_rc, stdout, stderr, backend)
 
-                staged = stage_parent / "project"
+                staged = stage_parent / workspace.name
                 if not staged.exists():
                     # Be strict rather than guessing a destination layout that could commit the wrong tree.
                     return ExecutionResult(

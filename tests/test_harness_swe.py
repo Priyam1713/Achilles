@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -282,3 +283,49 @@ def test_openshell_validates_tree_even_when_sync_back_is_disabled(monkeypatch, t
     else:
         raise AssertionError("unsafe read-only workspace was not rejected")
     assert validated == [tmp_path.resolve()]
+
+
+def test_openshell_runs_inside_uploaded_directory_not_its_parent(monkeypatch, tmp_path):
+    backend = OpenShellBackend()
+    backend._windows_wsl = False
+    monkeypatch.setattr(backend, "available", lambda: True)
+    calls = []
+
+    async def fake_cli(*args):
+        calls.append(args)
+        return 0, "", ""
+
+    monkeypatch.setattr(backend, "_cli", fake_cli)
+    result = asyncio.run(backend.run(["python3", "verify.py"], str(tmp_path), sync_back=False))
+
+    assert result.returncode == 0
+    create = calls[0]
+    upload = create[create.index("--upload") + 1]
+    assert upload == f"{tmp_path.resolve()}:/tmp"
+    command = create[-1]
+    assert f"cd /tmp/{tmp_path.name}" in command
+
+
+def test_openshell_downloads_the_uploaded_workspace_directory(monkeypatch, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "result.txt").write_text("before", encoding="utf-8")
+    backend = OpenShellBackend()
+    backend._windows_wsl = False
+    monkeypatch.setattr(backend, "available", lambda: True)
+    calls = []
+
+    async def fake_cli(*args):
+        calls.append(args)
+        if args[:2] == ("sandbox", "download"):
+            destination = Path(args[-1]) / workspace.name
+            shutil.copytree(workspace, destination)
+            (destination / "result.txt").write_text("after", encoding="utf-8")
+        return 0, "", ""
+
+    monkeypatch.setattr(backend, "_cli", fake_cli)
+    result = asyncio.run(backend.run(["true"], str(workspace), sync_back=True))
+
+    assert result.returncode == 0
+    assert calls[1][3] == workspace.name
+    assert (workspace / "result.txt").read_text(encoding="utf-8") == "after"
