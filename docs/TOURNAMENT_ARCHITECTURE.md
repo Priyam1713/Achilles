@@ -1,6 +1,6 @@
 # Tournament architecture — evidence before incumbency
 
-**Audit date:** 2026-08-28
+**Audit date:** 2026-08-29
 **Target:** HP OMEN MAX, Ryzen AI 9 HX 375, RTX 5070 Ti Laptop 12,227 MiB,
 31.29 GiB RAM, WSL2 Ubuntu 24.04
 
@@ -9,6 +9,32 @@ every named service or replace the kernel by reputation. Achilles already has a 
 tested authority plane and has measured four agent loops on this workstation. A new
 component enters behind a seam, runs the same tasks, and earns promotion. No README result
 is a local result.
+
+## Project charter
+
+Achilles is an **open-source, local-model-first systems tournament** whose primary objective
+is useful software-engineering performance on this exact workstation. Coding, debugging,
+repository comprehension, tool use and long-horizon development tasks carry the most weight.
+Reasoning, research, memory, browser/GUI work, recovery and security remain first-class
+secondary tracks because a narrow coding score cannot establish that a complete system is
+capable or trustworthy.
+
+The optimization target is the composition, not a bag of individually impressive parts. A
+greedy winner at every layer can still produce a slower, less reliable system through duplicated
+state, incompatible protocols, excess idle RAM, context loss or competing schedulers. Treat the
+architecture as a constrained composition problem: retain several viable candidates, measure
+component interactions, and promote the smallest combination that improves end-to-end task
+success under the workstation's RAM, VRAM, storage, latency and safety limits.
+
+The build rule is **reuse before invention**. Adopt or adapt a maintained open-source component
+when it satisfies the layer contract. Write custom code only for a missing contract, an authority
+boundary that cannot safely be delegated, or a measured opportunity to outperform every suitable
+existing option at acceptable implementation cost. Existing Achilles code is an incumbent, not
+an entitlement: it competes under the same evidence and deletion rules as external projects.
+
+Remote model APIs are deferred. OpenAI-compatible protocol support currently connects local
+servers and harnesses; no configured engine is remote. A future remote-provider contest requires
+an explicit phase change, data-boundary review and separate budget policy.
 
 ## Non-negotiable invariants
 
@@ -32,9 +58,24 @@ is a local result.
 | GPU | RTX 5070 Ti Laptop, 12,227 MiB, Blackwell SM120, 101 W cap | Keep roughly 1.6–2.0 GiB free for desktop/runtime buffers; one model or grounder at a time. |
 | RAM | 31.29 GiB usable | Preserve 8–10 GiB for Windows, WSL and the control plane. Q6 is paging-sensitive. |
 | CPU | Ryzen AI 9 HX 375, 12C/24T; WSL exposes 20 threads, AVX2/AVX-512 | Hybrid inference is viable but memory-bandwidth-bound. Ten benchmark threads are the current control. |
-| Storage | WSL ext4 claims ~700 GiB free, but its sparse VHDX is on D: with only ~61 GiB physical free | `df` is unsafe as the only gate. Flash-Next cannot be downloaded into the current store. |
+| Storage | After the 2026-08-29 cleanup, WSL reports ~189 GiB used while its D:-backed VHDX remains ~260 GiB physically allocated and D: has ~63 GiB free | `df` is unsafe as the only gate. The trimmed VHDX still needs an elevated, offline compact before its deleted blocks become Windows free space. Flash-Next cannot be downloaded into the current store. |
 | Fast brain | Qwen3.5-9B Q6_K, previously measured 49.57 decode tok/s | Resident/default tool-turn candidate. |
 | Deep brain | Qwen3.8-27B quants, hybrid CPU/GPU | Explicit on-demand quality gear, not the normal tool loop. |
+
+### 2026-08-29 host cleanup baseline
+
+The pre-tournament cleanup preserved source, Git history, benchmark evidence, active model
+contenders and uncommitted experimental work. It removed reproducible Rust/Python/Node build
+outputs, package caches, abandoned partial downloads, a duplicate byte-verified Qwen3.8 cache,
+and Qwen3.5 raw/F16 conversion inputs after retaining the verified Q6_K. WSL logical usage fell
+from roughly 258 GiB to 189 GiB; E: free space rose from 254.99 GiB to 289.50 GiB. The legacy
+`local-ai` gateway and freshness timer were disabled so opening WSL no longer reserves port 8080
+or starts an obsolete model plane. OpenShell remains enabled.
+
+The Windows host could trim but could not compact the detached VHD without elevation. No risky
+export/unregister/import cycle and no experimental sparse-VHD conversion was attempted. Physical
+D: space therefore remains the binding constraint until an administrator runs an offline VHD
+compact and re-measures the result.
 
 ## Correct topology
 
