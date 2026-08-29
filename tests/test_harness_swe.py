@@ -10,6 +10,7 @@ from pathlib import Path
 from harness_swe_tasks import SOFTWARE_ENGINEERING_TASKS
 from harness_tasks import MICRO_TASKS, TASKS
 from harness_tournament import (
+    campaign_cells,
     finalise_task_outcome,
     run_held_out_verification,
     select_tasks,
@@ -52,6 +53,25 @@ def test_suite_selection_preserves_manifest_order_and_rejects_unknown_tasks():
         assert "not in suite" in str(exc)
     else:
         raise AssertionError("cross-suite task selection should fail")
+
+
+def test_campaign_cells_counterbalance_loop_position_deterministically():
+    tasks = SOFTWARE_ENGINEERING_TASKS[:2]
+    cells = campaign_cells(["native", "pi", "goose"], tasks, repeats=2)
+    assert [(loop, task.id, attempt) for loop, task, attempt in cells] == [
+        ("native", tasks[0].id, 1),
+        ("pi", tasks[0].id, 1),
+        ("goose", tasks[0].id, 1),
+        ("pi", tasks[1].id, 1),
+        ("goose", tasks[1].id, 1),
+        ("native", tasks[1].id, 1),
+        ("pi", tasks[0].id, 2),
+        ("goose", tasks[0].id, 2),
+        ("native", tasks[0].id, 2),
+        ("goose", tasks[1].id, 2),
+        ("native", tasks[1].id, 2),
+        ("pi", tasks[1].id, 2),
+    ]
 
 
 def test_every_initial_swe_fixture_fails_its_held_out_contract(tmp_path):

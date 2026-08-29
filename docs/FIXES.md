@@ -3816,10 +3816,27 @@ instead of an opinion.
 - **Verification:** focused tests pin the generation ceiling and schema fallback, OpenShell's
   misleading zero-exit status, embedded-kernel identity, terminal-error precedence and the
   rule that incomplete harnesses cannot score a pass. A fresh one-task live canary then passed
-  through both harnesses and independent Docker verification with prewarmed counters: native
-  1/1 in 14.90s (four steps, 5,722 total/595 generated tokens), Pi 1/1 in 19.21s (one
-  subprocess invocation, 13,840 total/789 generated tokens). This is infrastructure
-  validation, not a promotion or a statistically meaningful harness result.
+  through all four governed harnesses and independent Docker verification with prewarmed
+  counters: native 1/1 in 14.90s (5,722 total/595 generated tokens), Pi 1/1 in 19.21s
+  (13,840/789), Goose 1/1 in 25.36s (16,308/676), and OpenCode 1/1 in 38.06s
+  (20,986/519). This is infrastructure/admission validation, not a promotion or a
+  statistically meaningful harness result.
+
+### F-075 — Fixed: repeated harness campaigns were neither durable nor counterbalanced
+
+- **Severity:** `high` (the required 96-cell SWE campaign could lose hours on interruption,
+  and fixed loop order could confound harness effects with cold/warm or thermal position) ·
+  **Status:** `fixed` as tournament infrastructure; no winner declared.
+- **Fix:** schema-v3 reports are atomically checkpointed after every cell. `--resume` accepts
+  prior cells only when a campaign hash over the Git revision, suite manifest, loop/model
+  variables, repetitions and exact cell order matches. A deterministic rotating schedule
+  counterbalances loop position across task/repeat blocks. Reports expose expected/completed
+  cell counts and an explicit completion flag, while retaining `promotion_performed: false`.
+- **Verification:** a unit test pins the full two-task/two-repeat rotation. The production
+  checkpoint is written once before inference and after each result, so even termination
+  between cells leaves valid partial evidence rather than an absent final report. A live
+  one-cell campaign wrote a complete schema-v3 checkpoint; rerunning the identical command
+  with `--resume` loaded `1/1` cells and performed no task inference.
 
 ## Priority order
 

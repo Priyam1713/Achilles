@@ -198,9 +198,10 @@ old result.
 
 The engineering tasks are checked after the loop by held-out standard-library verifiers in
 a copied, read-only workspace through the hardened execution broker. Model-written Python is
-never imported into the coordinator. The report format is now schema version 2 and records
+never imported into the coordinator. The report format is now schema version 3 and records
 the ordered manifest and verifier hashes, Git state, environment, model variables, repeats,
-category/outcome distributions and median latency. It still cannot promote anything. The
+counterbalanced cell order, atomic resume checkpoints, category/outcome distributions and
+median latency. It still cannot promote anything. The
 full contract and commands are documented in [`docs/BENCHMARKS.md`](BENCHMARKS.md).
 
 No live harness winner is claimed from this implementation pass. A full local contest needs

@@ -34,6 +34,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -74,6 +75,26 @@ def finalise_task_outcome(
     if verification_detail:
         detail += f"; verification: {verification_detail}"
     return False, detail, terminal_error
+
+
+def campaign_cells(
+    loop_names: list[str], tasks: list[HarnessTask], repeats: int
+) -> list[tuple[str, HarnessTask, int]]:
+    """Counterbalance loop position across task/repeat cells.
+
+    A fixed outer loop makes the first harness systematically colder and the last one
+    systematically hotter. Rotating the order is a small deterministic Latin-square-like
+    schedule: reproducible, but without granting one loop the same position everywhere.
+    """
+    cells: list[tuple[str, HarnessTask, int]] = []
+    if not loop_names:
+        return cells
+    for attempt in range(1, repeats + 1):
+        for task_index, task in enumerate(tasks):
+            offset = (task_index + attempt - 1) % len(loop_names)
+            ordered = [*loop_names[offset:], *loop_names[:offset]]
+            cells.extend((loop_name, task, attempt) for loop_name in ordered)
+    return cells
 
 
 async def run_held_out_verification(
@@ -277,36 +298,44 @@ async def run_tournament(
     repeats: int = 1,
     metrics_url: str | None = None,
     metrics_model: str | None = None,
+    initial_results: list[dict[str, Any]] | None = None,
+    on_result: Callable[[list[dict[str, Any]]], None] | None = None,
 ) -> list[dict[str, Any]]:
-    results = []
-    for loop_name in loop_names:
+    results = list(initial_results or ())
+    completed = {
+        (result["loop"], result["task_id"], int(result.get("attempt", 1)))
+        for result in results
+    }
+    for loop_name, task, attempt in campaign_cells(loop_names, tasks, repeats):
+        if (loop_name, task.id, attempt) in completed:
+            continue
         try:
             kernel.agent_loops.get(loop_name)
         except KeyError:
             print(f"  SKIP {loop_name}: not registered on this kernel")
             continue
-        for task in tasks:
-            for attempt in range(1, repeats + 1):
-                label = f"  {loop_name} / {task.id}"
-                if repeats > 1:
-                    label += f" [{attempt}/{repeats}]"
-                print(f"{label}...", end=" ", flush=True)
-                result = await run_task(
-                    kernel, loop_name, task, workspace_root, capability, mode,
-                    metrics_url, metrics_model, attempt,
-                )
-                status = "PASS" if result["passed"] else "FAIL"
-                cost = ""
-                if result["tokens"].get("available"):
-                    cost = (
-                        f", {result['tokens']['total_tokens']} tok"
-                        f" ({result['tokens']['generated_tokens']} gen)"
-                    )
-                print(
-                    f"{status} ({result['wall_time_s']}s, {result['steps_taken']} steps{cost})"
-                    f": {result['detail'][:80]}"
-                )
-                results.append(result)
+        label = f"  {loop_name} / {task.id}"
+        if repeats > 1:
+            label += f" [{attempt}/{repeats}]"
+        print(f"{label}...", end=" ", flush=True)
+        result = await run_task(
+            kernel, loop_name, task, workspace_root, capability, mode,
+            metrics_url, metrics_model, attempt,
+        )
+        status = "PASS" if result["passed"] else "FAIL"
+        cost = ""
+        if result["tokens"].get("available"):
+            cost = (
+                f", {result['tokens']['total_tokens']} tok"
+                f" ({result['tokens']['generated_tokens']} gen)"
+            )
+        print(
+            f"{status} ({result['wall_time_s']}s, {result['steps_taken']} steps{cost})"
+            f": {result['detail'][:80]}"
+        )
+        results.append(result)
+        if on_result is not None:
+            on_result(results)
     return results
 
 
@@ -338,6 +367,8 @@ async def run_tournament_with_tool_plane(
     repeats: int,
     metrics_url: str | None,
     metrics_model: str | None,
+    initial_results: list[dict[str, Any]] | None = None,
+    on_result: Callable[[list[dict[str, Any]]], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Run with an embedded API when a selected harness reaches tools over HTTP."""
     tool_clients = []
@@ -403,6 +434,8 @@ async def run_tournament_with_tool_plane(
             repeats,
             metrics_url,
             metrics_model,
+            initial_results,
+            on_result,
         )
     finally:
         if server is not None and server_task is not None:
@@ -525,6 +558,16 @@ def main() -> int:
     parser.add_argument("--loop", action="append", dest="loops", help="repeatable; defaults to every registered loop")
     parser.add_argument("--config-root", default=str(REPO / "configs"))
     parser.add_argument("--state-dir", default=None)
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Report/checkpoint path (defaults to STATE_DIR/harness-tournament.json)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume completed cells from --output after validating the campaign fingerprint",
+    )
     parser.add_argument(
         "--suite",
         choices=sorted(SUITES),
@@ -668,43 +711,104 @@ def main() -> int:
     else:
         print("token accounting: unavailable (no llama.cpp engine or model resolved)")
 
-    results = asyncio.run(
-        run_tournament_with_tool_plane(
-            kernel, loop_names, selected_tasks, workspace_root, args.capability, args.mode,
-            args.repeats, metrics_url, metrics_model,
-        )
-    )
-
-    summary = summarise_results(results)
     task_manifest, task_manifest_sha256 = _task_manifest(selected_tasks)
-
-    report = {
-        "schema_version": 2,
-        "generated_at": time.time(),
-        "generated_at_utc": datetime.now(UTC).isoformat(),
+    git_provenance = _git_provenance()
+    cells = campaign_cells(loop_names, selected_tasks, args.repeats)
+    cell_order = [
+        {"loop": loop_name, "task_id": task.id, "attempt": attempt}
+        for loop_name, task, attempt in cells
+    ]
+    campaign_definition = {
         "suite": args.suite,
-        "task_manifest": task_manifest,
         "task_manifest_sha256": task_manifest_sha256,
-        "execution_order": [task.id for task in selected_tasks],
         "repeats": args.repeats,
         "loops": loop_names,
         "capability": args.capability,
         "mode": args.mode,
-        "metrics_url": metrics_url,
         "metrics_model": metrics_model,
-        "metrics_prewarmed": metrics_prewarmed,
         "external_model": args.external_model,
-        "git": _git_provenance(),
-        "environment": {
-            "platform": platform.platform(),
-            "python": platform.python_version(),
-        },
-        "promotion_performed": False,
-        "summary": summary,
-        "results": results,
+        "git_head": git_provenance["head"],
+        "cell_order": cell_order,
     }
-    out = state_dir / "harness-tournament.json"
-    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    campaign_sha256 = hashlib.sha256(
+        json.dumps(campaign_definition, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    out = Path(args.output) if args.output else state_dir / "harness-tournament.json"
+    initial_results: list[dict[str, Any]] = []
+    campaign_started_at_utc = datetime.now(UTC).isoformat()
+    if args.resume:
+        if not out.is_file():
+            parser.error(f"cannot resume: report does not exist: {out}")
+        prior = json.loads(out.read_text(encoding="utf-8"))
+        if prior.get("campaign_sha256") != campaign_sha256:
+            parser.error("cannot resume: report campaign fingerprint does not match this run")
+        initial_results = list(prior.get("results", ()))
+        expected_keys = {
+            (cell["loop"], cell["task_id"], int(cell["attempt"])) for cell in cell_order
+        }
+        prior_keys = [
+            (result.get("loop"), result.get("task_id"), int(result.get("attempt", 1)))
+            for result in initial_results
+        ]
+        if len(prior_keys) != len(set(prior_keys)) or not set(prior_keys) <= expected_keys:
+            parser.error("cannot resume: report contains duplicate or out-of-campaign cells")
+        campaign_started_at_utc = prior.get(
+            "campaign_started_at_utc", campaign_started_at_utc
+        )
+        print(f"resume: {len(initial_results)}/{len(cells)} completed cells from {out}")
+
+    def report_for(current_results: list[dict[str, Any]], complete: bool) -> dict[str, Any]:
+        return {
+            "schema_version": 3,
+            "generated_at": time.time(),
+            "generated_at_utc": datetime.now(UTC).isoformat(),
+            "campaign_started_at_utc": campaign_started_at_utc,
+            "campaign_complete": complete,
+            "campaign_definition": campaign_definition,
+            "campaign_sha256": campaign_sha256,
+            "completed_cells": len(current_results),
+            "expected_cells": len(cells),
+            "suite": args.suite,
+            "task_manifest": task_manifest,
+            "task_manifest_sha256": task_manifest_sha256,
+            "execution_order": [task.id for task in selected_tasks],
+            "cell_order": cell_order,
+            "repeats": args.repeats,
+            "loops": loop_names,
+            "capability": args.capability,
+            "mode": args.mode,
+            "metrics_url": metrics_url,
+            "metrics_model": metrics_model,
+            "metrics_prewarmed": metrics_prewarmed,
+            "external_model": args.external_model,
+            "git": git_provenance,
+            "environment": {
+                "platform": platform.platform(),
+                "python": platform.python_version(),
+            },
+            "promotion_performed": False,
+            "summary": summarise_results(current_results),
+            "results": current_results,
+        }
+
+    def checkpoint(current_results: list[dict[str, Any]], complete: bool = False) -> None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        temporary = out.with_name(f".{out.name}.tmp")
+        temporary.write_text(
+            json.dumps(report_for(current_results, complete), indent=2), encoding="utf-8"
+        )
+        temporary.replace(out)
+
+    checkpoint(initial_results)
+    results = asyncio.run(
+        run_tournament_with_tool_plane(
+            kernel, loop_names, selected_tasks, workspace_root, args.capability, args.mode,
+            args.repeats, metrics_url, metrics_model, initial_results, checkpoint,
+        )
+    )
+
+    summary = summarise_results(results)
+    checkpoint(results, complete=len(results) == len(cells))
 
     print()
     for loop_name, s in summary.items():
