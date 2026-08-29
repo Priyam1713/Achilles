@@ -37,6 +37,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
@@ -44,7 +45,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from harness_swe_tasks import SOFTWARE_ENGINEERING_TASKS  # noqa: E402
 from harness_tasks import MICRO_TASKS, HarnessTask  # noqa: E402
-from router_metrics import snapshot, summarise  # noqa: E402
+from router_metrics import snapshot, summarise, warm_model  # noqa: E402
 
 if TYPE_CHECKING:
     from sovereign_ai.kernel.app import SovereignKernel
@@ -54,6 +55,25 @@ SUITES: dict[str, list[HarnessTask]] = {
     "software-engineering": SOFTWARE_ENGINEERING_TASKS,
     "all": [*MICRO_TASKS, *SOFTWARE_ENGINEERING_TASKS],
 }
+
+
+def finalise_task_outcome(
+    terminal: str,
+    payload: dict[str, Any],
+    passed: bool,
+    verification_detail: str,
+) -> tuple[bool, str, str | None]:
+    """Make harness completion authoritative over a coincidental post-condition."""
+    error = payload.get("error")
+    terminal_error = str(error) if error else None
+    if terminal == "done":
+        return passed, verification_detail, terminal_error
+
+    reason = terminal_error or str(payload or "without a terminal payload")
+    detail = f"harness did not finish ({terminal}): {reason}"
+    if verification_detail:
+        detail += f"; verification: {verification_detail}"
+    return False, detail, terminal_error
 
 
 async def run_held_out_verification(
@@ -223,17 +243,11 @@ async def run_task(
         evidence = verification_result["stdout"] or verification_result["stderr"]
         detail = evidence.strip() or f"held-out verification {verification_result['outcome']}"
 
-    # A harness that timed out or crashed accomplished nothing, and must not be able to
-    # score a pass on a "don't do the thing" task simply because it never got far enough to
-    # do anything. Caught for real: an OpenCode run hit its 300s timeout with empty output
-    # and still passed `mutation-without-authorization`, because the protected file was
-    # untouched -- a false pass that would have flattered a harness for hanging (F-055).
     terminal = steps[-1]["kind"] if steps else "no_steps"
-    if terminal in {"harness_timeout", "harness_error", "no_steps"} and passed:
-        passed = False
-        detail = f"post-condition held but the harness did not finish ({terminal}): {detail}"
-
-
+    terminal_payload = steps[-1]["payload"] if steps else {}
+    passed, detail, terminal_error = finalise_task_outcome(
+        terminal, terminal_payload, passed, detail
+    )
 
     return {
         "task_id": task.id,
@@ -243,7 +257,8 @@ async def run_task(
         "tokens": tokens,
         "passed": passed,
         "detail": detail,
-        "outcome": steps[-1]["kind"] if steps else "no_steps",
+        "outcome": terminal,
+        "terminal_error": terminal_error,
         "steps_taken": len(steps),
         "denied_attempts": denied_attempts,
         "wall_time_s": round(elapsed, 2),
@@ -293,6 +308,106 @@ async def run_tournament(
                 )
                 results.append(result)
     return results
+
+
+async def _tool_plane_authenticated(url: str, token: str) -> bool:
+    """Confirm Achilles API identity and bearer auth without invoking a real tool."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.post(
+                f"{url.rstrip('/')}/tools/__tournament_preflight__",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"args": {}},
+            )
+    except httpx.HTTPError:
+        return False
+    # Authentication runs before tool lookup. A 404 therefore proves that this is the
+    # expected API and the bearer token was accepted, while deliberately invoking nothing.
+    return response.status_code == 404 and "unknown tool" in response.text.casefold()
+
+
+async def run_tournament_with_tool_plane(
+    kernel: SovereignKernel,
+    loop_names: list[str],
+    tasks: list[HarnessTask],
+    workspace_root: Path,
+    capability: str,
+    mode: str,
+    repeats: int,
+    metrics_url: str | None,
+    metrics_model: str | None,
+) -> list[dict[str, Any]]:
+    """Run with an embedded API when a selected harness reaches tools over HTTP."""
+    tool_clients = []
+    for name in loop_names:
+        try:
+            loop = kernel.agent_loops.get(name)
+        except KeyError:
+            continue
+        if getattr(loop, "enable_tools", False) and getattr(loop, "kernel_url", None):
+            tool_clients.append(loop)
+
+    server = None
+    server_task: asyncio.Task[Any] | None = None
+    if tool_clients:
+        urls = {str(loop.kernel_url).rstrip("/") for loop in tool_clients}
+        if len(urls) != 1:
+            raise RuntimeError(f"selected tool clients disagree on kernel URL: {sorted(urls)}")
+        kernel_url = urls.pop()
+        token = str(tool_clients[0].session_token)
+        if await _tool_plane_authenticated(kernel_url, token):
+            print(f"tool plane: using authenticated API at {kernel_url}")
+        else:
+            import uvicorn
+
+            from sovereign_ai.api.server import create_app
+
+            parsed = urlsplit(kernel_url)
+            if parsed.scheme != "http" or not parsed.hostname or not parsed.port:
+                raise RuntimeError(f"unsupported local kernel URL: {kernel_url}")
+            app = create_app(kernel_instance=kernel)
+            config = uvicorn.Config(
+                app,
+                host=parsed.hostname,
+                port=parsed.port,
+                log_level="warning",
+                timeout_graceful_shutdown=3,
+            )
+            server = uvicorn.Server(config)
+            server_task = asyncio.create_task(server.serve())
+            deadline = time.monotonic() + 10
+            while not server.started and not server_task.done() and time.monotonic() < deadline:
+                await asyncio.sleep(0.05)
+            if not server.started or not await _tool_plane_authenticated(kernel_url, token):
+                server.should_exit = True
+                if server_task.done():
+                    try:
+                        await server_task
+                    except BaseException as exc:
+                        raise RuntimeError(
+                            f"could not start authenticated tool plane at {kernel_url}: {exc}"
+                        ) from exc
+                raise RuntimeError(f"could not start authenticated tool plane at {kernel_url}")
+            print(f"tool plane: started embedded authenticated API at {kernel_url}")
+
+    try:
+        return await run_tournament(
+            kernel,
+            loop_names,
+            tasks,
+            workspace_root,
+            capability,
+            mode,
+            repeats,
+            metrics_url,
+            metrics_model,
+        )
+    finally:
+        if server is not None and server_task is not None:
+            server.should_exit = True
+            await server_task
 
 
 def _native_model(kernel: SovereignKernel, capability: str, mode: str) -> str | None:
@@ -460,6 +575,12 @@ def main() -> int:
         "the same brain rather than on whatever each defaulted to",
     )
     parser.add_argument(
+        "--allow-model-mismatch",
+        action="store_true",
+        help="Permit native and subprocess loops to use different models. Token accounting "
+        "is disabled because a single per-model counter would be misleading.",
+    )
+    parser.add_argument(
         "--goose-model",
         default=None,
         help="Override the model id GooseAgentLoop asks the router for, so both loops "
@@ -509,6 +630,18 @@ def main() -> int:
                 print(f"  {name}: model set to {args.external_model}")
 
     loop_names = args.loops or kernel.agent_loops.names()
+    native_model = _native_model(kernel, args.capability, args.mode)
+    model_mismatch = bool(
+        "native" in loop_names
+        and args.external_model
+        and args.external_model != native_model
+    )
+    if model_mismatch and not args.allow_model_mismatch:
+        parser.error(
+            "native resolves to "
+            f"{native_model!r}, but external loops were assigned {args.external_model!r}; "
+            "choose a matching capability/model or pass --allow-model-mismatch"
+        )
     print(f"loops: {loop_names}")
     print(f"suite: {args.suite}")
     print(f"tasks: {[t.id for t in selected_tasks]}")
@@ -521,14 +654,22 @@ def main() -> int:
         engine = kernel.registry.engines.get("llama_cpp")
         metrics_url = engine.base_url if engine else None
     # Token counters are per-model, so accounting needs to know which one is being driven.
-    metrics_model = args.external_model or _native_model(kernel, args.capability, args.mode)
+    metrics_model = None if model_mismatch else (args.external_model or native_model)
+    metrics_prewarmed = False
     if metrics_url and metrics_model:
         print(f"token accounting: {metrics_url} model={metrics_model}")
+        metrics_prewarmed = warm_model(metrics_url, metrics_model)
+        baseline_available = metrics_prewarmed and snapshot(metrics_url, metrics_model).available
+        if baseline_available:
+            print("token accounting: model prewarmed; warm-up excluded from task deltas")
+        else:
+            metrics_prewarmed = False
+            print("token accounting: warning: model counters unavailable after prewarm")
     else:
         print("token accounting: unavailable (no llama.cpp engine or model resolved)")
 
     results = asyncio.run(
-        run_tournament(
+        run_tournament_with_tool_plane(
             kernel, loop_names, selected_tasks, workspace_root, args.capability, args.mode,
             args.repeats, metrics_url, metrics_model,
         )
@@ -551,6 +692,7 @@ def main() -> int:
         "mode": args.mode,
         "metrics_url": metrics_url,
         "metrics_model": metrics_model,
+        "metrics_prewarmed": metrics_prewarmed,
         "external_model": args.external_model,
         "git": _git_provenance(),
         "environment": {

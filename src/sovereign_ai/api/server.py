@@ -202,8 +202,14 @@ class SkillPromoteRequest(BaseModel):
     promoted_by: str
 
 
-def create_app(config_root: str | None = None) -> FastAPI:
-    kernel = SovereignKernel.build(config_root)
+def create_app(
+    config_root: str | None = None, *, kernel_instance: SovereignKernel | None = None
+) -> FastAPI:
+    # Embedders such as the harness tournament must expose the *same* kernel whose
+    # grants, workspaces and tool dispatcher their loop uses. Building a second kernel
+    # would split authority/state and make Pi's HTTP tool bridge observe a different
+    # world from the coordinator (F-076).
+    kernel = kernel_instance or SovereignKernel.build(config_root)
     session = SessionAuth(kernel.config.state_dir / "session.token")
     system = kernel.config.system.get("system", {})
     hosts = allowed_hosts(system.get("bind", "127.0.0.1"), int(system.get("port", 7788)))

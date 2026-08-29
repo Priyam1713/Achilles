@@ -511,7 +511,7 @@ def serve(config_root: str = "./configs") -> None:
     kernel = SovereignKernel.build(config_root)
     system = kernel.config.system["system"]
     uvicorn.run(
-        create_app(config_root),
+        create_app(config_root, kernel_instance=kernel),
         # Cap the drain so a browser tab holding /events/stream open cannot make stopping
         # the kernel take minutes; the stream is bounded on its own side too, and clients
         # reconnect from their cursor without losing an event.

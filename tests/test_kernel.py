@@ -343,6 +343,14 @@ def test_api_exposes_status_and_durable_jobs(tmp_path, monkeypatch):
         "/collaboration/rooms/{room_id}/verify",
     } <= paths
 
+
+def test_api_can_expose_the_same_kernel_used_by_an_embedded_harness(tmp_path, monkeypatch):
+    k = kernel(tmp_path, monkeypatch)
+    app = create_app(str(ROOT / "configs"), kernel_instance=k)
+    assert app.state.kernel is k
+    assert app.state.kernel.tool_dispatcher is k.tool_dispatcher
+
+
 def _local_inference_backend_reachable() -> bool:
     """Is a real inference backend listening where the manifest expects one?
 
@@ -3786,7 +3794,11 @@ class _RecordingInference:
 
     async def chat(self, request, messages, model_overrides=None):
         self.overrides.append(model_overrides)
-        if self.fail_when_constrained and model_overrides:
+        if (
+            self.fail_when_constrained
+            and model_overrides
+            and "response_format" in model_overrides
+        ):
             raise RuntimeError("backend does not support response_format")
         content = (
             self._replies.pop(0) if self._replies else '{"tool": "done", "summary": "done"}'
@@ -3820,6 +3832,7 @@ def test_loop_constrains_decoding_with_the_action_schema(tmp_path, monkeypatch):
 
     assert step.kind == "done"
     sent = fake.overrides[0]
+    assert sent["max_tokens"] == 2048
     assert sent["response_format"]["type"] == "json_schema"
     enum = sent["response_format"]["json_schema"]["schema"]["properties"]["tool"]["enum"]
     assert "read_file" in enum and "done" in enum
@@ -3844,7 +3857,8 @@ def test_loop_degrades_legibly_when_a_backend_rejects_the_schema(tmp_path, monke
 
     step = asyncio.run(loop.next_step(state))
     assert step.kind == "done", "a rejected constraint must not fail the run"
-    assert fake.overrides[0] is not None and fake.overrides[1] is None
+    assert "response_format" in fake.overrides[0]
+    assert fake.overrides[1] == {"max_tokens": 2048}
 
     events = [e["event_type"] for e in k.events.read_stream("agent-loop:c-2")]
     assert "agent.decoding.degraded" in events
@@ -3852,7 +3866,7 @@ def test_loop_degrades_legibly_when_a_backend_rejects_the_schema(tmp_path, monke
     # The loop remembers, so the next turn does not pay for the same rejection again.
     state["history"] = []
     asyncio.run(loop.next_step(state))
-    assert fake.overrides[2] is None
+    assert fake.overrides[2] == {"max_tokens": 2048}
 
 
 # ---------------------------------------------------------------------------------------

@@ -86,6 +86,7 @@ class NativeAgentLoop(AgentLoop):
         act_role: tuple[str, str] | None = None,
         hooks: HookRegistry | None = None,
         sandbox: Any | None = None,
+        max_tokens_per_turn: int = 2048,
     ):
         self.inference = inference
         self.execution = execution
@@ -132,6 +133,12 @@ class NativeAgentLoop(AgentLoop):
         # When set, file mutations accumulate outside the workspace and are applied
         # only after a human reads the diff (F-069).
         self.sandbox = sandbox
+        # A local model may spend its entire context window thinking without ever
+        # emitting an action. Bound each turn so one malformed trajectory cannot hold a
+        # benchmark slot for ten minutes or consume ~30K generated tokens (F-074).
+        if max_tokens_per_turn < 1:
+            raise ValueError("max_tokens_per_turn must be positive")
+        self.max_tokens_per_turn = max_tokens_per_turn
         self.plan_role = plan_role
         self.act_role = act_role
         self.allow_subtasks = allow_subtasks
@@ -337,17 +344,15 @@ class NativeAgentLoop(AgentLoop):
         backend call -- makes a malformed action structurally impossible on a backend that
         supports it, rather than something to retry into.
         """
-        overrides: dict[str, Any] | None = None
+        overrides: dict[str, Any] = {"max_tokens": self.max_tokens_per_turn}
         if constrained:
-            overrides = {
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "agent_action",
-                        "strict": True,
-                        "schema": self.tools.action_schema(),
-                    },
-                }
+            overrides["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "agent_action",
+                    "strict": True,
+                    "schema": self.tools.action_schema(),
+                },
             }
         result = await self.inference.chat(request, messages, overrides)
         if constrained and self._constraint_supported is None:
@@ -568,6 +573,7 @@ class NativeAgentLoop(AgentLoop):
             act_role=self.act_role,
             hooks=self.hooks,
             sandbox=self.sandbox,
+            max_tokens_per_turn=self.max_tokens_per_turn,
         )
 
     def _tool_context(self, state: dict[str, Any]) -> ToolContext:

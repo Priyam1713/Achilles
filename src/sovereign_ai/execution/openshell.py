@@ -54,13 +54,20 @@ class OpenShellBackend(ExecutionBackend):
     def _sync_status_ok(self) -> bool:
         prefix = self._prefix()
         try:
-            subprocess.check_call(
+            output = subprocess.check_output(
                 [*prefix, "openshell", "status"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                text=True,
+                stderr=subprocess.STDOUT,
                 timeout=15,
             )
-            return True
+            # The CLI currently exits zero even when its own status text says the
+            # credential is missing. Require affirmative connection *and*
+            # authentication signals so the broker can fall back to Docker instead of
+            # selecting a sandbox that will reject every command (F-075).
+            folded = output.casefold()
+            connected = "connected" in folded and "disconnected" not in folded
+            authenticated = "authenticated" in folded and "unauthenticated" not in folded
+            return connected and authenticated
         except Exception:
             return False
 

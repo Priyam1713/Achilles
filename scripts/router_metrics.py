@@ -17,6 +17,7 @@ Until now this project had no way to observe whether the cache was working at al
 
 from __future__ import annotations
 
+import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -44,6 +45,36 @@ _SHORT = {
     "llamacpp:spec_decode_num_accepted_tokens_total": "spec_accepted_tokens",
     "llamacpp:spec_decode_num_draft_tokens_total": "spec_draft_tokens",
 }
+
+
+def warm_model(base_url: str, model: str, timeout: float = 300.0) -> bool:
+    """Wake/load a router model before taking the first counter snapshot.
+
+    A sleeping or unloaded router target may not publish per-model counters yet. One
+    deliberately tiny completion makes the counter endpoint real; the tournament takes
+    its baseline *afterward*, so the warm-up token is excluded from every harness score.
+    """
+    root = base_url.rstrip("/").removesuffix("/v1")
+    body = json.dumps(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": "Reply with OK."}],
+            "max_tokens": 1,
+            "temperature": 0,
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"{root}/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response.read()
+        return True
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
 
 
 @dataclass(frozen=True)

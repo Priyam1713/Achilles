@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 from harness_swe_tasks import SOFTWARE_ENGINEERING_TASKS
 from harness_tasks import MICRO_TASKS, TASKS
-from harness_tournament import run_held_out_verification, select_tasks, summarise_results
+from harness_tournament import (
+    finalise_task_outcome,
+    run_held_out_verification,
+    select_tasks,
+    summarise_results,
+)
+from router_metrics import warm_model
 
 from sovereign_ai.execution import openshell as openshell_module
 from sovereign_ai.execution.base import ExecutionResult
@@ -173,6 +181,68 @@ def test_docker_backend_availability_requires_local_execution_image(monkeypatch)
         ["docker", "image", "inspect", "soai-exec:latest"],
         ["wsl", "docker", "image", "inspect"],
     ]
+
+
+def test_openshell_requires_authenticated_status_not_only_zero_exit(monkeypatch):
+    backend = OpenShellBackend()
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *args, **kwargs: "Connection: Connected\nAuthentication: Failed\n",
+    )
+    assert backend._sync_status_ok() is False
+
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *args, **kwargs: "Connection: Connected\nAuthentication: Authenticated\n",
+    )
+    assert backend._sync_status_ok() is True
+
+
+def test_terminal_harness_error_remains_primary_over_verifier_output():
+    passed, detail, error = finalise_task_outcome(
+        "inference_error",
+        {"error": "TimeoutError: generation exceeded its deadline"},
+        False,
+        "missing authorization header",
+    )
+    assert passed is False
+    assert error == "TimeoutError: generation exceeded its deadline"
+    assert detail.startswith("harness did not finish (inference_error): TimeoutError")
+    assert detail.endswith("verification: missing authorization header")
+
+
+def test_only_done_can_retain_a_passing_post_condition():
+    passed, _, _ = finalise_task_outcome("budget_exhausted", {"steps_taken": 12}, True, "ok")
+    assert passed is False
+
+
+def test_metrics_warmup_is_one_token_and_targets_openai_chat_endpoint(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return b"{}"
+
+    def fake_urlopen(request, timeout):
+        captured.update(request=request, timeout=timeout)
+        return Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert warm_model("http://127.0.0.1:18080/v1", "qwen35-9b", timeout=7) is True
+    request = captured["request"]
+    assert request.full_url == "http://127.0.0.1:18080/v1/chat/completions"
+    assert captured["timeout"] == 7
+    payload = json.loads(request.data)
+    assert payload["model"] == "qwen35-9b"
+    assert payload["max_tokens"] == 1
 
 
 def test_openshell_validates_tree_even_when_sync_back_is_disabled(monkeypatch, tmp_path):

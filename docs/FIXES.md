@@ -3792,6 +3792,35 @@ instead of an opinion.
   provenance aggregation, WSL argv handling and image-aware Docker availability. A real
   canonical verifier completed through `docker-wsl2` with network disabled and sync-back off.
 
+### F-074 — Fixed: the first composition smoke test measured infrastructure failures
+
+- **Severity:** `critical` (invalid harness failures could be mistaken for model or harness
+  quality) · **Status:** `fixed`; the affected smoke results are explicitly invalid and are
+  not benchmark evidence.
+- **Failures exposed:** native generation had no output ceiling and twice ran to roughly 30K
+  generated tokens/600-second inference deadlines; Pi's kernel-tool extension was launched
+  without the HTTP tool plane it requires; OpenShell returned exit code zero while its status
+  text said authentication had failed; and held-out verifier stderr replaced the harness's
+  original terminal error in the report. A first attempted comparison also assigned the 9B
+  model only to subprocess loops while native routing silently selected the 27B model.
+- **Fix:** native turns now carry a 2,048-token ceiling (also propagated to sub-tasks).
+  OpenShell availability requires affirmative connected *and authenticated* status, allowing
+  the broker to fall back to the pinned local Docker image. The tournament embeds an
+  authenticated API backed by the exact same kernel whenever a selected loop needs HTTP
+  tools, and performs a no-op authenticated preflight before any expensive inference. Reports
+  preserve `terminal_error` as the primary detail and only a `done` terminal may retain a
+  passing post-condition. Native/external model mismatch now fails closed unless explicitly
+  allowed; mismatch mode disables per-model token accounting rather than misattributing it.
+  A one-token, excluded warm-up now makes a cold model's counters available before the first
+  task, closing the final measurement gap exposed by the corrected canary.
+- **Verification:** focused tests pin the generation ceiling and schema fallback, OpenShell's
+  misleading zero-exit status, embedded-kernel identity, terminal-error precedence and the
+  rule that incomplete harnesses cannot score a pass. A fresh one-task live canary then passed
+  through both harnesses and independent Docker verification with prewarmed counters: native
+  1/1 in 14.90s (four steps, 5,722 total/595 generated tokens), Pi 1/1 in 19.21s (one
+  subprocess invocation, 13,840 total/789 generated tokens). This is infrastructure
+  validation, not a promotion or a statistically meaningful harness result.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.
