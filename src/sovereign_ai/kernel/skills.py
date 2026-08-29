@@ -270,7 +270,7 @@ class AgentEvaluationStore:
         with self._connect() as connection:
             row = connection.execute(
                 """SELECT * FROM agent_evaluations WHERE skill_candidate_id=?
-                   ORDER BY created_at DESC LIMIT 1""",
+                   ORDER BY created_at DESC, rowid DESC LIMIT 1""",
                 (skill_candidate_id,),
             ).fetchone()
         return self._record(row) if row else None
@@ -278,7 +278,8 @@ class AgentEvaluationStore:
     def list_for_candidate(self, skill_candidate_id: str) -> list[AgentEvaluationRecord]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM agent_evaluations WHERE skill_candidate_id=? ORDER BY created_at",
+                """SELECT * FROM agent_evaluations WHERE skill_candidate_id=?
+                   ORDER BY created_at, rowid""",
                 (skill_candidate_id,),
             ).fetchall()
         return [self._record(row) for row in rows]

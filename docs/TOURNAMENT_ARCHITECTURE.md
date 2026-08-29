@@ -187,6 +187,27 @@ fit roughly 22–24 GiB host memory, leave the OS/control plane safe, fit the ph
 volume and pass a small independent quality study. SSD streaming belongs in an experimental
 profile. It does not enter `core`.
 
+## First composition-aware software-engineering suite
+
+The historical twelve harness tasks remain the `micro` suite. On 2026-08-29 the first
+separate `software-engineering` slice added eight small repositories covering bug fixes,
+feature implementation, configuration semantics, a typed cross-file contract, cache-key
+collisions, path traversal/symlink escape, pagination boundaries and streaming JSONL error
+handling. This brings the selectable total to twenty without rewriting the meaning of any
+old result.
+
+The engineering tasks are checked after the loop by held-out standard-library verifiers in
+a copied, read-only workspace through the hardened execution broker. Model-written Python is
+never imported into the coordinator. The report format is now schema version 2 and records
+the ordered manifest and verifier hashes, Git state, environment, model variables, repeats,
+category/outcome distributions and median latency. It still cannot promote anything. The
+full contract and commands are documented in [`docs/BENCHMARKS.md`](BENCHMARKS.md).
+
+No live harness winner is claimed from this implementation pass. A full local contest needs
+a healthy local model endpoint and at least three attempts per task; the remaining ten-plus
+tasks should broaden realism and secondary capability tracks rather than pad the suite with
+near-duplicate edits.
+
 ## Promotion scorecards
 
 ### Model or inference runtime
@@ -222,9 +243,10 @@ profile. It does not enter `core`.
 1. Fix physical storage accounting (the sparse VHDX finding is a pre-download safety issue).
 2. Keep upstream llama.cpp for the current dense GGUFs; preserve ik as a pinned on-demand
    challenger and future Flash/MoE laboratory.
-3. Turn the existing 12-task harness suite into the planned ~30 real-task Olympics: add
-   debugging, research, tool choice, resume/kill, memory, injection, delegation and browser
-   tracks. Unsupported tracks are explicit skips, never passes.
+3. Grow the now-separate 8-task software-engineering slice (20 total with the preserved
+   micro baseline) into the planned ~30-task Olympics: add realistic multi-language work,
+   research, tool choice, resume/kill, memory, injection, delegation and browser tracks.
+   Unsupported tracks are explicit skips, never passes.
 4. Integrate DeepSeek Harness and Prime separately behind the governed tool seam. Do not nest
    them until each independent baseline works.
 5. Prove native crash/restart recovery and idempotency before trialing DBOS.

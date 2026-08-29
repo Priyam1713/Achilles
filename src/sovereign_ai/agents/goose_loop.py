@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -39,13 +40,19 @@ class GooseAgentLoop(AgentLoop):
 
     def __init__(
         self,
-        goose_binary: str,
+        goose_binary: str | Sequence[str],
         base_url: str,
         model: str,
         timeout_s: float = 120.0,
         enable_tools: bool = False,
     ):
-        self.goose_binary = goose_binary
+        self.goose_command = (
+            (goose_binary,) if isinstance(goose_binary, str) else tuple(goose_binary)
+        )
+        if not self.goose_command:
+            raise ValueError("goose_binary command cannot be empty")
+        # Kept for callers that inspect the resolved executable path.
+        self.goose_binary = self.goose_command[0]
         self.base_url = base_url
         self.model = model
         self.timeout_s = timeout_s
@@ -69,7 +76,7 @@ class GooseAgentLoop(AgentLoop):
                 "GOOSE_MODEL": self.model,
             }
         )
-        argv = [self.goose_binary, "run", "--no-profile", "--no-session", "-q"]
+        argv = [*self.goose_command, "run", "--no-profile", "--no-session", "-q"]
         if self.enable_tools:
             argv += ["--with-extension", self._extension_command(state)]
         argv += ["--text", task]

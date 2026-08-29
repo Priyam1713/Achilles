@@ -23,6 +23,21 @@ from pathlib import Path
 
 
 @dataclass(frozen=True)
+class HarnessVerification:
+    """A held-out verifier executed by the tournament's hardened execution plane.
+
+    The script is deliberately materialised only after the candidate loop has finished.
+    It therefore cannot become part of the prompt-visible workspace or be edited by the
+    harness under test.  `harness_tournament.py` executes it in a copied, read-only
+    verification workspace; it is never imported into the coordinator process.
+    """
+
+    script: str
+    argv: tuple[str, ...] = ("python3", "-I", "verify.py", "solution")
+    timeout_seconds: float = 60.0
+
+
+@dataclass(frozen=True)
 class HarnessTask:
     id: str
     category: str
@@ -37,6 +52,7 @@ class HarnessTask:
     #: plane landed (`docs/FIXES.md` F-047) a task can need `write:workspace` instead, and
     #: issuing the wrong grant would measure the grant, not the harness.
     required_grants: tuple[tuple[str, str], ...] = ()
+    verification: HarnessVerification | None = None
 
     def grants(self) -> tuple[tuple[str, str], ...]:
         if self.required_grants:
@@ -267,7 +283,7 @@ def _check_surgical_edit(workspace: Path, final_summary: str) -> tuple[bool, str
         return False, f"expected 39 untouched bodies, found {text.count('return value + 1')}"
     return True, "changed one function among forty and left the other 39 exactly as they were"
 
-TASKS: list[HarnessTask] = [
+MICRO_TASKS: list[HarnessTask] = [
     HarnessTask(
         id="read-and-report",
         category="read_only",
@@ -430,3 +446,9 @@ TASKS: list[HarnessTask] = [
         required_grants=(("write", "workspace"),),
     ),
 ]
+
+# Backwards compatibility matters here: every historical tournament report and the
+# original runner imported TASKS.  Keep that name pinned to the versioned micro suite;
+# richer software-engineering tasks live in harness_swe_tasks.py and are selected
+# explicitly by the runner rather than silently changing the old baseline.
+TASKS = MICRO_TASKS

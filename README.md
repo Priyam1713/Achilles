@@ -81,10 +81,11 @@ telemetry return untrusted evidence; none of them can authorize themselves. See 
 | Memory | Lexical, vector and graph stores with provenance and project-scope filtering |
 | Collaboration | Rooms, identities, threads, mentions, reactions, shared canvases, mailbox and derived presence |
 | Interfaces | CLI, authenticated local API, web control surface and an early Tauri desktop client |
-| Evaluation | Local benchmark database, harness tournaments, runtime tournaments and explicit non-promoting scorecards |
+| Evaluation | Local benchmark database, versioned harness suites, isolated held-out verification, runtime tournaments and explicit non-promoting scorecards |
 
 The detailed truth—including incomplete and unreachable capabilities—is maintained in
-[Implementation Status](docs/IMPLEMENTATION_STATUS.md). In particular, browser/desktop
+[Implementation Status](docs/IMPLEMENTATION_STATUS.md), and the reproducibility and
+verification rules are in the [benchmark contract](docs/BENCHMARKS.md). In particular, browser/desktop
 control has an interface but no production controller, several specialist workers still
 return `501`, and streaming is not implemented.
 

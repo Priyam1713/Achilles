@@ -1,6 +1,7 @@
 import asyncio
 import json
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import ClassVar
@@ -3026,6 +3027,11 @@ def test_harness_tournament_runs_native_loop_against_all_tasks(tmp_path, monkeyp
     from harness_tournament import run_task
 
     k = kernel(tmp_path, monkeypatch)
+    # Keep this unit test hermetic even on a developer workstation where WSL/OpenShell or
+    # Docker happens to be healthy.  Live backend behaviour is covered separately; this
+    # test's documented contract is to stop exactly at backend selection.
+    monkeypatch.setattr(k.execution.openshell, "available", lambda: False)
+    monkeypatch.setattr(k.execution.docker, "available", lambda: False)
     workspace_root = tmp_path / "tournament-workspaces"
 
     scripts = {
@@ -3124,7 +3130,13 @@ def test_harness_tournament_runs_native_loop_against_all_tasks(tmp_path, monkeyp
         replies = (
             _surgical_replies(workspace)
             if task.id == "surgical-edit"
-            else [reply.format(workspace=workspace) for reply in scripts[task.id]]
+            # JSON strings cannot contain raw Windows backslashes (for example `\U` in
+            # C:\Users). Forward slashes remain valid Windows paths and keep the scripted
+            # action parseable on both host families.
+            else [
+                reply.format(workspace=str(workspace).replace("\\", "/"))
+                for reply in scripts[task.id]
+            ]
         )
         # NativeAgentLoop was constructed once at kernel-build time and holds its own
         # `inference` reference internally -- patching k.inference itself would not
@@ -3384,7 +3396,12 @@ def test_goose_agent_loop_runs_once_and_returns_done(tmp_path):
     )
     shim.chmod(0o755)
 
-    loop = GooseAgentLoop(str(shim), "http://127.0.0.1:1/v1", "test-model", timeout_s=10)
+    loop = GooseAgentLoop(
+        [sys.executable, str(shim)],
+        "http://127.0.0.1:1/v1",
+        "test-model",
+        timeout_s=10,
+    )
     state = {"task": "say ready"}
     step = asyncio.run(loop.next_step(state))
     assert step.done is True
@@ -3402,11 +3419,16 @@ def test_goose_agent_loop_runs_once_and_returns_done(tmp_path):
 def test_goose_agent_loop_reports_harness_error_on_nonzero_exit(tmp_path):
     from sovereign_ai.agents.goose_loop import GooseAgentLoop
 
-    shim = tmp_path / "goose_shim.sh"
-    shim.write_text("#!/usr/bin/env bash\necho 'boom' >&2\nexit 3\n", encoding="utf-8")
+    shim = tmp_path / "goose_shim.py"
+    shim.write_text("import sys\nprint('boom', file=sys.stderr)\nraise SystemExit(3)\n", encoding="utf-8")
     shim.chmod(0o755)
 
-    loop = GooseAgentLoop(str(shim), "http://127.0.0.1:1/v1", "test-model", timeout_s=10)
+    loop = GooseAgentLoop(
+        [sys.executable, str(shim)],
+        "http://127.0.0.1:1/v1",
+        "test-model",
+        timeout_s=10,
+    )
     step = asyncio.run(loop.next_step({"task": "x"}))
     assert step.done is True
     assert step.kind == "harness_error"

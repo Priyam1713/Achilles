@@ -7,11 +7,12 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
 from .base import ExecutionBackend, ExecutionResult
-from .staging import reconcile_workspace, snapshot_tree
+from .staging import reconcile_workspace, snapshot_tree, validate_tree
 
 
 class OpenShellBackend(ExecutionBackend):
@@ -26,9 +27,15 @@ class OpenShellBackend(ExecutionBackend):
     def __init__(self, policy_path: str = "configs/openshell-policy.yaml"):
         self.policy_path = str(Path(policy_path).resolve())
         self._windows_wsl = os.name == "nt" and shutil.which("wsl") is not None
+        self._availability_cache: tuple[float, bool] | None = None
 
     def _wsl_path(self, path: str) -> str:
-        return subprocess.check_output(["wsl", "wslpath", "-a", path], text=True, timeout=5).strip()
+        # `wsl <command> <windows-path>` applies legacy command-line translation that
+        # strips backslashes before wslpath sees them (`D:\repo` becomes `D:repo`).
+        # --exec passes argv without that shell-style rewrite.
+        return subprocess.check_output(
+            ["wsl", "--exec", "wslpath", "-a", path], text=True, timeout=5
+        ).strip()
 
     def _prefix(self) -> list[str]:
         # On Windows the supported architecture is the WSL2 Linux plane. Never
@@ -51,27 +58,33 @@ class OpenShellBackend(ExecutionBackend):
                 [*prefix, "openshell", "status"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=8,
+                timeout=15,
             )
             return True
         except Exception:
             return False
 
     def available(self) -> bool:
+        now = time.monotonic()
+        if self._availability_cache is not None and now - self._availability_cache[0] < 10:
+            return self._availability_cache[1]
         if self._windows_wsl:
             try:
                 subprocess.check_call(
                     ["wsl", "sh", "-lc", "command -v openshell >/dev/null 2>&1"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=5,
+                    timeout=15,
                 )
-                return self._sync_status_ok()
+                available = self._sync_status_ok()
             except Exception:
-                return False
-        if shutil.which("openshell") is not None:
-            return self._sync_status_ok()
-        return False
+                available = False
+        elif shutil.which("openshell") is not None:
+            available = self._sync_status_ok()
+        else:
+            available = False
+        self._availability_cache = (now, available) if available else None
+        return available
 
     async def _cli(self, *args: str) -> tuple[int, str, str]:
         proc = await asyncio.create_subprocess_exec(
@@ -99,12 +112,17 @@ class OpenShellBackend(ExecutionBackend):
         workspace = Path(cwd).resolve(strict=True)
         if not workspace.is_dir():
             raise ValueError(f"Workspace is not a directory: {workspace}")
+        validate_tree(workspace)
 
         before = snapshot_tree(workspace) if sync_back else None
         sandbox = f"soai-{secrets.token_hex(5)}"  # short names avoid driver/name edge cases.
         policy = self._host_path_for_cli(self.policy_path)
         source = self._host_path_for_cli(workspace)
-        command = f"cd /workspace/project && exec {shlex.join(list(argv))}"
+        # The current base image runs as an unprivileged user and does not permit creating
+        # /workspace.  /tmp is explicitly writable in our policy and is already isolated
+        # per sandbox, so it is the correct copy-in root.
+        sandbox_workspace = "/tmp/project"
+        command = f"cd {sandbox_workspace} && exec {shlex.join(list(argv))}"
         backend = "openshell-wsl2" if self._prefix() else "openshell"
 
         # Keep the sandbox only long enough to retrieve successful mutations.
@@ -117,7 +135,7 @@ class OpenShellBackend(ExecutionBackend):
             "--policy",
             policy,
             "--upload",
-            f"{source}:/workspace/project",
+            f"{source}:{sandbox_workspace}",
             "--no-git-ignore",
             "--",
             "sh",

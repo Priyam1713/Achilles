@@ -3761,6 +3761,37 @@ instead of an opinion.
   259 tests and ruff. New assertions prove an empty index makes zero embedding/reranking calls
   and that the preflight honors unscoped, allowed and excluded project scopes.
 
+### F-073 — Added: a versioned software-engineering suite with isolated verification
+
+- **Severity:** `high` (the harness contest was dominated by micro checks and could not
+  support composition-level coding decisions) · **Status:** `fixed` as an evaluation
+  substrate; no harness promotion performed.
+- **Problem:** the twelve existing tasks test reading, context economy, safety gates and edit
+  precision, but not repository-level behavioural contracts. Growing the same `TASKS` list
+  would also make every prior report silently incomparable. Executing model-written Python in
+  the tournament process to test richer work would cross the project's trust boundary.
+- **Fix:** pinned the old list as the `micro` suite and added an opt-in eight-repository
+  `software-engineering` suite covering bug fixes, features, cross-file contracts, security
+  and robustness. Held-out verifiers are materialised only after the loop finishes and run
+  against a copied solution through a read-only, no-sync-back hardened workspace. The runner
+  gained suite/task/category selection and schema-v2 provenance: ordered manifest and verifier
+  hashes, Git/environment/model variables, repetitions, category/outcome distributions and
+  median latency. `docs/BENCHMARKS.md` defines the public contract.
+- **Live infrastructure defects caught by verification:** WSL's legacy command invocation
+  stripped backslashes before `wslpath`; `--exec` now preserves argv. Docker selection used
+  daemon health rather than presence of the pinned `soai-exec:latest` image and attempted an
+  unintended pull from the wrong daemon; selection is now image-aware and `--pull never`.
+  OpenShell's unprivileged base image could not create `/workspace`; its transaction staging
+  now uses the policy-writable `/tmp/project`. Positive backend probes are cached briefly to
+  keep one broker call internally consistent, while transient cold-start failures are not.
+  The full Windows gate also exposed POSIX-only Goose test shims (the adapter now accepts an
+  executable prefix) and a same-timestamp SQLite ordering race that could treat a preceding
+  failed skill evaluation as newer than the following pass (rowid now breaks ties).
+- **Verification:** every untouched fixture fails and a separate canonical implementation
+  passes all eight contracts. Unit tests prove suite stability/filtering, verifier isolation,
+  provenance aggregation, WSL argv handling and image-aware Docker availability. A real
+  canonical verifier completed through `docker-wsl2` with network disabled and sync-back off.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.
