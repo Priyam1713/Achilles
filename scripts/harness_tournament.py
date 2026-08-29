@@ -539,11 +539,39 @@ def _git_provenance() -> dict[str, Any]:
         head = subprocess.check_output(
             ["git", "-C", str(REPO), "rev-parse", "HEAD"], text=True, timeout=5
         ).strip()
-        dirty = bool(
-            subprocess.check_output(
-                ["git", "-C", str(REPO), "status", "--porcelain"], text=True, timeout=5
-            ).strip()
+        # The checkout is shared by Windows Git (core.autocrlf) and WSL Git. WSL's
+        # porcelain status reports CRLF-only differences as dirty even when the Windows
+        # checkout is clean. Ignore only those EOL differences while preserving real
+        # content, index and untracked changes.
+        worktree = subprocess.run(
+            ["git", "-C", str(REPO), "diff", "--quiet", "--ignore-space-at-eol", "--"],
+            timeout=5,
+            check=False,
         )
+        index = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(REPO),
+                "diff",
+                "--cached",
+                "--quiet",
+                "--ignore-space-at-eol",
+                "--",
+            ],
+            timeout=5,
+            check=False,
+        )
+        if worktree.returncode not in {0, 1} or index.returncode not in {0, 1}:
+            raise subprocess.CalledProcessError(
+                max(worktree.returncode, index.returncode), "git diff --quiet"
+            )
+        untracked = subprocess.check_output(
+            ["git", "-C", str(REPO), "ls-files", "--others", "--exclude-standard"],
+            text=True,
+            timeout=5,
+        ).strip()
+        dirty = worktree.returncode == 1 or index.returncode == 1 or bool(untracked)
         return {"head": head, "dirty": dirty}
     except (OSError, subprocess.SubprocessError):
         return {"head": None, "dirty": None}

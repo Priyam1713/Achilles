@@ -7,6 +7,8 @@ system:
   bind: 127.0.0.1
   port: 7788
   default_mode: smart
+  # Promoted by the 2026-08-30 governed SWE tournament (docs/HARNESS_SELECTION.md).
+  default_agent_loop: native
   fail_closed: true
 hardware_target:
   os: windows

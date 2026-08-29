@@ -11,6 +11,7 @@ from pathlib import Path
 from harness_swe_tasks import SOFTWARE_ENGINEERING_TASKS
 from harness_tasks import MICRO_TASKS, TASKS
 from harness_tournament import (
+    _git_provenance,
     campaign_cells,
     finalise_task_outcome,
     run_held_out_verification,
@@ -329,3 +330,28 @@ def test_openshell_downloads_the_uploaded_workspace_directory(monkeypatch, tmp_p
     assert result.returncode == 0
     assert calls[1][3] == workspace.name
     assert (workspace / "result.txt").read_text(encoding="utf-8") == "after"
+
+
+def test_git_provenance_ignores_only_eol_worktree_differences(monkeypatch):
+    calls = []
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return Completed()
+
+    def fake_check_output(argv, **kwargs):
+        if "rev-parse" in argv:
+            return "abc123\n"
+        if "ls-files" in argv:
+            return ""
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+
+    assert _git_provenance() == {"head": "abc123", "dirty": False}
+    assert len(calls) == 2
+    assert all("--ignore-space-at-eol" in argv for argv in calls)

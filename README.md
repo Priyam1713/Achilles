@@ -146,7 +146,8 @@ stack, authorizes the selected workspace for one hour, and immediately runs the 
 
 This is the provisional development profile: Qwen3.5-9B for fast/smart coding, governed
 native tools, and local execution. The heavier Qwen3.8-27B remains available through
-`--mode deep`; optional harness/runtime contests no longer block development.
+`--mode deep`. Native is the measured default after a 24/24 held-out SWE result; the
+[selection report](docs/HARNESS_SELECTION.md) records Pi, Goose and OpenCode performance.
 
 The equivalent explicit commands are:
 

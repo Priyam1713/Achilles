@@ -40,6 +40,8 @@ def test_registry_valid(tmp_path, monkeypatch):
     qwen = k.registry.models["qwen38-27b"]
     assert qwen.source == "Qwen/Qwen3.8-27B"
     assert qwen.artifact["source"] == "unsloth/Qwen3.8-27B-GGUF"
+    assert k.agent_loops.default_name == "native"
+    assert k.agent_loops.get() is k.agent_loops.get("native")
 
 
 def test_release_radar_never_auto_promotes():

@@ -2,6 +2,18 @@
 
 The stack is intentionally **capability-stable but checkpoint-replaceable**. A model is kept only when it adds a distinct capability or materially improves quality/reliability/efficiency on the target hardware. Local benchmark results may demote any brand.
 
+## Harness + authority base
+
+- **NativeAgentLoop — promoted default.** It passed 24/24 held-out software-engineering
+  contracts versus Pi's 21/24, used 54.1% fewer accounted tokens and kept the smallest
+  operational surface. See [the harness selection report](HARNESS_SELECTION.md).
+- **Pi — first challenger; Goose and OpenCode — retained contenders.** They remain explicit
+  overrides for future tracks and material version changes, not default dependencies.
+- **SovereignKernel — fixed governed fixture.** Every contender reaches the same workspace
+  allow-list, expiring grants, policy engine, tool implementations, checkpoints and hardened
+  OpenShell/Docker execution. Kernel changes invalidate an active campaign unless they repair a
+  proven measurement defect and the campaign restarts from a clean revision.
+
 ## Core cognition
 
 - **Qwen3.5-9B Q6_K** — resident/fast control-loop brain through llama.cpp.

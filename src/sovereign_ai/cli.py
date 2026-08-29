@@ -62,7 +62,9 @@ def route(
 def run(
     task: str,
     workspace: str = typer.Option(".", help="Directory the agent may work in"),
-    loop: str = typer.Option("native", help="Registered AgentLoop to drive"),
+    loop: str | None = typer.Option(
+        None, help="Registered AgentLoop to drive; defaults to the promoted configured loop"
+    ),
     max_steps: int = typer.Option(10, help="Step budget for this run"),
     approve: bool = typer.Option(
         False,
@@ -100,13 +102,14 @@ def run(
     command is an entry point, not a new authority (`D-026`'s safety boundary).
     """
     kernel = SovereignKernel.build(config_root)
-    if loop not in kernel.agent_loops.names():
+    loop_name = loop or kernel.agent_loops.default_name
+    if loop_name not in kernel.agent_loops.names():
         console.print(
-            f"[red]No agent loop named {loop!r}.[/red] Registered: "
+            f"[red]No agent loop named {loop_name!r}.[/red] Registered: "
             f"{', '.join(kernel.agent_loops.names()) or '(none)'}"
         )
         raise typer.Exit(code=2)
-    agent_loop = kernel.agent_loops.get(loop)
+    agent_loop = kernel.agent_loops.get(loop_name)
 
     root = Path(workspace).expanduser().resolve(strict=False)
     if kernel.workspaces.resolve(root) is None:
@@ -133,7 +136,7 @@ def run(
     }
 
     console.print(f"[bold]{task}[/bold]")
-    console.print(f"[dim]run {run_id} · loop {loop} · {root} · budget {max_steps} steps"
+    console.print(f"[dim]run {run_id} · loop {loop_name} · {root} · budget {max_steps} steps"
                   f"{' · approved' if approve else ''}[/dim]\n")
 
     started = time.time()

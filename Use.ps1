@@ -55,5 +55,5 @@ if ($LASTEXITCODE -ne 0) { throw "Could not authorize workspace $workspacePath."
 & $SoaiKernelPython -m sovereign_ai.cli grant $subject write workspace --ttl-seconds 3600 | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Could not issue the temporary workspace grant." }
 
-& $SoaiKernelPython -m sovereign_ai.cli run $Task --workspace $workspacePath --loop native --max-steps $MaxSteps --subject $subject --capability coding --mode smart
+& $SoaiKernelPython -m sovereign_ai.cli run $Task --workspace $workspacePath --max-steps $MaxSteps --subject $subject --capability coding --mode smart
 if ($LASTEXITCODE -ne 0) { throw "The agent run did not complete successfully." }

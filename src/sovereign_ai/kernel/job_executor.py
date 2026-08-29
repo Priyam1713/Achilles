@@ -166,7 +166,7 @@ def _advance_workflow_best_effort(
 
 
 async def _run_agent_loop(kernel: SovereignKernel, job: JobRecord, run: RunRecord) -> dict[str, Any]:
-    """Drive `kernel.agent_loops.get("native")` (or another registered loop, via
+    """Drive the configured default loop (or another registered loop, via
     `job.request["loop"]`) to completion for one job attempt.
 
     One `Run` = one full attempt of the task, from first step to `done`/budget-exhausted/
@@ -176,7 +176,7 @@ async def _run_agent_loop(kernel: SovereignKernel, job: JobRecord, run: RunRecor
     round trip to the event store.
     """
     payload = AgentPayload.model_validate(job.request)
-    loop_name = job.request.get("loop", "native")
+    loop_name = job.request.get("loop") or kernel.agent_loops.default_name
     loop = kernel.agent_loops.get(loop_name)
     state: dict[str, Any] = {
         "run_id": run.id,

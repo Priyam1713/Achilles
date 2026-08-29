@@ -154,7 +154,9 @@ class SovereignKernel:
             ),
             mcp_servers=config.mcp_servers,
         )
-        agent_loops = AgentLoopRegistry()
+        agent_loops = AgentLoopRegistry(
+            default_name=str(config.system.get("system", {}).get("default_agent_loop", "native"))
+        )
         agent_loops.register(
             "native",
             NativeAgentLoop(
