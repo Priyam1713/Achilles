@@ -4675,6 +4675,85 @@ def test_prime_loop_registers_only_when_the_binary_exists(tmp_path, monkeypatch)
     assert "prime-agent" in present.agent_loops.names()
 
 
+def _deepseek_harness_loop(tmp_path, **kwargs):
+    from sovereign_ai.agents.deepseek_harness_loop import DeepSeekHarnessAgentLoop
+
+    checkout = tmp_path / "deepseek-harness"
+    (checkout / "apps" / "cli" / "lib").mkdir(parents=True)
+    (checkout / "apps" / "cli" / "lib" / "bin.js").write_text("", encoding="utf-8")
+    (checkout / "packages" / "mcp" / "mcp-client" / "lib").mkdir(parents=True)
+    (checkout / "packages" / "mcp" / "mcp-client" / "lib" / "index.js").write_text(
+        "", encoding="utf-8"
+    )
+    return DeepSeekHarnessAgentLoop(
+        checkout,
+        "http://127.0.0.1:18080/v1",
+        "qwen35-9b",
+        **kwargs,
+    )
+
+
+def test_deepseek_harness_overlay_uses_local_router_and_disables_direct_authority(tmp_path):
+    loop = _deepseek_harness_loop(tmp_path)
+    patch = loop._patch(
+        {"agent_profile_id": "subject-1", "workspace": "/tmp/ws", "run_id": "run-1"}
+    )
+    assert "provider: \"sovereign\"" in patch
+    assert "model: \"qwen35-9b\"" in patch
+    assert "baseURL: \"http://127.0.0.1:18080/v1\"" in patch
+    assert "apiKeyEnv: ACHILLES_LOCAL_API_KEY" in patch
+    assert "serverName: achilles" in patch
+    assert "sovereign_ai.agents.mcp_bridge" in patch
+    for tool_id in (
+        "tool-bash",
+        "tool-pwsh",
+        "tool-jobs",
+        "tool-fs",
+        "tool-fs-search",
+        "tool-skill",
+        "tool-web",
+        "tool-str-replace-editor",
+    ):
+        assert f"- id: {tool_id}\n  disabled: true" in patch
+
+
+def test_deepseek_harness_bridge_carries_governed_identity(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOVEREIGN_STATE_DIR", "/tmp/state")
+    env = _deepseek_harness_loop(tmp_path)._bridge_environment(
+        {"agent_profile_id": "subject-1", "workspace": "/tmp/ws", "run_id": "run-1"}
+    )
+    assert env["SOAI_MCP_AGENT_PROFILE_ID"] == "subject-1"
+    assert env["SOAI_MCP_WORKSPACE"] == "/tmp/ws"
+    assert env["SOAI_MCP_RUN_ID"] == "run-1"
+    assert env["SOVEREIGN_STATE_DIR"] == "/tmp/state"
+
+
+def test_deepseek_harness_reports_a_missing_node_without_touching_workspace(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    step = asyncio.run(
+        _deepseek_harness_loop(tmp_path, node_binary="definitely-not-a-node-binary").next_step(
+            {"task": "anything", "workspace": str(workspace), "agent_profile_id": "s"}
+        )
+    )
+    assert step.done and step.kind == "harness_error"
+    assert "runtime not found" in step.payload["error"]
+    assert list(workspace.iterdir()) == []
+
+
+def test_deepseek_harness_registers_only_when_checkout_exists(tmp_path, monkeypatch):
+    from sovereign_ai.kernel import app as kernel_app
+
+    monkeypatch.setattr(kernel_app, "resolve_deepseek_harness_checkout", lambda: None)
+    absent = kernel(tmp_path, monkeypatch)
+    assert "deepseek-harness" not in absent.agent_loops.names()
+
+    checkout = tmp_path / "checkout"
+    monkeypatch.setattr(kernel_app, "resolve_deepseek_harness_checkout", lambda: checkout)
+    present = kernel(tmp_path / "second", monkeypatch)
+    assert "deepseek-harness" in present.agent_loops.names()
+
+
 # ---------------------------------------------------------------------------------------
 # Context economy in the tools themselves (knowledge/harness-research.md, adoption item 3).
 # Both changes exist because the measured constraint on this machine is tokens per turn,

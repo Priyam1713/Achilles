@@ -177,6 +177,50 @@ schema-v4 report remains local at `state/arena-v2-prime-screening-9b.json`; its 
 is `9746636c0719a04dbd77eb4e50f8413f702aba902f54d01ce59b472bfe676179`, llama.cpp revision is
 `dc72703fc69698b1ea68ece8d2dd8a96e6a4e1fe`, and OpenShell was 0.0.109.
 
+## Arena v2 — DeepSeek Harness/Cordis admission and screen
+
+DeepSeek Harness `0.1.0-rc.8` at exact revision
+`141eb6fef83422698aef7a981029e843e8161534` was run through its official headless entry point.
+Its generic pi-ai provider targeted the same local llama.cpp router. Direct filesystem, shell,
+job, search, skill and editor tools were disabled; its planning, compaction, goals and subagent
+orchestration remained available, while the Achilles MCP bridge was its only workspace-capable
+tool source. The one-cell admission smoke passed end to end through OpenShell and the hidden
+verifier before the screen began.
+
+Round 1 again used 12 tasks × 2 attempts, with all 12 `GOLD=PASS` and `NULL=FAIL` controls passing
+first. The frozen campaign used DeepSeek Harness adapter SHA-256
+`2ec30d334c0f81d9de48a754ca0192081b23be50153fe08a8e82d891a8ead20c` and stack fingerprint
+`eb7e39e3cc72ca356076a7eb8a5eecfe90e1883fcb14632ab68fbaa3336f044b`.
+
+| Harness | Passed | Pass rate | Median time | Total time | Total tokens | Median tokens | Generated tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Native | **18/24** | **75.0%** | **39.51s** | **1,496.77s** | **375,218** | **7,387.5** | 54,913 |
+| DeepSeek Harness | 16/24 | 66.67% | 44.59s | 1,564.66s | 1,060,231 | 29,592.5 | **46,886** |
+
+Paired matrix: 14 both passed, 2 DeepSeek-Harness-only passes, 4 Native-only passes and 4 both
+failed. Native minus DeepSeek Harness was +8.33 percentage points with paired bootstrap 95% CI
+[-12.5, +29.17] points and exact McNemar p=0.6875. Correctness is therefore inconclusive at this
+sample size. Native used 64.6% fewer total tokens and 4.3% less total wall time; the token result
+is the material efficiency difference. DeepSeek Harness generated fewer output tokens yet spent
+2.83× the total tokens, locating the overhead in repeated input/tool/context rather than verbosity.
+
+DeepSeek Harness owned two discordant wins: safe-join attempt one and dependency-migration
+attempt two. Native owned the paired wins on empty-mean attempt two, safe-join attempt two,
+stable-dedupe attempt two and CSV/Decimal attempt one. DeepSeek Harness hit two primary timeouts;
+three further runs reached the common 4,096-token model-output ceiling (plus the 64-token title
+request) and terminated as `max-tokens`, showing that its one-shot loop is vulnerable when a tool
+call is truncated at the shared per-request cap. Native instead exposed long multi-step budget
+failures. Neither harness solved JavaScript prototype pollution, and neither made safe-join stable.
+
+DeepSeek Harness is therefore **retained as a finalist candidate, but not promoted**. Its unique
+migration/security wins prevent capability elimination, while its context amplification prevents
+selection as the default. The raw schema-v4 report remains local at
+`state/arena-v2-deepseek-screening-9b.json`; raw SHA-256 is
+`434ae65593aabf3cfba0d2e049305aa3e615e3534cba394d9b06d932992f3dd1`, campaign SHA-256 is
+`268a3d4e3fbe398ca3a2f98114d74064c36353d83978aa41fd37d9ffcb37b273`, and task-manifest SHA-256
+is `7bcc57ddeae2f5846ee7f3f26075323c0aa3970426b32393e90ac3cb7019d434`. The model artifact,
+llama.cpp and OpenShell versions matched the Prime screen.
+
 ## Limits and next trigger
 
 The v2 screen is still small and local-model-specific. Native and Prime must defend their

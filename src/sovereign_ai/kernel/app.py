@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sovereign_ai.agents.deepseek_harness_loop import (
+    DeepSeekHarnessAgentLoop,
+    resolve_deepseek_harness_checkout,
+)
 from sovereign_ai.agents.goose_loop import GooseAgentLoop
 from sovereign_ai.agents.native_loop import NativeAgentLoop
 from sovereign_ai.agents.opencode_loop import OpenCodeAgentLoop, resolve_opencode_binary
@@ -226,6 +230,16 @@ class SovereignKernel:
                         f"http://{system.get('bind', '127.0.0.1')}:{system.get('port', 7788)}"
                     ),
                     session_token=SessionAuth(state / "session.token").token,
+                ),
+            )
+        deepseek_checkout = resolve_deepseek_harness_checkout()
+        if deepseek_checkout and llama_cpp_engine and llama_cpp_engine.base_url:
+            agent_loops.register(
+                "deepseek-harness",
+                DeepSeekHarnessAgentLoop(
+                    deepseek_checkout,
+                    llama_cpp_engine.base_url,
+                    "qwen38-27b",
                 ),
             )
         computer = ComputerController()

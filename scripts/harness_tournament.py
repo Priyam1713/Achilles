@@ -829,6 +829,43 @@ def collect_freeze_fingerprint(
             "version": version,
             "adapter_sha256": _hash_file(Path(inspect.getsourcefile(type(loop)) or __file__)),
         }
+        checkout = getattr(loop, "checkout", None)
+        if checkout:
+            checkout_path = Path(checkout)
+            checkout_record: dict[str, Any] = {"path": str(checkout_path)}
+            try:
+                checkout_record["git_head"] = subprocess.check_output(
+                    ["git", "-C", str(checkout_path), "rev-parse", "HEAD"],
+                    text=True,
+                    timeout=10,
+                ).strip()
+                checkout_record["git_dirty"] = bool(
+                    subprocess.check_output(
+                        ["git", "-C", str(checkout_path), "status", "--porcelain"],
+                        text=True,
+                        timeout=10,
+                    ).strip()
+                )
+            except (OSError, subprocess.SubprocessError):
+                checkout_record["git_head"] = None
+                checkout_record["git_dirty"] = None
+            package_json = checkout_path / "package.json"
+            if package_json.is_file():
+                package = json.loads(package_json.read_text(encoding="utf-8"))
+                checkout_record["package_name"] = package.get("name")
+                checkout_record["package_version"] = package.get("version")
+            node_binary = getattr(loop, "node_binary", None)
+            if node_binary:
+                try:
+                    checkout_record["node_version"] = subprocess.check_output(
+                        [str(node_binary), "--version"],
+                        text=True,
+                        stderr=subprocess.STDOUT,
+                        timeout=10,
+                    ).strip()
+                except (OSError, subprocess.SubprocessError):
+                    checkout_record["node_version"] = None
+            harnesses[name]["checkout"] = checkout_record
 
     openshell_version = None
     try:
@@ -913,6 +950,11 @@ def summarise_results(results: list[dict[str, Any]]) -> dict[str, Any]:
             "median_wall_time_s": round(
                 statistics.median(r["wall_time_s"] for r in loop_results), 2
             ),
+            "total_tokens": sum(r["tokens"]["total_tokens"] for r in loop_results),
+            "median_tokens": round(
+                statistics.median(r["tokens"]["total_tokens"] for r in loop_results), 2
+            ),
+            "generated_tokens": sum(r["tokens"]["generated_tokens"] for r in loop_results),
         }
     return summary
 

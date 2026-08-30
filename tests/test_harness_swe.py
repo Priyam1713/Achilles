@@ -203,6 +203,7 @@ def test_result_summary_keeps_categories_outcomes_and_latency_distribution():
             "outcome": "done",
             "denied_attempts": 0,
             "wall_time_s": 1.0,
+            "tokens": {"total_tokens": 100, "generated_tokens": 10},
         },
         {
             "loop": "native",
@@ -211,11 +212,15 @@ def test_result_summary_keeps_categories_outcomes_and_latency_distribution():
             "outcome": "harness_timeout",
             "denied_attempts": 1,
             "wall_time_s": 3.0,
+            "tokens": {"total_tokens": 300, "generated_tokens": 20},
         },
     ]
     summary = summarise_results(results)["native"]
     assert summary["pass_rate"] == 0.5
     assert summary["median_wall_time_s"] == 2.0
+    assert summary["total_tokens"] == 400
+    assert summary["median_tokens"] == 200.0
+    assert summary["generated_tokens"] == 30
     assert summary["by_category"]["bug_fix"] == {"passed": 1, "total": 1}
     assert summary["outcomes"] == {"done": 1, "harness_timeout": 1}
 
