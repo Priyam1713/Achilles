@@ -6,6 +6,7 @@ from sovereign_ai.agents.goose_loop import GooseAgentLoop
 from sovereign_ai.agents.native_loop import NativeAgentLoop
 from sovereign_ai.agents.opencode_loop import OpenCodeAgentLoop, resolve_opencode_binary
 from sovereign_ai.agents.pi_loop import PiAgentLoop, resolve_pi_binary
+from sovereign_ai.agents.prime_loop import PrimeAgentLoop, resolve_prime_agent_binary
 from sovereign_ai.agents.registry import AgentLoopRegistry
 from sovereign_ai.collaboration import CollaborationService, CollaborationStore
 from sovereign_ai.computer.controller import ComputerController
@@ -212,6 +213,21 @@ class SovereignKernel:
                     session_token=SessionAuth(state / "session.token").token,
                 ),
             )
+        prime_binary = resolve_prime_agent_binary()
+        if prime_binary and llama_cpp_engine and llama_cpp_engine.base_url:
+            system = config.system.get("system", {})
+            agent_loops.register(
+                "prime-agent",
+                PrimeAgentLoop(
+                    prime_binary,
+                    llama_cpp_engine.base_url,
+                    "qwen38-27b",
+                    kernel_url=(
+                        f"http://{system.get('bind', '127.0.0.1')}:{system.get('port', 7788)}"
+                    ),
+                    session_token=SessionAuth(state / "session.token").token,
+                ),
+            )
         computer = ComputerController()
         transactions = TransactionManager(state / "transactions")
         event_bus = EventBus()
@@ -222,7 +238,9 @@ class SovereignKernel:
         agent_profiles = AgentProfileStore(state / "agent_profiles.db")
         delegations = DelegationStore(state / "delegations.db")
         approvals = ApprovalRequestStore(state / "approvals.db")
-        roster = RosterService(agent_profiles, delegations, capability_grants, approvals, jobs, policy)
+        roster = RosterService(
+            agent_profiles, delegations, capability_grants, approvals, jobs, policy
+        )
         presence = PresenceService(capability_grants, workspace_leases, delegations, jobs)
         workflow_definitions = WorkflowDefinitionStore(state / "workflow_definitions.db")
         workflow_instances = WorkflowInstanceStore(state / "workflow_instances.db")

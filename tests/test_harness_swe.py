@@ -14,6 +14,7 @@ from harness_tournament import (
     _git_provenance,
     campaign_cells,
     finalise_task_outcome,
+    paired_analysis,
     run_held_out_verification,
     select_tasks,
     summarise_results,
@@ -29,7 +30,7 @@ from sovereign_ai.execution.openshell import OpenShellBackend
 def test_versioned_suites_are_disjoint_and_historical_alias_is_stable():
     assert TASKS is MICRO_TASKS
     assert len(MICRO_TASKS) == 12
-    assert len(SOFTWARE_ENGINEERING_TASKS) == 8
+    assert len(SOFTWARE_ENGINEERING_TASKS) == 12
     micro_ids = {task.id for task in MICRO_TASKS}
     swe_ids = {task.id for task in SOFTWARE_ENGINEERING_TASKS}
     assert not micro_ids.intersection(swe_ids)
@@ -93,6 +94,56 @@ def test_every_initial_swe_fixture_fails_its_held_out_contract(tmp_path):
             check=False,
         )
         assert result.returncode != 0, f"{task.id} passed without a candidate change"
+
+
+def test_every_gold_control_passes_its_held_out_contract(tmp_path):
+    for task in SOFTWARE_ENGINEERING_TASKS:
+        verifier_root = tmp_path / task.id
+        solution = verifier_root / "solution"
+        solution.mkdir(parents=True)
+        task.setup(solution)
+        assert task.verification.gold_patch is not None
+        task.verification.gold_patch(solution)
+        verifier = verifier_root / "verify.py"
+        verifier.write_text(task.verification.script, encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, "-I", str(verifier), str(solution)],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        assert result.returncode == 0, f"{task.id} gold failed: {result.stderr}"
+
+
+def test_held_out_verifier_rejects_forbidden_candidate_files(tmp_path):
+    task = SOFTWARE_ENGINEERING_TASKS[0]
+    workspace_root = tmp_path / "workspaces"
+    solution = workspace_root / "native" / f"{task.id}-1"
+    solution.mkdir(parents=True)
+    task.setup(solution)
+    (solution / "README.md").write_text("candidate-controlled tests\n", encoding="utf-8")
+
+    class Workspaces:
+        def add(self, *args, **kwargs):
+            raise AssertionError("forbidden candidates must not reach execution")
+
+        def remove(self, *args, **kwargs):
+            raise AssertionError("workspace was never registered")
+
+    class Execution:
+        async def run_approved(self, *args, **kwargs):
+            raise AssertionError("forbidden candidates must not execute")
+
+    class Kernel:
+        workspaces = Workspaces()
+        execution = Execution()
+
+    result = asyncio.run(
+        run_held_out_verification(Kernel(), "native", task, solution, workspace_root, 1)
+    )
+    assert result["outcome"] == "forbidden_changes"
+    assert result["forbidden_files"] == ["README.md"]
 
 
 def test_held_out_verifier_is_staged_afterward_and_never_synced_back(tmp_path):
@@ -167,6 +218,31 @@ def test_result_summary_keeps_categories_outcomes_and_latency_distribution():
     assert summary["median_wall_time_s"] == 2.0
     assert summary["by_category"]["bug_fix"] == {"passed": 1, "total": 1}
     assert summary["outcomes"] == {"done": 1, "harness_timeout": 1}
+
+
+def test_paired_analysis_uses_identical_cells_and_exact_mcnemar():
+    results = []
+    native = [True, True, True, False]
+    prime = [True, False, False, False]
+    for attempt, (native_pass, prime_pass) in enumerate(zip(native, prime, strict=True), 1):
+        for loop, passed in (("native", native_pass), ("prime", prime_pass)):
+            results.append(
+                {
+                    "loop": loop,
+                    "task_id": "paired-task",
+                    "attempt": attempt,
+                    "passed": passed,
+                }
+            )
+    pair = paired_analysis(results, bootstrap_samples=1_000)["pairs"]["native__vs__prime"]
+    assert pair["pass_matrix"] == {
+        "both_pass": 1,
+        "left_only_pass": 2,
+        "right_only_pass": 0,
+        "both_fail": 1,
+    }
+    assert pair["pass_rate_delta"] == 0.5
+    assert pair["exact_mcnemar_p"] == 0.5
 
 
 def test_wsl_paths_bypass_legacy_argument_translation(monkeypatch):

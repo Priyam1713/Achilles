@@ -4612,6 +4612,69 @@ def test_pi_loop_registers_only_when_the_binary_exists(tmp_path, monkeypatch):
     assert "pi" in present.agent_loops.names()
 
 
+def _prime_loop(**kwargs):
+    from sovereign_ai.agents.prime_loop import PrimeAgentLoop
+
+    return PrimeAgentLoop(
+        "/nonexistent/prime-agent",
+        "http://127.0.0.1:18080/v1",
+        "qwen35-9b",
+        kernel_url="http://127.0.0.1:7788",
+        session_token="test-token",
+        **kwargs,
+    )
+
+
+def test_prime_adapter_declares_a_generic_openai_compatible_provider():
+    config = _prime_loop()._models_json()
+    provider = config["providers"]["sovereign"]
+    assert provider["api"] == "openai-completions"
+    assert provider["baseUrl"] == "http://127.0.0.1:18080/v1"
+    assert provider["compat"]["supportsDeveloperRole"] is False
+    assert provider["compat"]["maxTokensField"] == "max_tokens"
+    assert [model["id"] for model in provider["models"]] == ["qwen35-9b"]
+
+
+def test_prime_adapter_environment_isolates_operator_config_and_disables_telemetry(tmp_path):
+    env = _prime_loop()._environment(
+        {"agent_profile_id": "subject-1", "workspace": "/tmp/ws", "run_id": "run-1"},
+        tmp_path / "agent",
+    )
+    assert env["SOAI_AGENT_PROFILE_ID"] == "subject-1"
+    assert env["SOAI_WORKSPACE"] == "/tmp/ws"
+    assert env["SOAI_SESSION_TOKEN"] == "test-token"
+    assert env["SOAI_KERNEL_URL"] == "http://127.0.0.1:7788"
+    assert env["PRIME_AGENT_CODING_AGENT_DIR"] == str(tmp_path / "agent")
+    assert env["PI_OFFLINE"] == "1"
+    assert env["PRIME_AGENT_TELEMETRY"] == "0"
+    assert env["DO_NOT_TRACK"] == "1"
+
+
+def test_prime_adapter_reports_a_missing_binary_without_touching_the_workspace(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    step = asyncio.run(
+        _prime_loop().next_step(
+            {"task": "anything", "workspace": str(workspace), "agent_profile_id": "s"}
+        )
+    )
+    assert step.done and step.kind == "harness_error"
+    assert "not found" in step.payload["error"]
+    assert list(workspace.iterdir()) == []
+
+
+def test_prime_loop_registers_only_when_the_binary_exists(tmp_path, monkeypatch):
+    from sovereign_ai.kernel import app as kernel_app
+
+    monkeypatch.setattr(kernel_app, "resolve_prime_agent_binary", lambda: None)
+    absent = kernel(tmp_path, monkeypatch)
+    assert "prime-agent" not in absent.agent_loops.names()
+
+    monkeypatch.setattr(kernel_app, "resolve_prime_agent_binary", lambda: "/usr/bin/prime-agent")
+    present = kernel(tmp_path / "second", monkeypatch)
+    assert "prime-agent" in present.agent_loops.names()
+
+
 # ---------------------------------------------------------------------------------------
 # Context economy in the tools themselves (knowledge/harness-research.md, adoption item 3).
 # Both changes exist because the measured constraint on this machine is tokens per turn,

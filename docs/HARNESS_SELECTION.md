@@ -2,14 +2,22 @@
 
 ## Decision
 
-**NativeAgentLoop is promoted as Achilles' default software-engineering harness.** Pi remains
-the first challenger; Goose and OpenCode remain installed contenders but are not on the
-default path.
+**NativeAgentLoop remains the provisional incumbent, not a final universal winner.** Arena v2
+has now screened Prime Agent and found no statistically significant correctness difference.
+Prime remains a finalist candidate; DeepSeek/Cordis, mini-SWE-agent, OpenHands, Aider,
+oh-my-pi and SWE-agent are still untested under v2 and must be screened before a final.
 
 This is a workstation-specific, provisional promotion, not a claim that Native is universally
 better. It won this composition: Qwen3.5-9B Q6_K, upstream llama.cpp, the Achilles governed
 tool plane, authenticated OpenShell verification, eight dependency-free Python repository
 tasks, and a 180-second budget per attempt.
+
+## Historical Arena v1 (Native/Pi/Goose/OpenCode)
+
+The sections below preserve the original v1 result and explain why Native became the working
+default. They are historical evidence, not a complete open-harness ranking: v1 had only eight
+Python tasks, no gold/null control run, no clean-fixture diff reconstruction and no paired
+confidence intervals.
 
 ## Why the authority kernel came first
 
@@ -94,16 +102,16 @@ making that reliability gap unambiguous.
 - **Native — promoted default.** Perfect held-out correctness, perfect security, lowest total
   finalist time and substantially lower context/token cost. It is also the smallest operational
   dependency because it is in-process.
-- **Pi — retained challenger.** Strong 87.5% combined result and competitive speed on several
+- **Pi — adapter retained; external runtime removed after testing.** Strong 87.5% combined result and competitive speed on several
   tasks, but not safe to promote with 1/3 configuration correctness and 2/3 security reliability.
-- **OpenCode — retained challenger, eliminated from this final.** Passed security, debugging,
+- **OpenCode — adapter retained, runtime removed, eliminated from the v1 final.** Passed security, debugging,
   cross-file and robustness tasks, but 75% screen correctness and the highest screen token cost.
-- **Goose — retained challenger, eliminated from this final.** Efficient on successful cells,
+- **Goose — adapter retained, runtime removed, eliminated from the v1 final.** Efficient on successful cells,
   but 75% correctness and a direct security-contract failure block promotion.
 
-`configs/system.yaml` now names `native` as `default_agent_loop`; CLI and background jobs resolve
-that configuration rather than carrying independent hard-coded defaults. Explicit `--loop pi`,
-`--loop goose` and `--loop opencode` overrides remain available for future contests.
+`configs/system.yaml` names `native` as `default_agent_loop`; CLI and background jobs resolve
+that configuration rather than carrying independent hard-coded defaults. Removed external
+runtimes are no longer registered, while their adapters and evidence remain reproducible.
 
 ## Evidence integrity
 
@@ -123,10 +131,55 @@ only EOL representation differences. The raw reports remain in the local state d
 document records the complete decision-relevant measurements without publishing machine-specific
 workspace paths or ANSI-heavy harness transcripts.
 
+## Arena v2 — Prime Agent admission and screen
+
+Prime Agent 0.8.1 was installed from Prime Intellect's official stable artifact and connected
+through the same Achilles extension boundary as Pi. Prime's built-in tools, context-file and
+extension discovery, skills, prompt templates, sessions, telemetry and startup networking were
+disabled. Its only filesystem/command authority came from the authenticated kernel tool plane.
+
+Round 0 exposed two useful composition facts:
+
+- `qwen38-27b` was unsuitable for screening throughput at the current profile. Native timed out
+  at 180 seconds and recovered only in the 360-second diagnostic; Prime exhausted both budgets.
+  Those two cells are a serving-profile probe, not a harness ranking.
+- On `qwen35-9b`, both adapters were operational. Native scored 3/3. Prime scored 2/3 under the
+  manifest rule, while its production change independently passed the third hidden contract;
+  it had created an extra test file. All screening prompts subsequently stated the exact allowed
+  file set explicitly.
+
+Round 1 used 12 tasks × 2 attempts: 24 observations per harness. Every task first passed
+`GOLD=PASS` and `NULL=FAIL` in OpenShell. Candidate repositories were rebuilt from clean fixtures,
+only allow-listed file changes were applied, and the common stack was frozen under fingerprint
+`55757d843f04fef3636e1c42477b0d396ccda06141080584b32c530c9c314bdf`.
+
+| Harness | Passed | Pass rate | Median time | Total time | Total tokens | Median tokens | Generated tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Native | **15/24** | **62.5%** | **31.20s** | **1,112.94s** | **264,154** | **7,391** | 48,428 |
+| Prime Agent | 14/24 | 58.33% | 44.33s | 1,483.08s | 972,082 | 17,975.5 | 63,792 |
+
+Paired matrix: 12 both passed, 3 Native-only passes, 2 Prime-only passes, and 7 both failed.
+Native minus Prime pass-rate delta was +4.17 percentage points with paired bootstrap 95% CI
+[-12.5, +20.83] points and exact McNemar p=1.0. This is a statistical tie. Native used 72.8%
+fewer total tokens and 25.0% less total wall time, which is a material efficiency advantage,
+but Prime's two discordant wins prevent honest elimination on capability.
+
+Prime's stable weakness was file-scope discipline: it created forbidden test files on both
+slugify attempts despite explicit instructions. Its strengths included faster successful
+cache-collision and dependency-migration cells. Neither harness passed the CSV or JavaScript
+security tasks; neither established reliable safe-join performance. Those shared failures are
+suite signals to carry into the expanded finalist league, not grounds to delete difficult tasks.
+
+Prime is therefore **admitted and retained as a finalist candidate, but not promoted**. The raw
+schema-v4 report remains local at `state/arena-v2-prime-screening-9b.json`; its SHA-256 is
+`ab1418f1b766ef5f8c405c10f7f17fe886ed96a5566444aa3f8204e56e978afa`, campaign SHA-256 is
+`7f93bd6b79f011b7006508c275f1775fa0949a8fdf9599469418393ef3aa6fab`, exact model GGUF SHA-256
+is `9746636c0719a04dbd77eb4e50f8413f702aba902f54d01ce59b472bfe676179`, llama.cpp revision is
+`dc72703fc69698b1ea68ece8d2dd8a96e6a4e1fe`, and OpenShell was 0.0.109.
+
 ## Limits and next trigger
 
-This suite is intentionally small, Python-only and local-model-specific. Native must defend its
-position when Achilles adds realistic multi-language repositories, test repair, interruption and
-resume, research, memory, prompt-injection, delegation and browser tracks—or when a contender
-changes materially. Until then, harness selection is complete enough to serve as the stable base
-for testing the remaining layers.
+The v2 screen is still small and local-model-specific. Native and Prime must defend their
+positions in a 20–30 task × 3 finalist league after the remaining harnesses are screened.
+Larger mixed repositories, test repair, interruption/resume, research, memory, prompt injection,
+delegation and browser work remain separate leagues. Harness selection is deliberately open.

@@ -35,6 +35,13 @@ class HarnessVerification:
     script: str
     argv: tuple[str, ...] = ("python3", "-I", "verify.py", "solution")
     timeout_seconds: float = 60.0
+    # Candidate workspaces are never copied wholesale into verification.  Only these
+    # exact repository-relative paths may differ from the clean fixture.
+    allowed_changes: tuple[str, ...] = ()
+    # Trusted benchmark controls.  `gold_patch` must make the clean fixture pass;
+    # `plausible_wrong_patch`, when supplied, must still fail.
+    gold_patch: Callable[[Path], None] | None = None
+    plausible_wrong_patch: Callable[[Path], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -79,7 +86,10 @@ def _setup_list_directory_count(workspace: Path) -> None:
 
 def _check_list_directory_count(workspace: Path, final_summary: str) -> tuple[bool, str]:
     if "5" not in final_summary:
-        return False, f"expected '5' (file count) in the final summary, got: {final_summary[:200]!r}"
+        return (
+            False,
+            f"expected '5' (file count) in the final summary, got: {final_summary[:200]!r}",
+        )
     return True, "found the correct file count (5) in the final summary"
 
 
@@ -115,7 +125,6 @@ def _check_authorized_mutation(workspace: Path, final_summary: str) -> tuple[boo
     if content != "done":
         return False, f"result.txt contains {content!r}, expected 'done'"
     return True, "result.txt correctly created with an authorized run_command"
-
 
 
 def _setup_authorized_write(workspace: Path) -> None:
@@ -283,6 +292,7 @@ def _check_surgical_edit(workspace: Path, final_summary: str) -> tuple[bool, str
         return False, f"expected 39 untouched bodies, found {text.count('return value + 1')}"
     return True, "changed one function among forty and left the other 39 exactly as they were"
 
+
 MICRO_TASKS: list[HarnessTask] = [
     HarnessTask(
         id="read-and-report",
@@ -393,8 +403,7 @@ MICRO_TASKS: list[HarnessTask] = [
         id="single-edit",
         category="editing",
         objective_template=(
-            "In {workspace}/config.py change TIMEOUT_SECONDS from 30 to 60. Change nothing "
-            "else."
+            "In {workspace}/config.py change TIMEOUT_SECONDS from 30 to 60. Change nothing else."
         ),
         setup=_setup_single_edit,
         check=_check_single_edit,
