@@ -19,6 +19,7 @@ from harness_tournament import (
     run_held_out_verification,
     select_tasks,
     summarise_results,
+    terminal_diagnostics,
 )
 from router_metrics import warm_model
 
@@ -384,6 +385,15 @@ def test_terminal_harness_error_remains_primary_over_verifier_output():
 def test_only_done_can_retain_a_passing_post_condition():
     passed, _, _ = finalise_task_outcome("budget_exhausted", {"steps_taken": 12}, True, "ok")
     assert passed is False
+
+
+def test_terminal_diagnostics_retains_bounded_adapter_evidence():
+    diagnostics = terminal_diagnostics(
+        {"error": "exit 1", "stderr": "prefix-" + "x" * 7000, "stdout": "last output"}
+    )
+    assert diagnostics["stderr"] == "x" * 6000
+    assert diagnostics["stdout"] == "last output"
+    assert "error" not in diagnostics
 
 
 def test_metrics_warmup_is_one_token_and_targets_openai_chat_endpoint(monkeypatch):

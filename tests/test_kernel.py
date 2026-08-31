@@ -4806,6 +4806,55 @@ def test_mini_swe_registers_only_when_runtime_exists(tmp_path, monkeypatch):
     assert "mini-swe-agent" in present.agent_loops.names()
 
 
+def _openhands_loop(tmp_path):
+    from sovereign_ai.agents.openhands_loop import OpenHandsAgentLoop
+
+    return OpenHandsAgentLoop(
+        tmp_path / "missing-python",
+        tmp_path / "missing-mcp-python",
+        "http://127.0.0.1:18080/v1",
+        "qwen35-9b",
+    )
+
+
+def test_openhands_runner_exposes_only_achilles_mcp_for_io():
+    from sovereign_ai.agents.openhands_loop import OPENHANDS_RUNNER
+
+    source = OPENHANDS_RUNNER.read_text(encoding="utf-8")
+    assert 'tools=[]' in source
+    assert '"achilles": MCPServer(' in source
+    assert '"sovereign_ai.agents.mcp_bridge"' in source
+    assert 'include_default_tools=["FinishTool", "ThinkTool"]' in source
+    assert "TerminalTool" not in source
+    assert "FileEditorTool" not in source
+
+
+def test_openhands_adapter_reports_missing_runtime_without_touching_workspace(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    step = asyncio.run(
+        _openhands_loop(tmp_path).next_step(
+            {"task": "anything", "workspace": str(workspace), "agent_profile_id": "s"}
+        )
+    )
+    assert step.done and step.kind == "harness_error"
+    assert "runtime not found" in step.payload["error"]
+    assert list(workspace.iterdir()) == []
+
+
+def test_openhands_registers_only_when_runtime_exists(tmp_path, monkeypatch):
+    from sovereign_ai.kernel import app as kernel_app
+
+    monkeypatch.setattr(kernel_app, "resolve_openhands_runtime", lambda: None)
+    absent = kernel(tmp_path, monkeypatch)
+    assert "openhands" not in absent.agent_loops.names()
+
+    runtime = (tmp_path / "python", tmp_path / "mcp-python")
+    monkeypatch.setattr(kernel_app, "resolve_openhands_runtime", lambda: runtime)
+    present = kernel(tmp_path / "second", monkeypatch)
+    assert "openhands" in present.agent_loops.names()
+
+
 # ---------------------------------------------------------------------------------------
 # Context economy in the tools themselves (knowledge/harness-research.md, adoption item 3).
 # Both changes exist because the measured constraint on this machine is tokens per turn,

@@ -3879,6 +3879,21 @@ instead of an opinion.
   A live `swe-empty-mean` canary then passed through the native harness and authenticated
   OpenShell held-out verification in 16.69 seconds and four agent steps.
 
+### F-078 — Fixed: terminal adapter evidence disappeared from durable arena reports
+
+- **Severity:** `major` (a harness crash was scored correctly but could not be diagnosed after
+  the subprocess ended) · **Status:** `fixed` for future campaigns; prior missing stderr cannot
+  be reconstructed.
+- **Problem:** `run_task()` kept only the terminal error string and traceback. External adapters
+  return bounded stderr, stdout and trajectories in their terminal payload, but the schema-v4
+  report discarded all three. The OpenHands screen therefore records four honest `exited 1`
+  failures without enough evidence to attribute their SDK exception.
+- **Fix:** every result now persists a bounded `terminal_diagnostics` map containing the final
+  6,000 characters of adapter stderr, stdout and trajectory when present. It remains local with
+  the raw report and does not affect scoring.
+- **Verification:** a regression test proves evidence is retained, tail-bounded and excludes
+  unrelated payload fields. The complete test suite passed after the change.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

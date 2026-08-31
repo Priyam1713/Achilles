@@ -83,6 +83,15 @@ def finalise_task_outcome(
     return False, detail, terminal_error
 
 
+def terminal_diagnostics(payload: dict[str, Any], limit: int = 6000) -> dict[str, str]:
+    """Retain bounded adapter evidence for terminal failures in the durable report."""
+    return {
+        key: str(payload[key])[-limit:]
+        for key in ("stderr", "stdout", "trajectory")
+        if payload.get(key)
+    }
+
+
 def campaign_cells(
     loop_names: list[str], tasks: list[HarnessTask], repeats: int
 ) -> list[tuple[str, HarnessTask, int]]:
@@ -450,6 +459,7 @@ async def run_task(
         "outcome": terminal,
         "terminal_error": terminal_error,
         "terminal_traceback": terminal_payload.get("traceback"),
+        "terminal_diagnostics": terminal_diagnostics(terminal_payload),
         "steps_taken": len(steps),
         "denied_attempts": denied_attempts,
         "wall_time_s": round(elapsed, 2),

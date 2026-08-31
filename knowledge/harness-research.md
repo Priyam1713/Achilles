@@ -241,7 +241,7 @@ possible design and it was right for a first loop; it is now the cheapest availa
 **Verdict: `trial`. Steal parallel tool dispatch and the schema shape that makes it safe.**
 Licence must be verified at primary source before any code is taken.
 
-### OpenHands (`All-Hands-AI/OpenHands`) — MIT — `landscape` (V1 SDK paper + docs)
+### OpenHands (`OpenHands/software-agent-sdk`) — MIT — `primary-tested` (SDK + docs)
 
 Mid-migration from V0 (monolithic, sandbox-centric) to **V1**, a modular SDK; V0 removal was
 scheduled for 2026-04-01. Four packages: `openhands.sdk`, `openhands.tools`,
@@ -273,7 +273,10 @@ Also worth taking:
 - **Microagents / skills**: `.openhands/microagents/*.md` loaded on demand.
 
 **Verdict: `adopted` as an architectural pattern (auxiliary services on the event stream,
-deterministic replay, condensers as components). `trial` as an `AgentLoop`.**
+deterministic replay, condensers as components). `trial` as an `AgentLoop`.** The current
+`openhands-sdk` 1.43.1 was screened directly on 2026-08-31 through Achilles MCP: 15/24 versus
+Native's 17/24, with both CSV/decimal cells as unique wins but four unexplained SDK exits. The
+result keeps it conditional rather than promoted; see `docs/HARNESS_SELECTION.md`.
 
 ### SWE-agent (Princeton) — MIT — `primary-verified` (NeurIPS 2024 paper)
 

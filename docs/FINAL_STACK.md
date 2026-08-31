@@ -6,13 +6,16 @@ The stack is intentionally **capability-stable but checkpoint-replaceable**. A m
 
 - **NativeAgentLoop — provisional incumbent/default.** It won the historical Pi final and kept
   a material efficiency advantage in separate Arena-v2 screens against Prime Agent,
-  DeepSeek Harness/Cordis and mini-SWE-agent. The v2 paired correctness intervals remain too
+  DeepSeek Harness/Cordis, mini-SWE-agent and OpenHands. The v2 paired correctness intervals remain too
   wide for a universal winner claim. See [the harness selection report](HARNESS_SELECTION.md).
 - **Prime Agent and DeepSeek Harness/Cordis — finalist candidates.** Each produced unique paired
   wins but amplified context materially; their adapters remain while tested runtimes are removed.
 - **mini-SWE-agent — screened lower-priority.** It scored 11/24 with 11 primary timeouts and
   2.5× Native's wall time on the same screen. Its governed adapter remains reproducible; the
   isolated runtime is removed. Pi, Goose and OpenCode retain historical evidence only.
+- **OpenHands — conditional finalist candidate.** It scored 15/24 versus Native's 17/24 and
+  uniquely passed both CSV/decimal attempts, but four unexplained SDK exits block promotion.
+  Its governed adapter remains reproducible; the isolated runtime is removed.
 - **SovereignKernel — fixed governed fixture.** Every contender reaches the same workspace
   allow-list, expiring grants, policy engine, tool implementations, checkpoints and hardened
   OpenShell/Docker execution. Kernel changes invalidate an active campaign unless they repair a

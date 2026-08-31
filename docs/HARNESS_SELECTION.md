@@ -1,12 +1,12 @@
-# Harness selection report — 2026-08-30
+# Harness selection report — 2026-08-31
 
 ## Decision
 
 **NativeAgentLoop remains the provisional incumbent, not a final universal winner.** Arena v2
-has now screened Prime Agent, DeepSeek Harness/Cordis and mini-SWE-agent. None produced a
+has now screened Prime Agent, DeepSeek Harness/Cordis, mini-SWE-agent and OpenHands. None produced a
 statistically significant paired correctness difference at 24 observations, while Native kept
-a material efficiency advantage in every screen. OpenHands, Aider, oh-my-pi and SWE-agent are
-still untested under v2 and must be screened before a final.
+a material token-efficiency advantage in every screen. Aider, oh-my-pi and SWE-agent are still
+untested under v2 and must be screened before a final.
 
 This is a workstation-specific, provisional promotion, not a claim that Native is universally
 better. It won this composition: Qwen3.5-9B Q6_K, upstream llama.cpp, the Achilles governed
@@ -277,9 +277,59 @@ load state and dynamically assigned internal port. Final freeze SHA-256 is
 `56e32516c83901069f83aace2dbbd257ace72ae85df1998c2f363e324167d097`; task-manifest SHA-256,
 model artifact, llama.cpp and OpenShell versions matched the DeepSeek screen.
 
+## Arena v2 — OpenHands SDK admission and screen
+
+The current official OpenHands engine is `openhands-sdk` 1.43.1 from the
+`OpenHands/software-agent-sdk` project; the separate OpenHands CLI is no longer actively
+maintained. The screen used the SDK's real `Agent`, `Conversation`, LiteLLM and MCP client. No
+OpenHands terminal, file-editor, browser or other workspace-capable tool was enabled. Its only
+I/O authority was the Achilles MCP server; OpenHands' `Finish` and `Think` conversation controls
+remained because neither can access the host. The governed empty-mean admission canary passed in
+28.85 seconds before the full campaign.
+
+Round 1 used the same 12 tasks × 2 attempts and all 12 verifier controls passed. The campaign
+completed all 48 cells with no authority denials. Router counters were unavailable for two Native
+attempts and one OpenHands attempt, so token totals are explicitly partial; correctness and wall
+time cover every attempt.
+
+| Harness | Passed | Pass rate | Median time | Total time | Accounted total tokens | Median tokens | Generated tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **Native** | **17/24** | **70.83%** | **40.31s** | 1,627.86s | **735,386 (22/24)** | **18,820** | 63,186 |
+| OpenHands | 15/24 | 62.5% | 55.85s | **1,578.57s** | 1,897,635 (23/24) | 77,350 | **43,563** |
+
+Paired matrix: 13 both passed, 4 Native-only passes, 2 OpenHands-only passes and 5 both failed.
+Native minus OpenHands was +8.33 percentage points with paired bootstrap 95% CI
+[-12.5, +29.17] points and exact McNemar p=0.6875, so correctness is inconclusive. Native's
+median attempt used 75.7% fewer tokens. OpenHands' slightly lower total wall time is not a speed
+win: four failed SDK subprocesses exited early and Native spent the full primary budget on three
+timeouts. OpenHands generated fewer tokens but consumed over four times the median total tokens,
+locating its overhead in repeated prompt/tool/context input rather than answer verbosity.
+
+OpenHands' two discordant wins were both CSV/decimal aggregation attempts, making that a
+reproducible capability signal. Native's four were slugify attempt one and configuration
+precedence, cross-file greeting and safe join attempt two. OpenHands timed out on configuration
+precedence attempt one and exited as a harness error on four second attempts: cross-file greeting,
+safe join, pagination and JSONL. The cross-file patch independently passed its hidden verifier,
+but the terminal contract correctly scores any harness crash as failure. The schema retained the
+exit category but not the adapter stderr, so the exact SDK exception cannot be reconstructed and
+is not guessed here; F-078 now preserves bounded stderr/stdout/trajectory evidence for every
+future campaign. Neither harness solved JavaScript prototype pollution.
+
+OpenHands is therefore **not promoted, but its reproducible data-processing wins keep it as a
+conditional finalist candidate**. It must first reproduce without unexplained process exits; its
+governed adapter remains while the isolated runtime is removed. Runner SHA-256 is
+`6cad8bb8f3dd1894244ca412c3085223892817af22760d5579825abd04a7a922`; adapter SHA-256 is
+`f9efa71c471ae250efd8cdf5661732e0a38b6d97d9c184ac5d7fb7f8677a87e7`.
+
+The raw schema-v4 report remains local at `state/arena-v2-openhands-screening-9b.json`; raw
+SHA-256 is `f5a3309720108e075687b8b1b92a6b24180cb98e1c4d55589755bcb5d1c0f4f3`, campaign SHA-256 is
+`3db044cbb562b3893d0623c3ed724e75b3ca6bde475e8ea5a21113366d749422`, freeze SHA-256 is
+`b23ca34e306af24eae8530e83d631295e883bb90cff84137672fbcc43b82df0d`, and task-manifest
+SHA-256 is `7bcc57ddeae2f5846ee7f3f26075323c0aa3970426b32393e90ac3cb7019d434`.
+
 ## Limits and next trigger
 
-The v2 screen is still small and local-model-specific. Native and Prime must defend their
+The v2 screen is still small and local-model-specific. Native and the retained candidates must defend their
 positions in a 20–30 task × 3 finalist league after the remaining harnesses are screened.
 Larger mixed repositories, test repair, interruption/resume, research, memory, prompt injection,
 delegation and browser work remain separate leagues. Harness selection is deliberately open.
