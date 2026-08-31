@@ -4,10 +4,13 @@ The stack is intentionally **capability-stable but checkpoint-replaceable**. A m
 
 ## Harness + authority base
 
-- **NativeAgentLoop — provisional incumbent/default.** It won the historical Pi final and kept
-  a material efficiency advantage in separate Arena-v2 screens against Prime Agent,
-  DeepSeek Harness/Cordis, mini-SWE-agent and OpenHands. The v2 paired correctness intervals remain too
-  wide for a universal winner claim. See [the harness selection report](HARNESS_SELECTION.md).
+- **NativeAgentLoop — safety incumbent/default.** It won the historical Pi final and remained
+  more efficient than Prime Agent, DeepSeek Harness/Cordis, mini-SWE-agent and OpenHands. Aider
+  broke that pattern but failed both safe-join cells, so Native remains the default until the
+  security-weighted finalist league. See [the harness selection report](HARNESS_SELECTION.md).
+- **Aider — provisional general-edit leader.** It scored 18/24 versus Native's 17/24 while using
+  89.5% fewer tokens and 40.5% less wall time, but scored 0/2 on safe join. Its governed shadow-
+  repository adapter remains reproducible; the isolated runtime is removed.
 - **Prime Agent and DeepSeek Harness/Cordis — finalist candidates.** Each produced unique paired
   wins but amplified context materially; their adapters remain while tested runtimes are removed.
 - **mini-SWE-agent — screened lower-priority.** It scored 11/24 with 11 primary timeouts and

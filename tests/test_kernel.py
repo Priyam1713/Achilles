@@ -4855,6 +4855,57 @@ def test_openhands_registers_only_when_runtime_exists(tmp_path, monkeypatch):
     assert "openhands" in present.agent_loops.names()
 
 
+def test_aider_runner_isolates_contestant_and_commits_through_achilles():
+    from sovereign_ai.agents.aider_loop import AIDER_RUNNER
+
+    source = AIDER_RUNNER.read_text(encoding="utf-8")
+    assert 'run_root / "repo"' in source
+    assert 'invoke_tool(args, "write_file"' in source
+    assert '"--no-auto-test"' in source
+    assert '"--no-auto-lint"' in source
+    assert '"--no-gitignore"' in source
+    assert '"HOME": str(run_root / "home")' in source
+    assert 'part.startswith(".aider")' in source
+    assert "subprocess.run" in source
+
+
+def test_aider_shadow_snapshot_excludes_private_binary_cache(tmp_path):
+    import runpy
+    import sys
+    import types
+
+    from sovereign_ai.agents.aider_loop import AIDER_RUNNER
+
+    prior_requests = sys.modules.get("requests")
+    sys.modules["requests"] = types.ModuleType("requests")
+    try:
+        snapshot = runpy.run_path(str(AIDER_RUNNER))["snapshot"]
+    finally:
+        if prior_requests is None:
+            sys.modules.pop("requests", None)
+        else:
+            sys.modules["requests"] = prior_requests
+
+    (tmp_path / "source.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / ".aider.tags.cache.v4").write_bytes(b"\x95\x00\xff")
+    assert snapshot(tmp_path) == {
+        "source.py": "585c93666fcb046b7b264d3fa73202aa2a38254ae82a4b3ba19e873c2d5a9886"
+    }
+
+
+def test_aider_registers_only_when_runtime_exists(tmp_path, monkeypatch):
+    from sovereign_ai.kernel import app as kernel_app
+
+    monkeypatch.setattr(kernel_app, "resolve_aider_runtime", lambda: None)
+    absent = kernel(tmp_path, monkeypatch)
+    assert "aider" not in absent.agent_loops.names()
+
+    runtime = (tmp_path / "python", tmp_path / "aider")
+    monkeypatch.setattr(kernel_app, "resolve_aider_runtime", lambda: runtime)
+    present = kernel(tmp_path / "second", monkeypatch)
+    assert "aider" in present.agent_loops.names()
+
+
 # ---------------------------------------------------------------------------------------
 # Context economy in the tools themselves (knowledge/harness-research.md, adoption item 3).
 # Both changes exist because the measured constraint on this machine is tokens per turn,

@@ -362,7 +362,7 @@ our model registry can express as a field.
 Sandboxing remains best-in-class and worth porting per-platform when `D-035` lands: Landlock +
 seccomp + bubblewrap on Linux, Seatbelt on macOS, AppContainer/restricted tokens on Windows.
 
-### Aider — Apache-2.0 — `landscape`
+### Aider — Apache-2.0 — `primary-tested`
 
 Two things, both already recorded, now with detail:
 
@@ -379,7 +379,10 @@ plans; a fast model applies. That is *exactly* our dual-brain topology — deep 
 wave 8, but achievable with models we already have and no new download.
 
 **Verdict: repo map `adopted` (already); architect/editor split promoted from "interesting" to
-`trial` — it is the highest-value use of our two-brain hardware.**
+`trial` — it is the highest-value use of our two-brain hardware.** Aider 0.86.2's simpler
+upstream whole-file fallback was then screened directly on 2026-08-31: 18/24 versus Native's
+17/24, 89.5% fewer tokens and 40.5% less wall time. Its 0/2 safe-join result blocks global
+promotion but makes it the general-edit finalist; see `docs/HARNESS_SELECTION.md`.
 
 ### Goose (`block/goose`) — Apache-2.0 — `primary-verified` repo
 

@@ -2,11 +2,12 @@
 
 ## Decision
 
-**NativeAgentLoop remains the provisional incumbent, not a final universal winner.** Arena v2
-has now screened Prime Agent, DeepSeek Harness/Cordis, mini-SWE-agent and OpenHands. None produced a
-statistically significant paired correctness difference at 24 observations, while Native kept
-a material token-efficiency advantage in every screen. Aider, oh-my-pi and SWE-agent are still
-untested under v2 and must be screened before a final.
+**NativeAgentLoop remains the safety incumbent/default, while Aider is now the provisional
+general-coding efficiency leader.** Arena v2 has screened Prime Agent, DeepSeek Harness/Cordis,
+mini-SWE-agent, OpenHands and Aider. No 24-observation screen produced a statistically significant
+paired correctness difference. Aider is the first contender to exceed Native's point pass rate
+and efficiency, but it failed both safe-join security cells. oh-my-pi and SWE-agent remain untested
+under v2 and must be screened before a final.
 
 This is a workstation-specific, provisional promotion, not a claim that Native is universally
 better. It won this composition: Qwen3.5-9B Q6_K, upstream llama.cpp, the Achilles governed
@@ -325,6 +326,57 @@ The raw schema-v4 report remains local at `state/arena-v2-openhands-screening-9b
 SHA-256 is `f5a3309720108e075687b8b1b92a6b24180cb98e1c4d55589755bcb5d1c0f4f3`, campaign SHA-256 is
 `3db044cbb562b3893d0623c3ed724e75b3ca6bde475e8ea5a21113366d749422`, freeze SHA-256 is
 `b23ca34e306af24eae8530e83d631295e883bb90cff84137672fbcc43b82df0d`, and task-manifest
+SHA-256 is `7bcc57ddeae2f5846ee7f3f26075323c0aa3970426b32393e90ac3cb7019d434`.
+
+## Arena v2 — Aider admission and screen
+
+Aider 0.86.2 ran its official headless CLI and upstream fallback for the unknown
+`openai/qwen35-9b` model: whole-file edit format with no repo map. This intentionally avoids
+post-hoc tuning. Because Aider has no MCP client and directly edits a Git tree, the trusted
+adapter gave it only a disposable shadow repository whose path and environment were isolated.
+Auto-tests, lint, shell suggestions, commits, analytics, network update checks and configuration
+discovery were disabled. After Aider exited, the adapter rejected unsafe/special/oversized files,
+checked the canonical workspace for concurrent changes and transferred the shadow diff into the
+real workspace only through authenticated Achilles `write_file`/`delete_file` calls.
+
+Admission found two adapter side effects before scoring. Aider's binary `.aider.tags.cache` was
+initially mistaken for a source change, and its default startup created `.gitignore`, which the
+held-out verifier correctly rejected as forbidden. The adapter now excludes private `.aider*`
+cache/history files and passes `--no-gitignore`; those two cells are discarded infrastructure
+evidence. The corrected empty-mean canary passed in 11.84 seconds and 1,109 tokens.
+
+The full campaign used the same 12 tasks × 2 attempts; all gold/null controls passed, all 48
+cells completed, every attempt had router counters, and neither harness recorded an authority
+denial or adapter error.
+
+| Harness | Passed | Pass rate | Median time | Total time | Total tokens | Median tokens | Generated tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Native | 17/24 | 70.83% | 29.69s | 1,219.58s | 349,533 | 7,646.5 | 50,115 |
+| **Aider** | **18/24** | **75.0%** | **29.69s** | **726.17s** | **36,842** | **1,598.5** | **13,954** |
+
+Paired matrix: 14 both passed, 4 Aider-only passes, 3 Native-only passes and 3 both failed.
+Aider minus Native was +4.17 percentage points with paired bootstrap 95% CI
+[-16.67, +25.0] points and exact McNemar p=1.0, so correctness is a statistical tie. Aider used
+89.5% fewer total tokens, 79.1% fewer median tokens, 72.2% fewer generated tokens and 40.5% less
+total wall time. Unlike earlier external harnesses, its efficiency advantage is decisive at this
+composition even though its correctness advantage is not.
+
+Aider's discordant wins were slugify attempt two, configuration precedence attempt two,
+pagination attempt two and CSV/decimal attempt one. Native's were configuration precedence
+attempt one and both safe-join attempts. Both failed JavaScript prototype pollution twice. The
+safe-join split prevents a global promotion: Aider scored 0/2 on path-containment security while
+Native scored 2/2. Conversely, treating one global harness as mandatory would discard Aider's
+large ordinary-coding efficiency win. This supports a dynamic harness policy: Aider enters the
+finalist league as the general edit lane; Native remains the safety/default lane until a larger
+security-weighted league proves a safe routing boundary.
+
+The isolated runtime is removed after testing while the governed adapter remains. Runner
+SHA-256 is `28fe01dd0bc6abf0a8615ccaf4e1e82159695de8bc2b9c497b3bd837ec2253ef`; adapter SHA-256 is
+`469cfea8dae8aa3295462b84a94747a5a2e413727bffa8af6dff551c6171a758`.
+The raw schema-v4 report remains local at `state/arena-v2-aider-screening-9b.json`; raw SHA-256 is
+`c5a08be7b2d98075656ad77c398aa2056259b7ff82bf1a9d728aa45cf8604eec`, campaign SHA-256 is
+`4996e336be04f20d284454056127cacf2a533e108b380b1249a7fc1df1158b6c`, freeze SHA-256 is
+`03ec190ad37a966872fab874dbbc885f7f9368cd10a807a88abda1985b2b4212`, and task-manifest
 SHA-256 is `7bcc57ddeae2f5846ee7f3f26075323c0aa3970426b32393e90ac3cb7019d434`.
 
 ## Limits and next trigger

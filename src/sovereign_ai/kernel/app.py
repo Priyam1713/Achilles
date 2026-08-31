@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sovereign_ai.agents.aider_loop import AiderAgentLoop, resolve_aider_runtime
 from sovereign_ai.agents.deepseek_harness_loop import (
     DeepSeekHarnessAgentLoop,
     resolve_deepseek_harness_checkout,
@@ -271,6 +272,23 @@ class SovereignKernel:
                     mcp_python,
                     llama_cpp_engine.base_url,
                     "qwen38-27b",
+                ),
+            )
+        aider_runtime = resolve_aider_runtime()
+        if aider_runtime and llama_cpp_engine and llama_cpp_engine.base_url:
+            system = config.system.get("system", {})
+            aider_python, aider_binary = aider_runtime
+            agent_loops.register(
+                "aider",
+                AiderAgentLoop(
+                    aider_python,
+                    aider_binary,
+                    llama_cpp_engine.base_url,
+                    "qwen38-27b",
+                    kernel_url=(
+                        f"http://{system.get('bind', '127.0.0.1')}:{system.get('port', 7788)}"
+                    ),
+                    session_token=SessionAuth(state / "session.token").token,
                 ),
             )
         computer = ComputerController()
