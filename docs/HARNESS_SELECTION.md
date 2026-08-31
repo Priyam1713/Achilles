@@ -4,9 +4,10 @@
 
 **NativeAgentLoop remains the safety incumbent/default, while Aider is now the provisional
 general-coding efficiency leader.** Arena v2 has screened Prime Agent, DeepSeek Harness/Cordis,
-mini-SWE-agent, OpenHands and Aider. No 24-observation screen produced a statistically significant
+mini-SWE-agent, OpenHands, Aider and oh-my-pi. No 24-observation screen produced a statistically significant
 paired correctness difference. Aider is the first contender to exceed Native's point pass rate
-and efficiency, but it failed both safe-join security cells. oh-my-pi and SWE-agent remain untested
+and efficiency, but it failed both safe-join security cells. oh-my-pi finished below Native while
+using over twice the total context and failed one of two safe-join cells. SWE-agent remains untested
 under v2 and must be screened before a final.
 
 This is a workstation-specific, provisional promotion, not a claim that Native is universally
@@ -377,6 +378,58 @@ The raw schema-v4 report remains local at `state/arena-v2-aider-screening-9b.jso
 `c5a08be7b2d98075656ad77c398aa2056259b7ff82bf1a9d728aa45cf8604eec`, campaign SHA-256 is
 `4996e336be04f20d284454056127cacf2a533e108b380b1249a7fc1df1158b6c`, freeze SHA-256 is
 `03ec190ad37a966872fab874dbbc885f7f9368cd10a807a88abda1985b2b4212`, and task-manifest
+SHA-256 is `7bcc57ddeae2f5846ee7f3f26075323c0aa3970426b32393e90ac3cb7019d434`.
+
+## Arena v2 — oh-my-pi admission and screen
+
+The official `@oh-my-pi/pi-coding-agent` 18.0.11 CLI ran on Bun 1.4.0. OMP's built-in tools,
+LSP, PTY execution, extensions, skills, rules and prewalk were disabled. A disposable HOME/XDG
+tree prevented compatibility importers from reading the operator's Claude, Codex, Cursor or
+OpenCode configuration; project MCP discovery was also disabled. The only configured server was
+Achilles MCP, acting under the tournament subject, workspace and run identity.
+
+Admission exposed a current OMP startup race before any scored campaign. Its MCP manager waits
+only 250 ms for a fresh server's tool list, while the callback that would register a slightly late
+server is attached after the race. The Python stdio bridge connected, but the first non-interactive
+request contained no tools. The adapter now prestarts one identity-scoped streamable-HTTP MCP
+bridge per attempt, waits for its loopback listener, then starts OMP. A diagnostic request capture
+proved the resulting OpenAI requests contained exactly the 14 `mcp__achilles_*` tools and zero OMP
+built-ins. The corrected clean empty-mean admission passed in 21.4 seconds with 49,585 accounted
+tokens; all earlier cells were discarded as infrastructure evidence.
+
+The full campaign completed all 48 cells, all 12 verifier controls passed, every attempt had token
+counters and no authority denial occurred.
+
+| Harness | Passed | Pass rate | Median time | Total time | Total tokens | Median tokens | Generated tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **Native** | **19/24** | **79.17%** | 38.12s | **1,002.95s** | **688,064** | **17,669.5** | 55,155 |
+| oh-my-pi | 17/24 | 70.83% | **31.14s** | 1,013.42s | 1,525,023 | 42,167.5 | **40,921** |
+
+Paired matrix: 16 both passed, 3 Native-only passes, 1 oh-my-pi-only pass and 4 both failed.
+Native minus oh-my-pi was +8.33 percentage points with paired bootstrap 95% CI
+[-8.33, +25.0] points and exact McNemar p=0.625, so correctness remains inconclusive. OMP's
+median attempt was 18.3% faster, but total wall time was 1.0% higher. It generated 25.8% fewer
+tokens while consuming 121.6% more total and 138.6% more median tokens, locating the overhead in
+replayed input/tool context. Native used 54.9% fewer total tokens.
+
+Native's discordant wins were slugify attempt two, safe join attempt two and JSONL resilience
+attempt one. OMP's sole discordant win was configuration precedence attempt two. Its slugify
+attempt two ended as a retained `harness_error` at 178.74 seconds with `Deadline exceeded` rather
+than being mistaken for a verifier failure. Both harnesses failed configuration precedence attempt
+one, CSV/decimal attempt one and both JavaScript prototype-pollution attempts. Most importantly,
+Native passed safe join 2/2 while OMP passed only 1/2.
+
+oh-my-pi is therefore **not promoted and is screened lower-priority**. Its lower median latency
+and one configuration win do not justify over twice the context, one internal deadline exit and a
+non-reproducible path-containment result. The governed adapter remains for future model-specific
+retests; the isolated 1.4 GiB runtime is removed. Adapter SHA-256 is
+`b29515f5424f9d72fe13a3b3d93fcb1db42ab04f58bfbd46263ba9d66af5c100`; HTTP MCP runner
+SHA-256 is `6fd4e6d23319e9380bcb0be96d795e858bcce718a25ba888d2cd6f0a3f9711e1`.
+
+The raw schema-v4 report remains local at `state/arena-v2-oh-my-pi-screening-9b.json`; raw
+SHA-256 is `129adfbd5c0d175532b6c1c89ae2e312046bc232e4b2d5efa150920e7b169811`, campaign SHA-256 is
+`512ee2487538f7e419244470cfba654d58734d7f9cf897782ac21d484fb95f02`, freeze SHA-256 is
+`7cb89de9e836a6456f1af08ea374324643ab6bdcb974b43334999e9835d787eb`, and task-manifest
 SHA-256 is `7bcc57ddeae2f5846ee7f3f26075323c0aa3970426b32393e90ac3cb7019d434`.
 
 ## Limits and next trigger

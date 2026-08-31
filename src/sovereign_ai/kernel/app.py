@@ -10,6 +10,7 @@ from sovereign_ai.agents.deepseek_harness_loop import (
 from sovereign_ai.agents.goose_loop import GooseAgentLoop
 from sovereign_ai.agents.mini_swe_loop import MiniSWEAgentLoop, resolve_mini_swe_runtime
 from sovereign_ai.agents.native_loop import NativeAgentLoop
+from sovereign_ai.agents.oh_my_pi_loop import OhMyPiAgentLoop, resolve_oh_my_pi_runtime
 from sovereign_ai.agents.opencode_loop import OpenCodeAgentLoop, resolve_opencode_binary
 from sovereign_ai.agents.openhands_loop import OpenHandsAgentLoop, resolve_openhands_runtime
 from sovereign_ai.agents.pi_loop import PiAgentLoop, resolve_pi_binary
@@ -289,6 +290,19 @@ class SovereignKernel:
                         f"http://{system.get('bind', '127.0.0.1')}:{system.get('port', 7788)}"
                     ),
                     session_token=SessionAuth(state / "session.token").token,
+                ),
+            )
+        oh_my_pi_runtime = resolve_oh_my_pi_runtime()
+        if oh_my_pi_runtime and llama_cpp_engine and llama_cpp_engine.base_url:
+            omp_binary, bun_binary, mcp_python = oh_my_pi_runtime
+            agent_loops.register(
+                "oh-my-pi",
+                OhMyPiAgentLoop(
+                    omp_binary,
+                    bun_binary,
+                    mcp_python,
+                    llama_cpp_engine.base_url,
+                    "qwen38-27b",
                 ),
             )
         computer = ComputerController()

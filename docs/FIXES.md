@@ -3894,6 +3894,25 @@ instead of an opinion.
 - **Verification:** a regression test proves evidence is retained, tail-bounded and excludes
   unrelated payload fields. The complete test suite passed after the change.
 
+### F-079 — Fixed: oh-my-pi's 250 ms MCP startup race silently produced a zero-tool session
+
+- **Severity:** `major` (the harness appeared healthy and answered the task, but the first
+  non-interactive request could not inspect or mutate the repository) · **Status:** `fixed` in
+  the Achilles adapter; the discarded admission cells are infrastructure evidence.
+- **Problem:** OMP 18.0.11 waits 250 ms for a fresh MCP server's tool list. The Python stdio
+  bridge completed moments later, after OMP had snapshotted the initial tool registry and before
+  its late-tool callback was attached. Logs showed a successful Achilles connection, yet a
+  loopback request capture proved `tools: []`; the model consequently described shell commands
+  instead of calling governed tools.
+- **Fix:** each OMP attempt now prestarts an identity/workspace-scoped FastMCP streamable-HTTP
+  server, waits for its loopback listener, and only then launches OMP. Built-ins remain disabled,
+  operator/project discovery remains isolated, and the per-attempt server is killed with the
+  harness subprocess.
+- **Verification:** captured requests contained exactly 14 `mcp__achilles_*` definitions and no
+  OMP built-ins, followed by real read/edit/read/run-command calls through Achilles. A clean held-
+  out admission passed in 21.4 seconds, then the complete 48-cell paired campaign finished with no
+  authority denials.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

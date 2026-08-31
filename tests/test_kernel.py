@@ -4886,7 +4886,7 @@ def test_aider_shadow_snapshot_excludes_private_binary_cache(tmp_path):
         else:
             sys.modules["requests"] = prior_requests
 
-    (tmp_path / "source.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "source.py").write_bytes(b"value = 1\n")
     (tmp_path / ".aider.tags.cache.v4").write_bytes(b"\x95\x00\xff")
     assert snapshot(tmp_path) == {
         "source.py": "585c93666fcb046b7b264d3fa73202aa2a38254ae82a4b3ba19e873c2d5a9886"
@@ -4904,6 +4904,72 @@ def test_aider_registers_only_when_runtime_exists(tmp_path, monkeypatch):
     monkeypatch.setattr(kernel_app, "resolve_aider_runtime", lambda: runtime)
     present = kernel(tmp_path / "second", monkeypatch)
     assert "aider" in present.agent_loops.names()
+
+
+def _oh_my_pi_loop(tmp_path):
+    from sovereign_ai.agents.oh_my_pi_loop import OhMyPiAgentLoop
+
+    return OhMyPiAgentLoop(
+        tmp_path / "missing-omp",
+        tmp_path / "missing-bun",
+        tmp_path / "missing-mcp-python",
+        "http://127.0.0.1:18080/v1",
+        "qwen35-9b",
+    )
+
+
+def test_oh_my_pi_adapter_has_only_isolated_achilles_mcp_authority(tmp_path):
+    loop = _oh_my_pi_loop(tmp_path)
+    config = loop._mcp_config("http://127.0.0.1:12345/mcp")
+    assert list(config["mcpServers"]) == ["achilles"]
+    server = config["mcpServers"]["achilles"]
+    assert server == {
+        "type": "http",
+        "url": "http://127.0.0.1:12345/mcp",
+        "timeout": 30000,
+    }
+    bridge_env = loop._bridge_environment(
+        {"workspace": "/work", "agent_profile_id": "subject", "run_id": "run"}
+    )
+    assert bridge_env["SOAI_MCP_AGENT_PROFILE_ID"] == "subject"
+    assert bridge_env["SOAI_MCP_WORKSPACE"] == "/work"
+
+    source = Path(loop.__class__.__module__.replace(".", "/") + ".py")
+    source = Path(__file__).parents[1] / "src" / source
+    text = source.read_text(encoding="utf-8")
+    assert '"--no-tools"' in text
+    assert '"--no-extensions"' in text
+    assert '"--no-skills"' in text
+    assert '"--no-rules"' in text
+    assert '"enableProjectConfig": False' in text
+    assert '"xdev": False' in text
+    assert '"HOME": str(run_root / "home")' in text
+
+
+def test_oh_my_pi_adapter_reports_missing_runtime_without_touching_workspace(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    step = asyncio.run(
+        _oh_my_pi_loop(tmp_path).next_step(
+            {"task": "anything", "workspace": str(workspace), "agent_profile_id": "s"}
+        )
+    )
+    assert step.done and step.kind == "harness_error"
+    assert "runtime not found" in step.payload["error"]
+    assert list(workspace.iterdir()) == []
+
+
+def test_oh_my_pi_registers_only_when_runtime_exists(tmp_path, monkeypatch):
+    from sovereign_ai.kernel import app as kernel_app
+
+    monkeypatch.setattr(kernel_app, "resolve_oh_my_pi_runtime", lambda: None)
+    absent = kernel(tmp_path, monkeypatch)
+    assert "oh-my-pi" not in absent.agent_loops.names()
+
+    runtime = (tmp_path / "omp", tmp_path / "bun", tmp_path / "mcp-python")
+    monkeypatch.setattr(kernel_app, "resolve_oh_my_pi_runtime", lambda: runtime)
+    present = kernel(tmp_path / "second", monkeypatch)
+    assert "oh-my-pi" in present.agent_loops.names()
 
 
 # ---------------------------------------------------------------------------------------
