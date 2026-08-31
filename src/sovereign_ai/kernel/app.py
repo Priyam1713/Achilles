@@ -7,6 +7,7 @@ from sovereign_ai.agents.deepseek_harness_loop import (
     resolve_deepseek_harness_checkout,
 )
 from sovereign_ai.agents.goose_loop import GooseAgentLoop
+from sovereign_ai.agents.mini_swe_loop import MiniSWEAgentLoop, resolve_mini_swe_runtime
 from sovereign_ai.agents.native_loop import NativeAgentLoop
 from sovereign_ai.agents.opencode_loop import OpenCodeAgentLoop, resolve_opencode_binary
 from sovereign_ai.agents.pi_loop import PiAgentLoop, resolve_pi_binary
@@ -240,6 +241,23 @@ class SovereignKernel:
                     deepseek_checkout,
                     llama_cpp_engine.base_url,
                     "qwen38-27b",
+                ),
+            )
+        mini_swe_runtime = resolve_mini_swe_runtime()
+        if mini_swe_runtime and llama_cpp_engine and llama_cpp_engine.base_url:
+            system = config.system.get("system", {})
+            mini_swe_python, mini_swe_binary = mini_swe_runtime
+            agent_loops.register(
+                "mini-swe-agent",
+                MiniSWEAgentLoop(
+                    mini_swe_python,
+                    mini_swe_binary,
+                    llama_cpp_engine.base_url,
+                    "qwen38-27b",
+                    kernel_url=(
+                        f"http://{system.get('bind', '127.0.0.1')}:{system.get('port', 7788)}"
+                    ),
+                    session_token=SessionAuth(state / "session.token").token,
                 ),
             )
         computer = ComputerController()

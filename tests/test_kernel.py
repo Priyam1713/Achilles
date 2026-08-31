@@ -4754,6 +4754,58 @@ def test_deepseek_harness_registers_only_when_checkout_exists(tmp_path, monkeypa
     assert "deepseek-harness" in present.agent_loops.names()
 
 
+def _mini_swe_loop(tmp_path):
+    from sovereign_ai.agents.mini_swe_loop import MiniSWEAgentLoop
+
+    return MiniSWEAgentLoop(
+        tmp_path / "missing-python",
+        tmp_path / "missing-mini",
+        "http://127.0.0.1:18080/v1",
+        "qwen35-9b",
+        kernel_url="http://127.0.0.1:7788",
+        session_token="test-token",
+    )
+
+
+def test_mini_swe_runner_replaces_only_local_execution_with_governed_bash():
+    from sovereign_ai.agents.mini_swe_loop import MINI_SWE_RUNNER
+
+    source = MINI_SWE_RUNNER.read_text(encoding="utf-8")
+    assert "/tools/run_command" in source
+    assert '["bash", "-lc", command]' in source
+    assert '"mutates_state": True' in source
+    assert "DefaultAgent" in source
+    assert 'Path(package_dir) / "config" / "mini.yaml"' in source
+    assert "subprocess.run" not in source
+    assert "subprocess.Popen" not in source
+
+
+def test_mini_swe_adapter_reports_missing_runtime_without_touching_workspace(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    step = asyncio.run(
+        _mini_swe_loop(tmp_path).next_step(
+            {"task": "anything", "workspace": str(workspace), "agent_profile_id": "s"}
+        )
+    )
+    assert step.done and step.kind == "harness_error"
+    assert "runtime not found" in step.payload["error"]
+    assert list(workspace.iterdir()) == []
+
+
+def test_mini_swe_registers_only_when_runtime_exists(tmp_path, monkeypatch):
+    from sovereign_ai.kernel import app as kernel_app
+
+    monkeypatch.setattr(kernel_app, "resolve_mini_swe_runtime", lambda: None)
+    absent = kernel(tmp_path, monkeypatch)
+    assert "mini-swe-agent" not in absent.agent_loops.names()
+
+    runtime = (tmp_path / "python", tmp_path / "mini")
+    monkeypatch.setattr(kernel_app, "resolve_mini_swe_runtime", lambda: runtime)
+    present = kernel(tmp_path / "second", monkeypatch)
+    assert "mini-swe-agent" in present.agent_loops.names()
+
+
 # ---------------------------------------------------------------------------------------
 # Context economy in the tools themselves (knowledge/harness-research.md, adoption item 3).
 # Both changes exist because the measured constraint on this machine is tokens per turn,

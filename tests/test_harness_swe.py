@@ -13,6 +13,7 @@ from harness_tasks import MICRO_TASKS, TASKS
 from harness_tournament import (
     _git_provenance,
     campaign_cells,
+    execution_compatibility_sha256,
     finalise_task_outcome,
     paired_analysis,
     run_held_out_verification,
@@ -225,6 +226,70 @@ def test_result_summary_keeps_categories_outcomes_and_latency_distribution():
     assert summary["outcomes"] == {"done": 1, "harness_timeout": 1}
 
 
+def test_result_summary_tolerates_an_unavailable_router_counter():
+    results = [
+        {
+            "loop": "native",
+            "category": "bug_fix",
+            "passed": False,
+            "outcome": "harness_timeout",
+            "denied_attempts": 0,
+            "wall_time_s": 180.0,
+            "tokens": {"available": False},
+        },
+        {
+            "loop": "native",
+            "category": "bug_fix",
+            "passed": True,
+            "outcome": "done",
+            "denied_attempts": 0,
+            "wall_time_s": 20.0,
+            "tokens": {"total_tokens": 120, "generated_tokens": 12},
+        },
+    ]
+    summary = summarise_results(results)["native"]
+    assert summary["token_accounted_attempts"] == 1
+    assert summary["total_tokens"] == 120
+    assert summary["median_tokens"] == 120
+    assert summary["generated_tokens"] == 12
+
+
+def test_execution_compatibility_ignores_only_router_lifecycle_fields():
+    original = {
+        "sha256": "old-wrapper-hash",
+        "tool_schema_sha256": "tools",
+        "inference": {
+            "gguf_sha256": "model",
+            "router_model_record": {
+                "created": 1,
+                "status": {
+                    "value": "loaded",
+                    "args": [
+                        "llama-server",
+                        "--port",
+                        "45331",
+                        "--ctx-size",
+                        "32768",
+                    ],
+                },
+            },
+        },
+    }
+    lifecycle_change = json.loads(json.dumps(original))
+    lifecycle_change["sha256"] = "new-wrapper-hash"
+    lifecycle_change["inference"]["router_model_record"]["created"] = 2
+    lifecycle_change["inference"]["router_model_record"]["status"]["value"] = "unloaded"
+    lifecycle_change["inference"]["router_model_record"]["status"]["args"][2] = "45999"
+    assert execution_compatibility_sha256(original) == execution_compatibility_sha256(
+        lifecycle_change
+    )
+
+    lifecycle_change["inference"]["router_model_record"]["status"]["args"][-1] = "65536"
+    assert execution_compatibility_sha256(original) != execution_compatibility_sha256(
+        lifecycle_change
+    )
+
+
 def test_paired_analysis_uses_identical_cells_and_exact_mcnemar():
     results = []
     native = [True, True, True, False]
@@ -383,9 +448,9 @@ def test_openshell_runs_inside_uploaded_directory_not_its_parent(monkeypatch, tm
     assert result.returncode == 0
     create = calls[0]
     upload = create[create.index("--upload") + 1]
-    assert upload == f"{tmp_path.resolve()}:/tmp"
+    assert upload == f"{tmp_path.resolve()}:/sandbox"
     command = create[-1]
-    assert f"cd /tmp/{tmp_path.name}" in command
+    assert f"cd /sandbox/{tmp_path.name}" in command
 
 
 def test_openshell_downloads_the_uploaded_workspace_directory(monkeypatch, tmp_path):
@@ -400,8 +465,8 @@ def test_openshell_downloads_the_uploaded_workspace_directory(monkeypatch, tmp_p
     async def fake_cli(*args):
         calls.append(args)
         if args[:2] == ("sandbox", "download"):
-            destination = Path(args[-1]) / workspace.name
-            shutil.copytree(workspace, destination)
+            destination = Path(args[-1])
+            shutil.copytree(workspace, destination, dirs_exist_ok=True)
             (destination / "result.txt").write_text("after", encoding="utf-8")
         return 0, "", ""
 

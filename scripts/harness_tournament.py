@@ -924,6 +924,24 @@ def collect_freeze_fingerprint(
     return payload
 
 
+def execution_compatibility_sha256(fingerprint: dict[str, Any]) -> str:
+    """Hash only durable execution semantics, excluding router lifecycle metadata."""
+    stable = json.loads(json.dumps(fingerprint))
+    stable.pop("sha256", None)
+    record = stable.get("inference", {}).get("router_model_record") or {}
+    record.pop("created", None)
+    status = record.get("status") or {}
+    status.pop("value", None)
+    args = list(status.get("args") or ())
+    if "--port" in args:
+        port_index = args.index("--port")
+        del args[port_index : port_index + 2]
+        status["args"] = args
+    return hashlib.sha256(
+        json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def summarise_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     by_loop: dict[str, list[dict[str, Any]]] = {}
     for result in results:
@@ -932,6 +950,11 @@ def summarise_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     for loop_name, loop_results in by_loop.items():
         passed = sum(1 for result in loop_results if result["passed"])
+        token_rows = [
+            result["tokens"]
+            for result in loop_results
+            if "total_tokens" in result.get("tokens", {})
+        ]
         categories: dict[str, dict[str, int]] = {}
         outcomes: dict[str, int] = {}
         for result in loop_results:
@@ -950,11 +973,14 @@ def summarise_results(results: list[dict[str, Any]]) -> dict[str, Any]:
             "median_wall_time_s": round(
                 statistics.median(r["wall_time_s"] for r in loop_results), 2
             ),
-            "total_tokens": sum(r["tokens"]["total_tokens"] for r in loop_results),
-            "median_tokens": round(
-                statistics.median(r["tokens"]["total_tokens"] for r in loop_results), 2
+            "token_accounted_attempts": len(token_rows),
+            "total_tokens": sum(row["total_tokens"] for row in token_rows),
+            "median_tokens": (
+                round(statistics.median(row["total_tokens"] for row in token_rows), 2)
+                if token_rows
+                else 0.0
             ),
-            "generated_tokens": sum(r["tokens"]["generated_tokens"] for r in loop_results),
+            "generated_tokens": sum(row.get("generated_tokens", 0) for row in token_rows),
         }
     return summary
 
@@ -1277,12 +1303,29 @@ def main() -> int:
     out = Path(args.output) if args.output else state_dir / "harness-tournament.json"
     initial_results: list[dict[str, Any]] = []
     campaign_started_at_utc = datetime.now(UTC).isoformat()
+    resumed_from_campaign_sha256: str | None = None
     if args.resume:
         if not out.is_file():
             parser.error(f"cannot resume: report does not exist: {out}")
         prior = json.loads(out.read_text(encoding="utf-8"))
         if prior.get("campaign_sha256") != campaign_sha256:
-            parser.error("cannot resume: report campaign fingerprint does not match this run")
+            prior_definition = dict(prior.get("campaign_definition", {}))
+            current_definition = dict(campaign_definition)
+            prior_definition.pop("freeze_fingerprint_sha256", None)
+            current_definition.pop("freeze_fingerprint_sha256", None)
+            prior_freeze = prior.get("freeze_fingerprint", {})
+            compatible = (
+                prior_definition == current_definition
+                and execution_compatibility_sha256(prior_freeze)
+                == execution_compatibility_sha256(freeze_fingerprint)
+            )
+            if not compatible:
+                parser.error("cannot resume: report campaign fingerprint does not match this run")
+            resumed_from_campaign_sha256 = str(prior.get("campaign_sha256"))
+            print(
+                "resume: accepted durable execution fingerprint; "
+                "router lifecycle metadata changed"
+            )
         initial_results = list(prior.get("results", ()))
         expected_keys = {
             (cell["loop"], cell["task_id"], int(cell["attempt"])) for cell in cell_order
@@ -1305,6 +1348,7 @@ def main() -> int:
             "campaign_complete": complete,
             "campaign_definition": campaign_definition,
             "campaign_sha256": campaign_sha256,
+            "resumed_from_campaign_sha256": resumed_from_campaign_sha256,
             "completed_cells": len(current_results),
             "expected_cells": len(cells),
             "suite": args.suite,

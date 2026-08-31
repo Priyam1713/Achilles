@@ -3,9 +3,10 @@
 ## Decision
 
 **NativeAgentLoop remains the provisional incumbent, not a final universal winner.** Arena v2
-has now screened Prime Agent and found no statistically significant correctness difference.
-Prime remains a finalist candidate; DeepSeek/Cordis, mini-SWE-agent, OpenHands, Aider,
-oh-my-pi and SWE-agent are still untested under v2 and must be screened before a final.
+has now screened Prime Agent, DeepSeek Harness/Cordis and mini-SWE-agent. None produced a
+statistically significant paired correctness difference at 24 observations, while Native kept
+a material efficiency advantage in every screen. OpenHands, Aider, oh-my-pi and SWE-agent are
+still untested under v2 and must be screened before a final.
 
 This is a workstation-specific, provisional promotion, not a claim that Native is universally
 better. It won this composition: Qwen3.5-9B Q6_K, upstream llama.cpp, the Achilles governed
@@ -220,6 +221,61 @@ selection as the default. The raw schema-v4 report remains local at
 `268a3d4e3fbe398ca3a2f98114d74064c36353d83978aa41fd37d9ffcb37b273`, and task-manifest SHA-256
 is `7bcc57ddeae2f5846ee7f3f26075323c0aa3970426b32393e90ac3cb7019d434`. The model artifact,
 llama.cpp and OpenShell versions matched the Prime screen.
+
+## Arena v2 — mini-SWE-agent admission and screen
+
+mini-SWE-agent 2.4.6 ran its official v2 `DefaultAgent`, official `mini.yaml` prompts, LiteLLM
+OpenAI-compatible model path and native bash tool-call parser. Achilles replaced only its local
+subprocess environment: each bash action was sent to the authenticated `run_command` endpoint
+and executed as a governed OpenShell transaction. The host workspace path in the task was
+normalized to the sandbox working directory; no direct host shell or filesystem path remained.
+
+Admission exposed a real lower-layer defect before scoring. OpenShell 0.0.109 allowed commands
+in an uploaded `/tmp` tree but permits transactional download only from its declared `/sandbox`
+workspace. The broker also assumed directory download recreated the source basename, while the
+CLI copies the directory contents into the destination. The corrected transaction is now
+`snapshot -> upload to /sandbox -> execute -> download into an explicit staged directory ->
+concurrent-edit check -> commit`. A live mutation canary and 19 focused OpenShell tests passed
+before the scored campaign began. This was required for any bash-only harness to persist edits.
+
+Round 1 used the same 12 tasks × 2 attempts and all 12 verifier controls passed. The campaign
+completed all 48 cells. One Native cell lacked router-token counters after a model lifecycle
+reset, so Native token totals cover 23/24 attempts; time and correctness cover all 24.
+
+| Harness | Passed | Pass rate | Median time | Total time | Accounted total tokens | Median tokens | Generated tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **Native** | **15/24** | **62.5%** | **43.56s** | **1,444.48s** | **478,708 (23/24)** | **11,464** | 58,152 |
+| mini-SWE-agent | 11/24 | 45.83% | 172.86s | 3,611.41s | 3,043,708 (24/24) | 92,975.5 | 138,218 |
+
+Paired matrix: 8 both passed, 3 mini-SWE-only passes, 7 Native-only passes and 6 both failed.
+Native minus mini-SWE was +16.67 percentage points with paired bootstrap 95% CI
+[-8.33, +41.67] points and exact McNemar p=0.34375. Correctness is therefore inconclusive at
+this sample size. Native used 60.0% less wall time and its median attempt used 87.7% fewer tokens.
+The recorded Native token total is 84.3% lower, but is explicitly incomplete by one attempt.
+
+mini-SWE's discordant wins were slugify attempt one and both CSV/decimal attempts. Native's were
+configuration precedence attempt one; cache collision attempts one and two; JSONL and dependency
+migration attempt one; and slugify and cross-file greeting attempt two. mini-SWE recorded 11
+primary timeouts and one harness error. Multiple 360-second diagnostics also exhausted their
+limit, while several others proved that the patch was eventually correct but outside the
+180-second operating envelope. Neither harness solved JavaScript prototype pollution, and
+mini-SWE's successful first-attempt slugify, cross-file and safe-join results did not reproduce.
+
+mini-SWE-agent is therefore **not promoted and is screened lower-priority, with its adapter
+retained and runtime removed**. Its three unique wins preserve useful architectural evidence, but
+45.83% correctness, 11/24 primary timeouts and 2.5× Native wall time make it unsuitable as the
+local default on this model. The governed adapter SHA-256 is
+`2342446e266890580e3bd5e11cfb26e4440d03b51ba674f68728a72366bd6ec5`; the official runner overlay
+SHA-256 is `e5a056c448b676f571ce53f03944e05fa85c25de2bd6c1d9dd50eb23ca882b35`.
+
+The raw schema-v4 report remains local at `state/arena-v2-mini-swe-screening-9b.json`; raw SHA-256
+is `8aed3078af9ce86c97e30eac28272abd1f6ebdab0b617696fa59582f5ff38072`, final campaign SHA-256 is
+`08a8e5a56071fc3e845ecde8c3ba1972511e007ee6f35d07d65c62efa2abc9d5`, and the pre-resume campaign
+SHA-256 is `7f2f16225b0d061cc026cd158db692e8fa084e091228f70c0f403f1dd8c7e4c7`. Resume was accepted only
+after the durable execution fingerprint matched; the changed fields were router load timestamp,
+load state and dynamically assigned internal port. Final freeze SHA-256 is
+`56e32516c83901069f83aace2dbbd257ace72ae85df1998c2f363e324167d097`; task-manifest SHA-256,
+model artifact, llama.cpp and OpenShell versions matched the DeepSeek screen.
 
 ## Limits and next trigger
 

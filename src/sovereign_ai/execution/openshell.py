@@ -127,13 +127,15 @@ class OpenShellBackend(ExecutionBackend):
         source = self._host_path_for_cli(workspace)
         # OpenShell uploads a directory *under* the requested destination, preserving its
         # basename; it does not copy the directory's contents directly into that path.
-        # Therefore `source:/tmp` becomes `/tmp/<source.name>`.  Treating the destination
+        # Therefore `source:/sandbox` becomes `/sandbox/<source.name>`. Treating the destination
         # itself as the workspace made every command run one level too high and caused the
         # held-out verifier to disappear from view (F-077).
         #
-        # The current base image runs as an unprivileged user and /tmp is the writable,
-        # sandbox-isolated upload root allowed by our policy.
-        sandbox_workspace = f"/tmp/{workspace.name}"
+        # OpenShell 0.0.109 permits downloads only from its declared workspace root
+        # (`/sandbox`). Uploading to `/tmp` lets commands run but makes transactional
+        # copy-out impossible, so mutating executions must live under `/sandbox`.
+        sandbox_root = "/sandbox"
+        sandbox_workspace = f"{sandbox_root}/{workspace.name}"
         command = f"cd {shlex.quote(sandbox_workspace)} && exec {shlex.join(list(argv))}"
         backend = "openshell-wsl2" if self._prefix() else "openshell"
 
@@ -147,7 +149,7 @@ class OpenShellBackend(ExecutionBackend):
             "--policy",
             policy,
             "--upload",
-            f"{source}:/tmp",
+            f"{source}:{sandbox_root}",
             "--no-git-ignore",
             "--",
             "sh",
@@ -167,7 +169,11 @@ class OpenShellBackend(ExecutionBackend):
 
             with tempfile.TemporaryDirectory(prefix="soai-openshell-stage-") as tmp:
                 stage_parent = Path(tmp)
-                stage_cli = self._host_path_for_cli(stage_parent)
+                # `sandbox download <directory> <dest>` copies the directory's contents
+                # directly into `dest`; it does not recreate the source basename.
+                staged = stage_parent / workspace.name
+                staged.mkdir()
+                stage_cli = self._host_path_for_cli(staged)
                 dl_rc, dl_out, dl_err = await self._cli(
                     "sandbox",
                     "download",
@@ -180,16 +186,6 @@ class OpenShellBackend(ExecutionBackend):
                 if dl_rc != 0:
                     return ExecutionResult(dl_rc, stdout, stderr, backend)
 
-                staged = stage_parent / workspace.name
-                if not staged.exists():
-                    # Be strict rather than guessing a destination layout that could commit the wrong tree.
-                    return ExecutionResult(
-                        70,
-                        stdout,
-                        stderr
-                        + f"\nOpenShell download did not produce expected staged directory: {staged}",
-                        backend,
-                    )
                 stats = reconcile_workspace(workspace, staged, before or {})
                 stdout += (
                     f"\n[sovereign-kernel] committed workspace transaction: "
