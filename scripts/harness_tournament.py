@@ -1134,6 +1134,14 @@ def main() -> int:
         "the same brain rather than on whatever each defaulted to",
     )
     parser.add_argument(
+        "--model-base-url",
+        default=None,
+        help=(
+            "Override the llama.cpp OpenAI-compatible endpoint for both Native and every "
+            "external loop. Use this for an isolated one-model contest server."
+        ),
+    )
+    parser.add_argument(
         "--attempt-timeout",
         type=float,
         default=180.0,
@@ -1181,6 +1189,23 @@ def main() -> int:
     from sovereign_ai.kernel.app import SovereignKernel
 
     kernel = SovereignKernel.build(args.config_root)
+    if args.model_base_url:
+        contest_base_url = args.model_base_url.rstrip("/")
+        engine = kernel.registry.engines.get("llama_cpp")
+        if engine is None:
+            parser.error("--model-base-url requires the llama_cpp engine")
+        engine.base_url = contest_base_url
+        engine.health_url = contest_base_url.removesuffix("/v1") + "/health"
+        backend = kernel.inference.backends.get("llama_cpp")
+        if backend is None:
+            parser.error("--model-base-url requires the llama_cpp inference backend")
+        backend.base_url = contest_base_url
+        backend.health_url = engine.health_url
+        for name in kernel.agent_loops.names():
+            loop = kernel.agent_loops.get(name)
+            if hasattr(loop, "base_url"):
+                loop.base_url = contest_base_url
+        print(f"isolated model endpoint: {contest_base_url}")
     state_dir = Path(args.state_dir) if args.state_dir else kernel.config.state_dir
     workspace_root = (
         Path(args.workspace_root).expanduser()
@@ -1299,6 +1324,7 @@ def main() -> int:
         "loops": loop_names,
         "capability": args.capability,
         "mode": args.mode,
+        "model_base_url": args.model_base_url,
         "metrics_model": metrics_model,
         "external_model": args.external_model,
         "attempt_timeout_s": args.attempt_timeout,

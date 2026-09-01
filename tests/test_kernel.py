@@ -5024,6 +5024,85 @@ def test_swe_agent_registers_only_when_runtime_exists(tmp_path, monkeypatch):
     assert "swe-agent" in present.agent_loops.names()
 
 
+def _qwen_code_loop(tmp_path):
+    from sovereign_ai.agents.qwen_code_loop import QwenCodeAgentLoop
+
+    return QwenCodeAgentLoop(
+        tmp_path / "missing-qwen",
+        tmp_path / "missing-mcp-python",
+        "http://127.0.0.1:18081/v1",
+        "qwen35-9b",
+    )
+
+
+def test_qwen_code_adapter_exposes_only_namespaced_achilles_mcp():
+    from sovereign_ai.agents.qwen_code_loop import QWEN_CODE_BUILTIN_TOOLS
+
+    loop = _qwen_code_loop(Path("missing"))
+    config = loop._mcp_config(
+        {
+            "workspace": "/tmp/workspace",
+            "agent_profile_id": "qwen-code-agent",
+            "run_id": "qwen-code-run",
+        }
+    )
+    assert list(config["mcpServers"]) == ["achilles"]
+    server = config["mcpServers"]["achilles"]
+    assert server["args"] == ["-m", "sovereign_ai.agents.mcp_bridge"]
+    assert server["trust"] is True
+    assert server["env"]["SOAI_MCP_WORKSPACE"] == "/tmp/workspace"
+    assert {
+        "run_shell_command",
+        "read_file",
+        "write_file",
+        "edit",
+        "agent",
+        "tool_search",
+        "workflow",
+        "monitor",
+        "update_goal",
+    } <= set(QWEN_CODE_BUILTIN_TOOLS)
+    assert not any(name.startswith("mcp__") for name in QWEN_CODE_BUILTIN_TOOLS)
+    assert len(QWEN_CODE_BUILTIN_TOOLS) == 48
+
+
+def test_qwen_code_adapter_disables_ambient_and_builtin_authority():
+    from sovereign_ai.agents.qwen_code_loop import QwenCodeAgentLoop
+
+    source = Path(sys.modules[QwenCodeAgentLoop.__module__].__file__).read_text(encoding="utf-8")
+    assert '"--safe-mode"' in source
+    assert '"--mcp-config"' in source
+    assert '"--exclude-tools"' in source
+    assert '"QWEN_CODE_LEGACY_MCP_BLOCKING": "1"' in source
+    assert '"SOVEREIGN_CONFIG_ROOT"' in source
+
+
+def test_qwen_code_adapter_reports_missing_runtime_without_touching_workspace(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    step = asyncio.run(
+        _qwen_code_loop(tmp_path).next_step(
+            {"task": "anything", "workspace": str(workspace), "agent_profile_id": "q"}
+        )
+    )
+    assert step.done and step.kind == "harness_error"
+    assert "runtime not found" in step.payload["error"]
+    assert list(workspace.iterdir()) == []
+
+
+def test_qwen_code_registers_only_when_runtime_exists(tmp_path, monkeypatch):
+    from sovereign_ai.kernel import app as kernel_app
+
+    monkeypatch.setattr(kernel_app, "resolve_qwen_code_runtime", lambda: None)
+    absent = kernel(tmp_path, monkeypatch)
+    assert "qwen-code" not in absent.agent_loops.names()
+
+    runtime = (tmp_path / "qwen", tmp_path / "mcp-python")
+    monkeypatch.setattr(kernel_app, "resolve_qwen_code_runtime", lambda: runtime)
+    present = kernel(tmp_path / "second", monkeypatch)
+    assert "qwen-code" in present.agent_loops.names()
+
+
 # ---------------------------------------------------------------------------------------
 # Context economy in the tools themselves (knowledge/harness-research.md, adoption item 3).
 # Both changes exist because the measured constraint on this machine is tokens per turn,

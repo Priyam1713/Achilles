@@ -3929,6 +3929,24 @@ instead of an opinion.
   paired admission passed; the restarted 48-cell campaign completed with every attempt token-
   accounted, 12/12 verifier controls valid and zero authority denials.
 
+### F-081 — Fixed: Qwen Code one-shot sessions raced MCP discovery and misresolved Achilles config
+
+- **Severity:** `major` for admission (a valid harness first saw no tools, then reached the correct
+  tools but every call failed closed) · **Status:** `fixed` in the retained adapter; both affected
+  admission attempts were discarded as infrastructure evidence.
+- **Problem:** Qwen Code 0.22.3 progressively discovers MCP tools after headless startup, so its first
+  one-shot model request could freeze a zero-tool schema. After blocking discovery proved the exact
+  `mcp__achilles__*` plane was present, the stdio child inherited the task workspace as cwd and looked
+  for `configs/system.yaml` inside the candidate repository instead of Achilles.
+- **Fix:** the adapter enables Qwen's documented `QWEN_CODE_LEGACY_MCP_BLOCKING=1` switch and passes
+  an absolute `SOVEREIGN_CONFIG_ROOT` to the bridge. `--safe-mode` removes ambient customization;
+  explicit MCP config supplies only Achilles; 48 whole-tool denies remove Qwen's current built-ins.
+  The tournament runner also gained `--model-base-url`, which atomically points Native, external
+  loops, inference and token accounting at the same isolated one-model endpoint.
+- **Verification:** the clean admission passed the held-out contract in 14.18 seconds. The complete
+  48-cell paired campaign finished with 12/12 verifier controls valid, all token counters present,
+  zero authority denials and no Qwen primary timeout.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.

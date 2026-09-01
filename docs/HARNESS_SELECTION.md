@@ -4,11 +4,12 @@
 
 **NativeAgentLoop remains the safety incumbent/default, while Aider is now the provisional
 general-coding efficiency leader.** Arena v2 has screened Prime Agent, DeepSeek Harness/Cordis,
-mini-SWE-agent, OpenHands, Aider, oh-my-pi and SWE-agent. Aider is the first contender to exceed
-Native's point pass rate and efficiency, but it failed both safe-join security cells. SWE-agent
-finished 25 points below Native, used 6.78 times the total tokens, and repeatedly changed forbidden
-test files despite its official prompt. The planned core open-harness screen is now complete;
-Qwen Code, Cline and Kilo remain conditional model-native/interface experiments rather than blockers.
+mini-SWE-agent, OpenHands, Aider, oh-my-pi, SWE-agent and Qwen Code. Aider is the first contender to
+exceed Native's point pass rate and efficiency, but it failed both safe-join security cells.
+SWE-agent finished 25 points below Native, used 6.78 times the total tokens, and repeatedly changed
+forbidden test files despite its official prompt. Qwen Code finished 8.33 points below Native and
+used 2.17 times the tokens despite finishing much faster. The planned core open-harness screen is
+complete; Cline, Kilo and Gemini CLI remain conditional interface experiments rather than blockers.
 
 This is a workstation-specific, provisional promotion, not a claim that Native is universally
 better. It won this composition: Qwen3.5-9B Q6_K, upstream llama.cpp, the Achilles governed
@@ -481,6 +482,54 @@ The raw schema-v4 report remains local at `state/arena-v2-swe-agent-screening-9b
 SHA-256 is `2671ee901b0893555ffc8a008836bd28d7ab735e765d8b485174a5611b0cb91b`, campaign SHA-256 is
 `a13f3f8fcd308652215d809da06d679019be8b730d6a0b7500fd92318de606e4`, freeze SHA-256 is
 `02db3e914ce143f1bbddafa78c45c9ed5f1d54fc485eb2e19826c067a4bdabfd`, and task-manifest
+SHA-256 is `7bcc57ddeae2f5846ee7f3f26075323c0aa3970426b32393e90ac3cb7019d434`.
+
+## Arena v2 — Qwen Code admission and screen
+
+Official Qwen Code 0.22.3 from npm, published from upstream commit
+`09825973e7d3c3fd07e17909c396aa62f48ce51f`, ran its current headless agent loop. The adapter used
+`--safe-mode` to remove project/operator context, hooks, extensions, skills, ambient MCP servers,
+custom subagents and discovery commands. It supplied exactly one explicit `achilles` MCP server and
+whole-tool deny rules for all 48 built-in/synthetic names in the 0.22.3 registry. Qwen names those
+tools `mcp__achilles__*`, so the built-in denies cannot block or impersonate them. Every real read,
+command and edit therefore crossed the same identity-, grant- and workspace-scoped Achilles bridge.
+
+Two admission attempts were discarded as wiring evidence. First, progressive MCP discovery raced the
+one-shot request and Qwen saw no tools; the adapter now uses Qwen's official
+`QWEN_CODE_LEGACY_MCP_BLOCKING=1` compatibility switch. Second, Qwen correctly called only Achilles,
+but the child bridge resolved `configs/` relative to the task workspace and failed closed on every
+call; the adapter now passes the absolute Achilles config root. The clean admission then passed in
+14.18 seconds with 27,258 accounted tokens and zero denials. The full campaign ran on the dedicated
+one-slot 32K Qwen3.5-9B endpoint added after F-080. All 48 cells completed, all 12 verifier controls
+passed, every cell had token counters and neither lane had an authority denial.
+
+| Harness | Passed | Pass rate | Median time | Total time | Total tokens | Median tokens | Generated tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **Native** | **18/24** | **75.00%** | 28.84s | 1,151.95s | **316,349** | **6,939** | 44,266 |
+| Qwen Code | 16/24 | 66.67% | **19.61s** | **475.05s** | 685,552 | 27,795 | **14,094** |
+
+Paired matrix: 15 both passed, three Native-only passes, one Qwen-only pass and five both failed.
+Native minus Qwen Code was +8.33 percentage points with paired bootstrap 95% CI
+[-8.33, +25.00] points and exact McNemar p=0.625. Qwen used 58.8% less total wall time and 32.0%
+less median wall time, but 116.7% more total tokens and 300.6% more median tokens. Its one-turn
+strategy generated 68.2% fewer tokens while repeatedly paying a roughly 27–28K cached-context bill.
+
+The single Qwen-only win was configuration precedence attempt one; Native won attempt two and both
+JSONL-resilience cells. Both lanes failed both CSV/decimal and both JavaScript prototype-pollution
+cells. Both failed safe-join attempt one and passed attempt two. Qwen's two repeatable JSONL failures
+are the clearest contender-specific correctness gap. Native had two primary timeouts; Qwen completed
+every cell inside the primary budget. The result is therefore a real composition tradeoff—Qwen Code
+is a fast, low-generation interface around this model, but its lower correctness and 2.17× total
+context cost do not justify promotion over Native or Aider.
+
+Qwen Code is **not promoted and is screened lower-priority**. The governed adapter remains for future
+model-specific retests; the isolated npm runtime and source checkout are removed. Adapter SHA-256 is
+`56734030acae5d6bba10625d5623d221d864aa1bff2c1736695e7e7dd3610929`.
+
+The raw schema-v4 report remains local at `state/arena-v2-qwen-code-screening-9b.json`; raw
+SHA-256 is `41caab629dd3202b53ca94c5b201d91ee2040b384605bbda43dcda9e410e6542`, campaign SHA-256 is
+`476298ba32b8099616c68c162c1bffb3f327b7be50fe176931c1d3d11d7fc13f`, freeze SHA-256 is
+`8f6312c9bb569754947b5dff53abf9439c358199d81cd77cb0d4fe947864c388`, and task-manifest
 SHA-256 is `7bcc57ddeae2f5846ee7f3f26075323c0aa3970426b32393e90ac3cb7019d434`.
 
 ## Limits and next trigger

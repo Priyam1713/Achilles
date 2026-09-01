@@ -24,6 +24,10 @@ The stack is intentionally **capability-stable but checkpoint-replaceable**. A m
   while consuming 2.22× the tokens. SWE-agent scored 14/24 versus Native's 20/24, consumed 6.78×
   the tokens and 3.48× the wall time, had five primary timeouts and repeatedly changed forbidden
   test files. Their governed adapters remain; both isolated runtimes are removed.
+- **Qwen Code — screened lower-priority.** It scored 16/24 versus Native's 18/24. Its one-turn
+  loop used 58.8% less wall time and 68.2% fewer generated tokens, but 2.17× the total accounted
+  tokens because each cell carried roughly 27–28K context. It failed both JSONL-resilience cells
+  and did not improve correctness. Its governed adapter remains; the isolated runtime is removed.
 - **SovereignKernel — fixed governed fixture.** Every contender reaches the same workspace
   allow-list, expiring grants, policy engine, tool implementations, checkpoints and hardened
   OpenShell/Docker execution. Kernel changes invalidate an active campaign unless they repair a
