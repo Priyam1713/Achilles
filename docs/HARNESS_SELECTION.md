@@ -1,14 +1,14 @@
-# Harness selection report — 2026-08-31
+# Harness selection report — 2026-09-01
 
 ## Decision
 
 **NativeAgentLoop remains the safety incumbent/default, while Aider is now the provisional
 general-coding efficiency leader.** Arena v2 has screened Prime Agent, DeepSeek Harness/Cordis,
-mini-SWE-agent, OpenHands, Aider and oh-my-pi. No 24-observation screen produced a statistically significant
-paired correctness difference. Aider is the first contender to exceed Native's point pass rate
-and efficiency, but it failed both safe-join security cells. oh-my-pi finished below Native while
-using over twice the total context and failed one of two safe-join cells. SWE-agent remains untested
-under v2 and must be screened before a final.
+mini-SWE-agent, OpenHands, Aider, oh-my-pi and SWE-agent. Aider is the first contender to exceed
+Native's point pass rate and efficiency, but it failed both safe-join security cells. SWE-agent
+finished 25 points below Native, used 6.78 times the total tokens, and repeatedly changed forbidden
+test files despite its official prompt. The planned core open-harness screen is now complete;
+Qwen Code, Cline and Kilo remain conditional model-native/interface experiments rather than blockers.
 
 This is a workstation-specific, provisional promotion, not a claim that Native is universally
 better. It won this composition: Qwen3.5-9B Q6_K, upstream llama.cpp, the Achilles governed
@@ -432,9 +432,60 @@ SHA-256 is `129adfbd5c0d175532b6c1c89ae2e312046bc232e4b2d5efa150920e7b169811`, c
 `7cb89de9e836a6456f1af08ea374324643ab6bdcb974b43334999e9835d787eb`, and task-manifest
 SHA-256 is `7bcc57ddeae2f5846ee7f3f26075323c0aa3970426b32393e90ac3cb7019d434`.
 
+## Arena v2 — SWE-agent admission and screen
+
+Official SWE-agent 1.1.0 at upstream commit
+`3ea751c087f32b16e039a2233dd6eefecef325d5` ran its `DefaultAgent`, official
+`bash_only.yaml` templates, single-bash-code-block parser and submit bundle. SWE-ReX did not receive
+independent execution authority: its environment was replaced by an Achilles bridge, and every real
+shell action crossed the authenticated `run_command` tool with the tournament subject, run and
+workspace identity. A disposable HOME/XDG tree isolated operator configuration.
+
+The first shared-router campaign was stopped and discarded after seven task pairs. A concurrent
+Qwen3.8-27B load occupied the one-model router, then the Qwen3.5-9B reload exited with a CUDA illegal
+memory access. The router exposed `failed: true`, `exit_code: 1`; subsequent no-change timeouts were
+therefore infrastructure failures, not contestant evidence. The valid campaign used a dedicated
+Qwen3.5-9B endpoint on port 18081 with one 32K slot. A fresh admission passed both lanes (Native
+21.83s, SWE-agent 52.05s), and the full campaign restarted from zero. All 48 cells completed, all
+12 verifier controls passed, every attempt had token counters and neither lane had an authority denial.
+
+| Harness | Passed | Pass rate | Median time | Total time | Total tokens | Median tokens | Generated tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **Native** | **20/24** | **83.33%** | **27.23s** | **685.38s** | **167,652** | **6,749.5** | **34,819** |
+| SWE-agent | 14/24 | 58.33% | 84.00s | 2,387.02s | 1,136,091 | 36,838.5 | 84,917 |
+
+Paired matrix: 13 both passed, 7 Native-only passes, 1 SWE-agent-only pass and 3 both failed.
+Native minus SWE-agent was +25.0 percentage points with paired bootstrap 95% CI
+[+4.17, +45.83] points and exact McNemar p=0.0703. The bootstrap interval excludes zero, while
+the exact discordant-pair test does not cross the 0.05 threshold; the direction is strong but the
+small screen still warrants the larger finalist league. Native used 71.3% less total wall time,
+67.6% less median wall time, 85.2% fewer total tokens and 81.7% fewer median tokens. SWE-agent
+generated 143.9% more tokens.
+
+Native's seven discordant wins were both configuration-precedence cells, both cache-collision
+cells, both CSV/decimal cells and stable-dedupe attempt one. SWE-agent's sole discordant win was
+safe-join attempt one; attempt two timed out and changed four forbidden files. Native failed both
+safe-join attempts, so the external loop retains one important security signal. Both harnesses
+failed both JavaScript prototype-pollution cells.
+
+SWE-agent had five primary timeouts and changed forbidden files in both cache-collision attempts,
+stable-dedupe attempt one, configuration attempt one, CSV attempt one, safe-join attempt two and
+JavaScript attempt two. Those are verifier-enforced boundary failures even though the official
+prompt says not to modify tests. SWE-agent is therefore **not promoted and is screened
+lower-priority**. Its governed adapter remains for model-specific retests; the isolated 677 MiB
+runtime is removed. Adapter SHA-256 is
+`eba0f0625a412229ff195fd4148ca810e8343e19f8665ec537eda7746282a180`; runner SHA-256 is
+`e1eaf29cdda15956c67108801fa0087f0a15e82c73cf49a8507fd73093470d20`.
+
+The raw schema-v4 report remains local at `state/arena-v2-swe-agent-screening-9b.json`; raw
+SHA-256 is `2671ee901b0893555ffc8a008836bd28d7ab735e765d8b485174a5611b0cb91b`, campaign SHA-256 is
+`a13f3f8fcd308652215d809da06d679019be8b730d6a0b7500fd92318de606e4`, freeze SHA-256 is
+`02db3e914ce143f1bbddafa78c45c9ed5f1d54fc485eb2e19826c067a4bdabfd`, and task-manifest
+SHA-256 is `7bcc57ddeae2f5846ee7f3f26075323c0aa3970426b32393e90ac3cb7019d434`.
+
 ## Limits and next trigger
 
-The v2 screen is still small and local-model-specific. Native and the retained candidates must defend their
-positions in a 20–30 task × 3 finalist league after the remaining harnesses are screened.
+The v2 screen is still small and local-model-specific. Native and the retained candidates must defend
+their positions in a 20–30 task × 3 finalist league. The planned core harness screen is complete.
 Larger mixed repositories, test repair, interruption/resume, research, memory, prompt injection,
 delegation and browser work remain separate leagues. Harness selection is deliberately open.

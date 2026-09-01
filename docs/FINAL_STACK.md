@@ -5,9 +5,10 @@ The stack is intentionally **capability-stable but checkpoint-replaceable**. A m
 ## Harness + authority base
 
 - **NativeAgentLoop — safety incumbent/default.** It won the historical Pi final and remained
-  more efficient than Prime Agent, DeepSeek Harness/Cordis, mini-SWE-agent and OpenHands. Aider
-  broke that pattern but failed both safe-join cells, so Native remains the default until the
-  security-weighted finalist league. See [the harness selection report](HARNESS_SELECTION.md).
+  more efficient than Prime Agent, DeepSeek Harness/Cordis, mini-SWE-agent, OpenHands, oh-my-pi
+  and SWE-agent. Aider broke that pattern but failed both safe-join cells, so Native remains the
+  default until the security-weighted finalist league. See
+  [the harness selection report](HARNESS_SELECTION.md).
 - **Aider — provisional general-edit leader.** It scored 18/24 versus Native's 17/24 while using
   89.5% fewer tokens and 40.5% less wall time, but scored 0/2 on safe join. Its governed shadow-
   repository adapter remains reproducible; the isolated runtime is removed.
@@ -19,6 +20,10 @@ The stack is intentionally **capability-stable but checkpoint-replaceable**. A m
 - **OpenHands — conditional finalist candidate.** It scored 15/24 versus Native's 17/24 and
   uniquely passed both CSV/decimal attempts, but four unexplained SDK exits block promotion.
   Its governed adapter remains reproducible; the isolated runtime is removed.
+- **oh-my-pi and SWE-agent — screened lower-priority.** OMP scored 17/24 versus Native's 19/24
+  while consuming 2.22× the tokens. SWE-agent scored 14/24 versus Native's 20/24, consumed 6.78×
+  the tokens and 3.48× the wall time, had five primary timeouts and repeatedly changed forbidden
+  test files. Their governed adapters remain; both isolated runtimes are removed.
 - **SovereignKernel — fixed governed fixture.** Every contender reaches the same workspace
   allow-list, expiring grants, policy engine, tool implementations, checkpoints and hardened
   OpenShell/Docker execution. Kernel changes invalidate an active campaign unless they repair a

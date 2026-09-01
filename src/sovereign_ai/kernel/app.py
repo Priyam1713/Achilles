@@ -16,6 +16,7 @@ from sovereign_ai.agents.openhands_loop import OpenHandsAgentLoop, resolve_openh
 from sovereign_ai.agents.pi_loop import PiAgentLoop, resolve_pi_binary
 from sovereign_ai.agents.prime_loop import PrimeAgentLoop, resolve_prime_agent_binary
 from sovereign_ai.agents.registry import AgentLoopRegistry
+from sovereign_ai.agents.swe_agent_loop import SWEAgentLoop, resolve_swe_agent_runtime
 from sovereign_ai.collaboration import CollaborationService, CollaborationStore
 from sovereign_ai.computer.controller import ComputerController
 from sovereign_ai.execution.broker import ExecutionBroker
@@ -303,6 +304,23 @@ class SovereignKernel:
                     mcp_python,
                     llama_cpp_engine.base_url,
                     "qwen38-27b",
+                ),
+            )
+        swe_agent_runtime = resolve_swe_agent_runtime()
+        if swe_agent_runtime and llama_cpp_engine and llama_cpp_engine.base_url:
+            system = config.system.get("system", {})
+            swe_agent_python, swe_agent_config = swe_agent_runtime
+            agent_loops.register(
+                "swe-agent",
+                SWEAgentLoop(
+                    swe_agent_python,
+                    swe_agent_config,
+                    llama_cpp_engine.base_url,
+                    "qwen38-27b",
+                    kernel_url=(
+                        f"http://{system.get('bind', '127.0.0.1')}:{system.get('port', 7788)}"
+                    ),
+                    session_token=SessionAuth(state / "session.token").token,
                 ),
             )
         computer = ComputerController()

@@ -3913,6 +3913,22 @@ instead of an opinion.
   out admission passed in 21.4 seconds, then the complete 48-cell paired campaign finished with no
   authority denials.
 
+### F-080 — Fixed: shared model-router failure invalidated harness cells as timeouts
+
+- **Severity:** `critical` for measurement (healthy harnesses produced no changes for minutes) ·
+  **Status:** `fixed` operationally; the affected campaign was discarded and restarted from zero.
+- **Problem:** the first SWE-agent screen shared the one-model llama.cpp router with unrelated
+  work. A Qwen3.8-27B request occupied the only residency slot; the queued Qwen3.5-9B reload then
+  exited with a CUDA illegal-memory-access. The router stayed healthy but reported the requested
+  model as `failed: true`, `exit_code: 1`, so both harnesses accumulated misleading no-change
+  timeouts while waiting for a model that could not load.
+- **Fix:** scored harness campaigns now use a dedicated pinned model endpoint with one 32K slot;
+  concurrent model loads cannot evict it. Model availability is checked independently of router
+  process health. The invalid report and workspaces were removed rather than mixed with valid cells.
+- **Verification:** direct health and completion probes passed on the dedicated endpoint; fresh
+  paired admission passed; the restarted 48-cell campaign completed with every attempt token-
+  accounted, 12/12 verifier controls valid and zero authority denials.
+
 ## Priority order
 
 Ordered so each step makes the next one cheaper or safer, not by severity alone.
