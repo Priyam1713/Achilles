@@ -42,11 +42,11 @@ Issues = "https://github.com/Priyam1713/Achilles/issues"
 Changelog = "https://github.com/Priyam1713/Achilles/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.4", "pytest-asyncio>=1.1", "ruff>=0.12", "mcp>=1.29,<2"]
-ml = ["sentence-transformers>=5.0,<6"]
+dev = ["pytest>=8.4", "pytest-asyncio>=1.1", "ruff>=0.12", "mcp>=1.29,<3"]
+ml = ["sentence-transformers>=5.0,<7"]
 tools = ["playwright>=1.54", "beautifulsoup4>=4.13"]
 windows = ["pywinauto>=0.6.9", "uiautomation>=2.0"]
-harness = ["mcp>=1.29,<2"]
+harness = ["mcp>=1.29,<3"]
 
 [project.scripts]
 sovereign = "sovereign_ai.cli:app"
